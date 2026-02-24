@@ -18,6 +18,7 @@
 from jnpr.junos.exception import ConnectClosedError
 from pprint import pprint
 import argparse
+import io
 import sys
 import logging
 import logging.config
@@ -516,15 +517,30 @@ def main():
     except ImportError:
         pass
 
-    args, unknown = parser.parse_known_args()
+    # argparse はサブコマンドに一致しない位置引数があると SystemExit を
+    # 送出する（例: junos-ops -c accounts.ini → accounts.ini がサブコマンド
+    # として解釈される）。この場合はサブコマンドなしとして再パースする。
+    _saved_stderr = sys.stderr
+    try:
+        sys.stderr = io.StringIO()
+        args, unknown = parser.parse_known_args()
+    except SystemExit as e:
+        if e.code == 0:
+            sys.stderr = _saved_stderr
+            raise
+        args = argparse.Namespace(subcommand=None)
+        unknown = []
+    finally:
+        sys.stderr = _saved_stderr
 
     # show サブコマンド: 余剰位置引数を show_args に統合
     # （argparse は nargs="*" でもオプション後の位置引数を正しく収集できないため）
     if unknown:
         if getattr(args, "subcommand", None) == "show":
             args.show_args = getattr(args, "show_args", []) + unknown
-        else:
+        elif getattr(args, "subcommand", None) is not None:
             parser.error(f"unrecognized arguments: {' '.join(unknown)}")
+        # subcommand is None: 後続の facts_parser 再パースで処理
 
     # サブコマンドなしの場合の処理
     if args.subcommand is None:
