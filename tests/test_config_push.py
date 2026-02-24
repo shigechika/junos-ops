@@ -2,6 +2,7 @@
 
 from unittest.mock import MagicMock, patch, call
 
+from junos_ops import cli
 from junos_ops import common
 
 
@@ -286,3 +287,146 @@ class TestHealthCheck:
     def test_health_check_default(self, mock_args):
         """デフォルト値が "ping count 3 255.255.255.255 rapid" であること"""
         assert mock_args.health_check == "ping count 3 255.255.255.255 rapid"
+
+
+class TestRpcTimeout:
+    """RPC タイムアウトオプションのテスト (Issue #39)"""
+
+    def test_cli_timeout_sets_dev_timeout(self, junos_common, mock_args, mock_config):
+        """--timeout 60 で dev.timeout が 60 に設定される"""
+        mock_args.rpc_timeout = 60
+        mock_args.configfile = "commands.set"
+        mock_dev = MagicMock()
+        mock_dev.cli.return_value = "3 packets transmitted, 3 packets received"
+        mock_cu = MagicMock()
+        mock_cu.diff.return_value = "[edit]\n+  set system ..."
+        with (
+            patch.object(cli.common, "connect", return_value=(False, mock_dev)),
+            patch("junos_ops.upgrade.Config", return_value=mock_cu),
+            patch.object(common, "load_commands", return_value=["set system ntp"]),
+        ):
+            result = cli.cmd_config("test-host")
+        assert result == 0
+        assert mock_dev.timeout == 60
+
+    def test_config_ini_timeout(self, junos_common, mock_args, mock_config):
+        """config.ini の timeout 設定で dev.timeout が設定される"""
+        mock_args.rpc_timeout = None
+        mock_args.configfile = "commands.set"
+        mock_config.set("DEFAULT", "timeout", "90")
+        mock_dev = MagicMock()
+        mock_dev.cli.return_value = "3 packets transmitted, 3 packets received"
+        mock_cu = MagicMock()
+        mock_cu.diff.return_value = "[edit]\n+  set system ..."
+        with (
+            patch.object(cli.common, "connect", return_value=(False, mock_dev)),
+            patch("junos_ops.upgrade.Config", return_value=mock_cu),
+            patch.object(common, "load_commands", return_value=["set system ntp"]),
+        ):
+            result = cli.cmd_config("test-host")
+        assert result == 0
+        assert mock_dev.timeout == 90
+
+    def test_cli_timeout_overrides_config_ini(self, junos_common, mock_args, mock_config):
+        """CLI --timeout が config.ini の timeout より優先される"""
+        mock_args.rpc_timeout = 120
+        mock_args.configfile = "commands.set"
+        mock_config.set("DEFAULT", "timeout", "90")
+        mock_dev = MagicMock()
+        mock_dev.cli.return_value = "3 packets transmitted, 3 packets received"
+        mock_cu = MagicMock()
+        mock_cu.diff.return_value = "[edit]\n+  set system ..."
+        with (
+            patch.object(cli.common, "connect", return_value=(False, mock_dev)),
+            patch("junos_ops.upgrade.Config", return_value=mock_cu),
+            patch.object(common, "load_commands", return_value=["set system ntp"]),
+        ):
+            result = cli.cmd_config("test-host")
+        assert result == 0
+        assert mock_dev.timeout == 120
+
+    def test_no_timeout_keeps_default(self, junos_common, mock_args, mock_config):
+        """--timeout 未指定 + config.ini にもなし → dev.timeout 未変更"""
+        mock_args.rpc_timeout = None
+        mock_args.configfile = "commands.set"
+        mock_dev = MagicMock(spec=["cli", "close", "timeout"])
+        mock_dev.timeout = 30  # PyEZ デフォルト
+        mock_dev.cli.return_value = "3 packets transmitted, 3 packets received"
+        mock_cu = MagicMock()
+        mock_cu.diff.return_value = "[edit]\n+  set system ..."
+        with (
+            patch.object(cli.common, "connect", return_value=(False, mock_dev)),
+            patch("junos_ops.upgrade.Config", return_value=mock_cu),
+            patch.object(common, "load_commands", return_value=["set system ntp"]),
+        ):
+            result = cli.cmd_config("test-host")
+        assert result == 0
+        assert mock_dev.timeout == 30
+
+
+class TestNoConfirm:
+    """--no-confirm オプションのテスト (Issue #39)"""
+
+    def test_no_confirm_direct_commit(self, junos_upgrade, mock_args, mock_config):
+        """--no-confirm で commit confirmed をスキップし直接 commit"""
+        mock_args.no_confirm = True
+        dev = MagicMock()
+        mock_cu = MagicMock()
+        mock_cu.diff.return_value = "[edit]\n+  set system ..."
+        with (
+            patch("junos_ops.upgrade.Config", return_value=mock_cu),
+            patch.object(common, "load_commands", return_value=["set system ntp"]),
+        ):
+            result = junos_upgrade.load_config("test-host", dev, "commands.set")
+        assert result is False
+        # commit は1回だけ（confirm= なし）
+        mock_cu.commit.assert_called_once_with()
+        # ヘルスチェックは実行されない
+        dev.cli.assert_not_called()
+
+    def test_no_confirm_output(self, junos_upgrade, mock_args, mock_config, capsys):
+        """--no-confirm で "commit applied (no confirm)" と表示"""
+        mock_args.no_confirm = True
+        dev = MagicMock()
+        mock_cu = MagicMock()
+        mock_cu.diff.return_value = "[edit]\n+  set system ..."
+        with (
+            patch("junos_ops.upgrade.Config", return_value=mock_cu),
+            patch.object(common, "load_commands", return_value=["set system ntp"]),
+        ):
+            junos_upgrade.load_config("test-host", dev, "commands.set")
+        captured = capsys.readouterr()
+        assert "commit applied (no confirm)" in captured.out
+
+    def test_no_confirm_commit_error(self, junos_upgrade, mock_args, mock_config):
+        """--no-confirm で commit 失敗時も rollback + unlock"""
+        mock_args.no_confirm = True
+        dev = MagicMock()
+        mock_cu = MagicMock()
+        mock_cu.diff.return_value = "[edit]\n+  set system ..."
+        mock_cu.commit.side_effect = Exception("commit failed")
+        with (
+            patch("junos_ops.upgrade.Config", return_value=mock_cu),
+            patch.object(common, "load_commands", return_value=["set system ntp"]),
+        ):
+            result = junos_upgrade.load_config("test-host", dev, "commands.set")
+        assert result is True
+        mock_cu.rollback.assert_called_once()
+        mock_cu.unlock.assert_called_once()
+
+    def test_confirm_default_still_works(self, junos_upgrade, mock_args, mock_config):
+        """no_confirm=False（デフォルト）では従来通り commit confirmed フロー"""
+        mock_args.no_confirm = False
+        dev = MagicMock()
+        dev.cli.return_value = "3 packets transmitted, 3 packets received"
+        mock_cu = MagicMock()
+        mock_cu.diff.return_value = "[edit]\n+  set system ..."
+        with (
+            patch("junos_ops.upgrade.Config", return_value=mock_cu),
+            patch.object(common, "load_commands", return_value=["set system ntp"]),
+        ):
+            result = junos_upgrade.load_config("test-host", dev, "commands.set")
+        assert result is False
+        # commit confirmed + commit の2回
+        assert mock_cu.commit.call_count == 2
+        mock_cu.commit.assert_any_call(confirm=1)

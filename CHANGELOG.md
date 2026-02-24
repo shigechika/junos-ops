@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-02-24
+
+### Added
+- `config --timeout N` option: override RPC timeout in seconds for slow devices ([#39](https://github.com/shigechika/junos-ops/issues/39)). Also supports `timeout` setting in config.ini (CLI option takes precedence).
+- `config --no-confirm` option: skip commit confirmed and health check, commit directly. Useful for devices where commit confirmed is too slow (e.g., SRX3xx series).
+
 ## [0.10.1] - 2026-02-24
 
 ### Changed
@@ -113,6 +119,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - Package install, rollback, and reboot scheduling
 - INI-based configuration
 
+[0.11.0]: https://github.com/shigechika/junos-ops/compare/v0.10.1...v0.11.0
 [0.10.1]: https://github.com/shigechika/junos-ops/compare/v0.10.0...v0.10.1
 [0.10.0]: https://github.com/shigechika/junos-ops/compare/v0.9.2...v0.10.0
 [0.9.2]: https://github.com/shigechika/junos-ops/compare/v0.9.1...v0.9.2

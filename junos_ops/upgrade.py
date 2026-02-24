@@ -1017,7 +1017,10 @@ def _run_health_check(hostname, dev, health_cmd) -> bool:
 def load_config(hostname, dev, configfile) -> bool:
     """Load set command file and commit to device.
 
-    Commit flow: lock -> load -> diff -> commit_check -> commit confirmed -> health check -> confirm -> unlock.
+    Commit flow (default):
+        lock -> load -> diff -> commit_check -> commit confirmed -> health check -> confirm -> unlock.
+    Commit flow (--no-confirm):
+        lock -> load -> diff -> commit_check -> commit -> unlock.
     On error, rollback + unlock for cleanup.
 
     :return: True on error, False on success.
@@ -1057,26 +1060,32 @@ def load_config(hostname, dev, configfile) -> bool:
         cu.commit_check()
         print("\tcommit check passed")
 
-        # commit confirmed（自動ロールバック付き）
-        confirm_timeout = getattr(common.args, "confirm_timeout", 1)
-        cu.commit(confirm=confirm_timeout)
-        print(f"\tcommit confirmed {confirm_timeout} applied")
+        no_confirm = getattr(common.args, "no_confirm", False)
+        if no_confirm:
+            # 直接 commit（commit confirmed をスキップ）
+            cu.commit()
+            print("\tcommit applied (no confirm)")
+        else:
+            # commit confirmed（自動ロールバック付き）
+            confirm_timeout = getattr(common.args, "confirm_timeout", 1)
+            cu.commit(confirm=confirm_timeout)
+            print(f"\tcommit confirmed {confirm_timeout} applied")
 
-        # ヘルスチェック
-        health_cmd = getattr(common.args, "health_check", None)
-        if health_cmd:
-            if _run_health_check(hostname, dev, health_cmd):
-                # 失敗 — 最終 commit を送らず、タイマー満了で自動ロールバック
-                print(f"\thealth check FAILED — config will auto-rollback "
-                      f"in {confirm_timeout} minute(s)")
-                logger.error(f"{hostname}: health check failed, "
-                             f"not confirming commit")
-                cu.unlock()
-                return True
+            # ヘルスチェック
+            health_cmd = getattr(common.args, "health_check", None)
+            if health_cmd:
+                if _run_health_check(hostname, dev, health_cmd):
+                    # 失敗 — 最終 commit を送らず、タイマー満了で自動ロールバック
+                    print(f"\thealth check FAILED — config will auto-rollback "
+                          f"in {confirm_timeout} minute(s)")
+                    logger.error(f"{hostname}: health check failed, "
+                                 f"not confirming commit")
+                    cu.unlock()
+                    return True
 
-        # 確定（タイマー解除）
-        cu.commit()
-        print("\tcommit confirmed, changes are now permanent")
+            # 確定（タイマー解除）
+            cu.commit()
+            print("\tcommit confirmed, changes are now permanent")
 
     except Exception as e:
         logger.error(f"{hostname}: config push failed: {e}")

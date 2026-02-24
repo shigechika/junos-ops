@@ -178,7 +178,7 @@ junos-ops <subcommand> [options] [hostname ...]
 | `version` | running/planning/pendingバージョンとリブート予定を表示 |
 | `reboot --at YYMMDDHHMM` | 指定日時にリブートをスケジュール |
 | `ls [-l]` | リモートパスのファイル一覧 |
-| `config -f FILE [--confirm N] [--health-check CMD \| --no-health-check]` | set コマンドファイルを適用 |
+| `config -f FILE [--confirm N] [--no-confirm] [--timeout N]` | set コマンドファイルを適用 |
 | `rsi` | RSI/SCF を並列収集 |
 | （なし） | デバイスファクト（device facts）を表示 |
 
@@ -310,11 +310,15 @@ flowchart TD
 
 デフォルトでは `ping count 3 255.255.255.255 rapid` がヘルスチェックとして実行されます。`--health-check` でカスタムコマンドを指定するか、`--no-health-check` でチェックをスキップできます。
 
+`--no-confirm` を指定すると commit confirmed / ヘルスチェックのフローをスキップし、直接 commit します。commit confirmed が遅いデバイス（SRX3xx 等）で有用です。
+
 | オプション | 説明 |
 |-----------|------|
 | `--health-check CMD` | ヘルスチェックコマンドを指定（デフォルト: `"ping count 3 255.255.255.255 rapid"`） |
 | `--no-health-check` | commit confirmed 後のヘルスチェックをスキップ |
 | `--confirm N` | commit confirmed のタイムアウト（分、デフォルト: 1） |
+| `--timeout N` | RPC タイムアウト（秒、デフォルト: 30）。処理の遅いデバイス（SRX345 等）向け。config.ini の `timeout` でも設定可能。 |
+| `--no-confirm` | commit confirmed とヘルスチェックをスキップし直接 commit する。commit confirmed が遅いデバイス（SRX3xx 等）向け。 |
 
 ```mermaid
 flowchart TD
@@ -355,6 +359,9 @@ flowchart TD
 
 4. ヘルスチェックなしで適用
    junos-ops config -f commands.set --no-health-check hostname
+
+5. 直接 commit で適用（commit confirmed をスキップ）
+   junos-ops config -f commands.set --no-confirm hostname
 ```
 
 ### タグベースのホストフィルタリング

@@ -298,6 +298,15 @@ def cmd_config(hostname) -> int:
     if err or dev is None:
         return 1
     try:
+        # RPC タイムアウトの設定（CLI > config.ini > PyEZ デフォルト 30秒）
+        timeout = getattr(common.args, "rpc_timeout", None)
+        if timeout is None:
+            try:
+                timeout = int(common.config.get(hostname, "timeout"))
+            except (Exception):
+                pass
+        if timeout is not None:
+            dev.timeout = timeout
         print(f"# {hostname}")
         if upgrade.load_config(hostname, dev, common.args.configfile):
             return 1
@@ -524,6 +533,14 @@ def main():
         action="store_const", const=None,
         help="skip health check after commit confirmed",
     )
+    p_config.add_argument(
+        "--timeout", dest="rpc_timeout", type=int, default=None,
+        help="RPC timeout in seconds (default: PyEZ default 30s, or 'timeout' in config.ini)",
+    )
+    p_config.add_argument(
+        "--no-confirm", dest="no_confirm", action="store_true",
+        help="skip commit confirmed and health check, commit directly",
+    )
     p_config.add_argument("specialhosts", metavar="hostname", nargs="*")
 
     # rsi
@@ -618,6 +635,10 @@ def main():
         args.tags = None
     if not hasattr(args, "retry"):
         args.retry = 0
+    if not hasattr(args, "rpc_timeout"):
+        args.rpc_timeout = None
+    if not hasattr(args, "no_confirm"):
+        args.no_confirm = False
     # process_host 互換用
     args.copy = False
     args.install = False

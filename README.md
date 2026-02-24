@@ -178,7 +178,7 @@ junos-ops <subcommand> [options] [hostname ...]
 | `version` | Show running/planning/pending versions and reboot schedule |
 | `reboot --at YYMMDDHHMM` | Schedule a reboot at the specified time |
 | `ls [-l]` | List files on the remote path |
-| `config -f FILE [--confirm N] [--health-check CMD \| --no-health-check]` | Push a set command file to devices |
+| `config -f FILE [--confirm N] [--no-confirm] [--timeout N]` | Push a set command file to devices |
 | `rsi` | Collect RSI/SCF in parallel |
 | (none) | Show device facts |
 
@@ -310,11 +310,15 @@ The `config` subcommand uses a three-phase commit flow: `commit confirmed` (auto
 
 By default, `ping count 3 255.255.255.255 rapid` is executed as the health check. Use `--health-check` to specify a custom command, or `--no-health-check` to skip the check entirely.
 
+Use `--no-confirm` to skip the commit confirmed / health check flow and commit directly. This is useful for devices where commit confirmed is too slow (e.g., SRX3xx series).
+
 | Option | Description |
 |--------|-------------|
 | `--health-check CMD` | Custom health check command (default: `"ping count 3 255.255.255.255 rapid"`) |
 | `--no-health-check` | Skip health check after commit confirmed |
 | `--confirm N` | Commit confirmed timeout in minutes (default: 1) |
+| `--timeout N` | RPC timeout in seconds (default: 30). Use for slow devices (e.g., SRX345). Also configurable via `timeout` in config.ini. |
+| `--no-confirm` | Skip commit confirmed and health check, commit directly. Use for devices where commit confirmed is too slow (e.g., SRX3xx). |
 
 ```mermaid
 flowchart TD
@@ -355,6 +359,9 @@ The health check determines success as follows:
 
 4. Apply without health check
    junos-ops config -f commands.set --no-health-check hostname
+
+5. Apply with direct commit (skip commit confirmed)
+   junos-ops config -f commands.set --no-confirm hostname
 ```
 
 ### Tag-based Host Filtering
