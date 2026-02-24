@@ -12,7 +12,7 @@ class TestLoadConfig:
         """正常系: load → diff → commit_check → commit confirmed → health check → confirm"""
         dev = MagicMock()
         dev.cli.return_value = (
-            "PING 8.8.8.8 (8.8.8.8): 56 data bytes\n"
+            "PING 255.255.255.255 (255.255.255.255): 56 data bytes\n"
             "...3 packets transmitted, 3 packets received, 0% packet loss"
         )
         mock_cu = MagicMock()
@@ -37,7 +37,7 @@ class TestLoadConfig:
         assert mock_cu.commit.call_count == 2
         mock_cu.commit.assert_any_call(confirm=1)
         mock_cu.commit.assert_any_call()
-        dev.cli.assert_called_once_with("ping count 3 8.8.8.8 rapid")
+        dev.cli.assert_called_once_with("ping count 3 255.255.255.255 rapid")
         mock_cu.unlock.assert_called_once()
 
     def test_no_changes(self, junos_upgrade, mock_args, mock_config):
@@ -204,7 +204,7 @@ class TestHealthCheck:
         """ping 成功 → 最終 commit 実行"""
         dev = MagicMock()
         dev.cli.return_value = (
-            "PING 8.8.8.8 (8.8.8.8): 56 data bytes\n"
+            "PING 255.255.255.255 (255.255.255.255): 56 data bytes\n"
             "...3 packets transmitted, 3 packets received, 0% packet loss"
         )
         mock_cu = MagicMock()
@@ -215,14 +215,14 @@ class TestHealthCheck:
         ):
             result = junos_upgrade.load_config("test-host", dev, "commands.set")
         assert result is False
-        dev.cli.assert_called_once_with("ping count 3 8.8.8.8 rapid")
+        dev.cli.assert_called_once_with("ping count 3 255.255.255.255 rapid")
         assert mock_cu.commit.call_count == 2
 
     def test_health_check_ping_fail(self, junos_upgrade, mock_args, mock_config):
         """0 packets received → 最終 commit なし、return True"""
         dev = MagicMock()
         dev.cli.return_value = (
-            "PING 8.8.8.8 (8.8.8.8): 56 data bytes\n"
+            "PING 255.255.255.255 (255.255.255.255): 56 data bytes\n"
             "...3 packets transmitted, 0 packets received, 100% packet loss"
         )
         mock_cu = MagicMock()
@@ -284,5 +284,5 @@ class TestHealthCheck:
         assert mock_cu.commit.call_count == 2
 
     def test_health_check_default(self, mock_args):
-        """デフォルト値が "ping count 3 8.8.8.8 rapid" であること"""
-        assert mock_args.health_check == "ping count 3 8.8.8.8 rapid"
+        """デフォルト値が "ping count 3 255.255.255.255 rapid" であること"""
+        assert mock_args.health_check == "ping count 3 255.255.255.255 rapid"

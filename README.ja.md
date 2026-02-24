@@ -308,11 +308,11 @@ flowchart TD
 
 `config` サブコマンドは3段階のコミットフローを採用しています。`commit confirmed`（自動ロールバックタイマー） → **ヘルスチェック** → `commit`（確定）の順に実行します。ヘルスチェックが失敗した場合、最終 `commit` を送信せず、タイマー満了時に JUNOS が自動的にロールバックします。手動操作は不要です。
 
-デフォルトでは `ping count 3 8.8.8.8 rapid` がヘルスチェックとして実行されます。`--health-check` でカスタムコマンドを指定するか、`--no-health-check` でチェックをスキップできます。
+デフォルトでは `ping count 3 255.255.255.255 rapid` がヘルスチェックとして実行されます。`--health-check` でカスタムコマンドを指定するか、`--no-health-check` でチェックをスキップできます。
 
 | オプション | 説明 |
 |-----------|------|
-| `--health-check CMD` | ヘルスチェックコマンドを指定（デフォルト: `"ping count 3 8.8.8.8 rapid"`） |
+| `--health-check CMD` | ヘルスチェックコマンドを指定（デフォルト: `"ping count 3 255.255.255.255 rapid"`） |
 | `--no-health-check` | commit confirmed 後のヘルスチェックをスキップ |
 | `--confirm N` | commit confirmed のタイムアウト（分、デフォルト: 1） |
 
@@ -325,7 +325,7 @@ flowchart TD
     E -->|yes| F["差分表示<br/>ロールバック"] --> D
     E -->|no| G[commit check]
     G --> H["commit confirmed N<br/>（自動ロールバックタイマー）"]:::warned
-    H --> HC{"ヘルスチェック<br/>（デフォルト: ping 8.8.8.8）"}
+    H --> HC{"ヘルスチェック<br/>（デフォルト: ping 255.255.255.255）"}
     HC -->|成功| I["commit<br/>変更を確定"]:::safe
     HC -->|失敗| AR["commit を保留<br/>→ N 分後に自動ロールバック"]:::errstyle
     AR --> D
@@ -451,7 +451,7 @@ set system login user viewer authentication ssh-ed25519 "ssh-ed25519 AAAA..."
 	...
 	commit check passed
 	commit confirmed 1 applied
-	health check: ping count 3 8.8.8.8 rapid
+	health check: ping count 3 255.255.255.255 rapid
 	health check passed (3 packets received)
 	commit confirmed, changes are now permanent
 # rt2.example.jp

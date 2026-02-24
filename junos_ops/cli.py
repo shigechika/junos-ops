@@ -516,8 +516,8 @@ def main():
     hc_group = p_config.add_mutually_exclusive_group()
     hc_group.add_argument(
         "--health-check", dest="health_check",
-        default="ping count 3 8.8.8.8 rapid",
-        help='health check CLI command after commit confirmed (default: "ping count 3 8.8.8.8 rapid")',
+        default="ping count 3 255.255.255.255 rapid",
+        help='health check CLI command after commit confirmed (default: "ping count 3 255.255.255.255 rapid")',
     )
     hc_group.add_argument(
         "--no-health-check", dest="health_check",

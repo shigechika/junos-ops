@@ -42,7 +42,7 @@ def mock_args(junos_common):
         rebootat=None,
         configfile=None,
         confirm_timeout=1,
-        health_check="ping count 3 8.8.8.8 rapid",
+        health_check="ping count 3 255.255.255.255 rapid",
         show_command=None,
         showfile=None,
         tags=None,

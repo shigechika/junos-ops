@@ -308,11 +308,11 @@ flowchart TD
 
 The `config` subcommand uses a three-phase commit flow: `commit confirmed` (auto-rollback timer) → **health check** → `commit` (permanent). If the health check fails, the final `commit` is withheld and JUNOS automatically rolls back the change when the timer expires — no manual intervention required.
 
-By default, `ping count 3 8.8.8.8 rapid` is executed as the health check. Use `--health-check` to specify a custom command, or `--no-health-check` to skip the check entirely.
+By default, `ping count 3 255.255.255.255 rapid` is executed as the health check. Use `--health-check` to specify a custom command, or `--no-health-check` to skip the check entirely.
 
 | Option | Description |
 |--------|-------------|
-| `--health-check CMD` | Custom health check command (default: `"ping count 3 8.8.8.8 rapid"`) |
+| `--health-check CMD` | Custom health check command (default: `"ping count 3 255.255.255.255 rapid"`) |
 | `--no-health-check` | Skip health check after commit confirmed |
 | `--confirm N` | Commit confirmed timeout in minutes (default: 1) |
 
@@ -325,7 +325,7 @@ flowchart TD
     E -->|yes| F["print diff<br/>rollback"] --> D
     E -->|no| G[commit check]
     G --> H["commit confirmed N<br/>(auto-rollback timer)"]:::warned
-    H --> HC{"health check<br/>(default: ping 8.8.8.8)"}
+    H --> HC{"health check<br/>(default: ping 255.255.255.255)"}
     HC -->|pass| I["commit<br/>changes permanent"]:::safe
     HC -->|fail| AR["withhold commit<br/>→ auto-rollback<br/>in N minutes"]:::errstyle
     AR --> D
@@ -451,7 +451,7 @@ set system login user viewer authentication ssh-ed25519 "ssh-ed25519 AAAA..."
 	...
 	commit check passed
 	commit confirmed 1 applied
-	health check: ping count 3 8.8.8.8 rapid
+	health check: ping count 3 255.255.255.255 rapid
 	health check passed (3 packets received)
 	commit confirmed, changes are now permanent
 # rt2.example.jp
