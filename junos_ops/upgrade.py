@@ -791,8 +791,11 @@ def show_version(hostname, dev):
     running = dev.facts["version"]
     print("  - running version:", running)
 
-    # compare with planning version
-    planning = get_planning_version(hostname, dev)
+    # compare with planning version (requires .file in config)
+    try:
+        planning = get_planning_version(hostname, dev)
+    except Exception:
+        planning = None
     print("  - planning version:", planning)
     ret = compare_version(running, planning)
     if ret == 1:
@@ -822,11 +825,17 @@ def show_version(hostname, dev):
             if rescue_epoch is None or commit_epoch > rescue_epoch:
                 print(f"    - WARNING: config modified after firmware install. Re-install will run on reboot.")
 
-    # local package check
-    local = check_local_package(hostname, dev)
+    # local package check (requires .file in config)
+    try:
+        local = check_local_package(hostname, dev)
+    except Exception:
+        local = None
 
-    # remote package check
-    remote = check_remote_package(hostname, dev)
+    # remote package check (requires .file in config)
+    try:
+        remote = check_remote_package(hostname, dev)
+    except Exception:
+        remote = None
 
     rebooting = get_reboot_information(hostname, dev)
     if rebooting is not None:

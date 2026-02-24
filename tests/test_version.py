@@ -197,3 +197,77 @@ class TestGetRescueConfigTime:
         dev.rpc.file_list.side_effect = RpcError()
         result = junos_upgrade.get_rescue_config_time(dev)
         assert result is None
+
+
+class TestShowVersionWithoutFile:
+    """show_version() が .file 未定義でもエラーにならないテスト (Issue #37)"""
+
+    def _make_dev(self):
+        """upgrade 用 .file を持たないデバイスの MagicMock"""
+        dev = MagicMock()
+        dev.facts = {
+            "hostname": "sw1",
+            "model": "EX2300-24T",
+            "version": "22.4R3-S6.5",
+            "personality": "SWITCH",
+        }
+        # get_pending_version で使う RPC
+        rpc_xml = etree.Element("software-information")
+        etree.SubElement(rpc_xml, "output").text = "no pending"
+        dev.rpc.get_software_information.return_value = rpc_xml
+        # get_commit_information
+        dev.rpc.get_commit_information.return_value = etree.Element(
+            "commit-information"
+        )
+        # get_reboot_information
+        reboot_xml = etree.Element("system-reboot-information")
+        out = etree.SubElement(reboot_xml, "output")
+        out.text = "No shutdown/reboot scheduled."
+        dev.rpc.get_reboot_information.return_value = reboot_xml
+        return dev
+
+    def _make_config_without_file(self, junos_common):
+        """upgrade 用 .file/.hash を持たない config"""
+        import configparser
+        cfg = configparser.ConfigParser(allow_no_value=True)
+        cfg.read_dict(
+            {
+                "DEFAULT": {
+                    "id": "testuser",
+                    "pw": "testpass",
+                    "sshkey": "id_ed25519",
+                    "port": "830",
+                    "hashalgo": "md5",
+                    "rpath": "/var/tmp",
+                },
+                "sw1.example.com": {"host": "192.0.2.1"},
+            }
+        )
+        junos_common.config = cfg
+
+    def test_no_file_option_returns_false(self, junos_upgrade, junos_common, mock_args):
+        """.file 未定義でも show_version は False（正常終了）を返す"""
+        self._make_config_without_file(junos_common)
+        dev = self._make_dev()
+        result = junos_upgrade.show_version("sw1.example.com", dev)
+        assert result is False
+
+    def test_no_file_option_shows_version(self, junos_upgrade, junos_common,
+                                           mock_args, capsys):
+        """.file 未定義でもホスト名・モデル・バージョンは表示される"""
+        self._make_config_without_file(junos_common)
+        dev = self._make_dev()
+        junos_upgrade.show_version("sw1.example.com", dev)
+        captured = capsys.readouterr()
+        assert "sw1" in captured.out
+        assert "EX2300-24T" in captured.out
+        assert "22.4R3-S6.5" in captured.out
+
+    def test_no_file_option_planning_none(self, junos_upgrade, junos_common,
+                                           mock_args, capsys):
+        """.file 未定義時 planning version は None 表示"""
+        self._make_config_without_file(junos_common)
+        dev = self._make_dev()
+        junos_upgrade.show_version("sw1.example.com", dev)
+        captured = capsys.readouterr()
+        assert "planning version: None" in captured.out

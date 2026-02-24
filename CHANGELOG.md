@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.9.2] - 2026-02-24
+
+### Fixed
+- `junos-ops version` no longer fails with ERROR when upgrade `.file` option is not defined in config.ini ([#37](https://github.com/shigechika/junos-ops/issues/37))
+
 ## [0.9.1] - 2026-02-24
 
 ### Fixed
@@ -98,6 +103,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - Package install, rollback, and reboot scheduling
 - INI-based configuration
 
+[0.9.2]: https://github.com/shigechika/junos-ops/compare/v0.9.1...v0.9.2
 [0.9.1]: https://github.com/shigechika/junos-ops/compare/v0.9.0...v0.9.1
 [0.9.0]: https://github.com/shigechika/junos-ops/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/shigechika/junos-ops/compare/v0.7.0...v0.8.0
