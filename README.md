@@ -317,7 +317,7 @@ Use `--no-confirm` to skip the commit confirmed / health check flow and commit d
 | `--health-check CMD` | Custom health check command (default: `"ping count 3 255.255.255.255 rapid"`) |
 | `--no-health-check` | Skip health check after commit confirmed |
 | `--confirm N` | Commit confirmed timeout in minutes (default: 1) |
-| `--timeout N` | RPC timeout in seconds (default: 30). Use for slow devices (e.g., SRX345). Also configurable via `timeout` in config.ini. |
+| `--timeout N` | RPC timeout in seconds (default: 120). Also configurable via `timeout` in config.ini. |
 | `--no-confirm` | Skip commit confirmed and health check, commit directly. Use for devices where commit confirmed is too slow (e.g., SRX3xx). |
 
 ```mermaid

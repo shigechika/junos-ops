@@ -345,8 +345,8 @@ class TestRpcTimeout:
         assert result == 0
         assert mock_dev.timeout == 120
 
-    def test_no_timeout_keeps_default(self, junos_common, mock_args, mock_config):
-        """--timeout 未指定 + config.ini にもなし → dev.timeout 未変更"""
+    def test_no_timeout_uses_default_120(self, junos_common, mock_args, mock_config):
+        """--timeout 未指定 + config.ini にもなし → dev.timeout = 120（config デフォルト）"""
         mock_args.rpc_timeout = None
         mock_args.configfile = "commands.set"
         mock_dev = MagicMock(spec=["cli", "close", "timeout"])
@@ -361,7 +361,7 @@ class TestRpcTimeout:
         ):
             result = cli.cmd_config("test-host")
         assert result == 0
-        assert mock_dev.timeout == 30
+        assert mock_dev.timeout == 120
 
 
 class TestNoConfirm:

@@ -317,7 +317,7 @@ flowchart TD
 | `--health-check CMD` | ヘルスチェックコマンドを指定（デフォルト: `"ping count 3 255.255.255.255 rapid"`） |
 | `--no-health-check` | commit confirmed 後のヘルスチェックをスキップ |
 | `--confirm N` | commit confirmed のタイムアウト（分、デフォルト: 1） |
-| `--timeout N` | RPC タイムアウト（秒、デフォルト: 30）。処理の遅いデバイス（SRX345 等）向け。config.ini の `timeout` でも設定可能。 |
+| `--timeout N` | RPC タイムアウト（秒、デフォルト: 120）。config.ini の `timeout` でも設定可能。 |
 | `--no-confirm` | commit confirmed とヘルスチェックをスキップし直接 commit する。commit confirmed が遅いデバイス（SRX3xx 等）向け。 |
 
 ```mermaid

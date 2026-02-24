@@ -298,15 +298,16 @@ def cmd_config(hostname) -> int:
     if err or dev is None:
         return 1
     try:
-        # RPC タイムアウトの設定（CLI > config.ini > PyEZ デフォルト 30秒）
+        # RPC タイムアウトの設定（CLI > config.ini > デフォルト 120秒）
         timeout = getattr(common.args, "rpc_timeout", None)
         if timeout is None:
             try:
                 timeout = int(common.config.get(hostname, "timeout"))
             except (Exception):
                 pass
-        if timeout is not None:
-            dev.timeout = timeout
+        if timeout is None:
+            timeout = 120
+        dev.timeout = timeout
         print(f"# {hostname}")
         if upgrade.load_config(hostname, dev, common.args.configfile):
             return 1
@@ -535,7 +536,7 @@ def main():
     )
     p_config.add_argument(
         "--timeout", dest="rpc_timeout", type=int, default=None,
-        help="RPC timeout in seconds (default: PyEZ default 30s, or 'timeout' in config.ini)",
+        help="RPC timeout in seconds (default: 120, or 'timeout' in config.ini)",
     )
     p_config.add_argument(
         "--no-confirm", dest="no_confirm", action="store_true",

@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.11.1] - 2026-02-24
+
+### Changed
+- Default RPC timeout for `config` subcommand changed from 30s (PyEZ default) to 120s — commit confirmed needs at least 60s to complete
+
 ## [0.11.0] - 2026-02-24
 
 ### Added
@@ -119,6 +124,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - Package install, rollback, and reboot scheduling
 - INI-based configuration
 
+[0.11.1]: https://github.com/shigechika/junos-ops/compare/v0.11.0...v0.11.1
 [0.11.0]: https://github.com/shigechika/junos-ops/compare/v0.10.1...v0.11.0
 [0.10.1]: https://github.com/shigechika/junos-ops/compare/v0.10.0...v0.10.1
 [0.10.0]: https://github.com/shigechika/junos-ops/compare/v0.9.2...v0.10.0
