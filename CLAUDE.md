@@ -36,7 +36,8 @@ tests/
 ├── test_reboot.py      # reboot・config変更検出・snapshot削除のテスト
 ├── test_config_push.py # config サブコマンド（load_config）のテスト
 ├── test_show.py        # show サブコマンドのテスト
-└── test_rsi.py     # RSI/SCF収集のテスト
+├── test_rsi.py     # RSI/SCF収集のテスト
+└── test_cli_parse.py   # CLI引数パース・サブコマンドなし実行のテスト
 pyproject.toml      # パッケージメタデータ、エントリポイント
 config.ini          # 設定ファイル（設定例）
 logging.ini         # ロギング設定
@@ -154,7 +155,7 @@ host = 192.0.2.1           # IPアドレスでオーバーライド
 pytest tests/ -v --tb=short
 ```
 
-140テスト（バージョン比較、設定読込、接続モック、process_host統合テスト、reboot・config変更検出・snapshot削除、config push・ヘルスチェック、show コマンド、RSI収集モック・DISPLAY_STYLE、並列実行・タグフィルタリング、スレッド安全性）。
+147テスト（バージョン比較、設定読込、接続モック、process_host統合テスト、reboot・config変更検出・snapshot削除、config push・ヘルスチェック、show コマンド、RSI収集モック・DISPLAY_STYLE、並列実行・タグフィルタリング、スレッド安全性、CLI引数パース）。
 
 ### ビルド検証
 
