@@ -15,11 +15,12 @@
 
 """CLI entry point and subcommand routing for junos-ops."""
 
-from jnpr.junos.exception import ConnectClosedError
+from jnpr.junos.exception import ConnectClosedError, RpcTimeoutError
 from pprint import pprint
 import argparse
 import io
 import sys
+import time
 import logging
 import logging.config
 import os
@@ -238,22 +239,46 @@ def cmd_reboot(hostname) -> int:
             pass
 
 
+def _cli_with_retry(dev, command, hostname, max_retries):
+    """Execute CLI command with retry on RpcTimeoutError.
+
+    :param max_retries: Number of retries (0 = no retry).
+    :raises: RpcTimeoutError if all retries exhausted.
+    """
+    for attempt in range(max_retries + 1):
+        try:
+            return dev.cli(command)
+        except RpcTimeoutError:
+            if attempt < max_retries:
+                wait = 5 * (attempt + 1)
+                logger.warning(
+                    f"{hostname}: RpcTimeoutError, "
+                    f"retry {attempt + 1}/{max_retries} in {wait}s"
+                )
+                time.sleep(wait)
+            else:
+                raise
+
+
 def cmd_show(hostname) -> int:
     """Run CLI command on device and print output."""
     err, dev = common.connect(hostname)
     if err or dev is None:
         return 1
+    retry = getattr(common.args, "retry", 0)
     try:
         if common.args.showfile:
             # ファイルから複数コマンドを読み込み、1セッション内で順次実行
             commands = common.load_commands(common.args.showfile)
             lines = []
             for cmd in commands:
-                output = dev.cli(cmd)
+                output = _cli_with_retry(dev, cmd, hostname, retry)
                 lines.append(f"## {cmd}\n{output.strip()}")
             print(f"# {hostname}\n" + "\n\n".join(lines) + "\n")
         else:
-            output = dev.cli(common.args.show_command)
+            output = _cli_with_retry(
+                dev, common.args.show_command, hostname, retry
+            )
             # 1回の print で出力し、並列実行時のインターリーブを軽減
             print(f"# {hostname}\n{output.strip()}\n")
         return 0
@@ -468,6 +493,10 @@ def main():
         help="path to file containing CLI commands (one per line)",
     )
     p_show.add_argument(
+        "--retry", type=int, default=0,
+        help="number of retries on RpcTimeoutError (default: 0)",
+    )
+    p_show.add_argument(
         "show_args", metavar="command_or_hostname", nargs="*",
         help='CLI command (quoted) followed by hostnames, or hostnames only with -f',
     )
@@ -587,6 +616,8 @@ def main():
         args.showfile = None
     if not hasattr(args, "tags"):
         args.tags = None
+    if not hasattr(args, "retry"):
+        args.retry = 0
     # process_host 互換用
     args.copy = False
     args.install = False

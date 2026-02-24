@@ -46,6 +46,7 @@ def mock_args(junos_common):
         show_command=None,
         showfile=None,
         tags=None,
+        retry=0,
         specialhosts=[],
     )
     return junos_common.args

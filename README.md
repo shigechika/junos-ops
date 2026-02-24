@@ -464,7 +464,7 @@ Set files can include `#` comments and blank lines — they are automatically st
 
 ### show (run CLI command)
 
-Run an arbitrary CLI command across multiple devices in parallel.
+Run an arbitrary CLI command across multiple devices in parallel. Use `--retry N` to automatically retry on `RpcTimeoutError` (useful for large-scale parallel execution).
 
 ```
 % junos-ops show "show bgp summary" -c accounts.ini gw1.example.jp gw2.example.jp
@@ -491,6 +491,12 @@ show security flow session summary
 
 ## show security flow session summary
 ...
+```
+
+Use `--retry N` to retry commands that fail with `RpcTimeoutError` (with incremental backoff: 5s, 10s, 15s, ...):
+
+```
+% junos-ops show "show system alarms" --retry 2 --workers 10 -c accounts.ini
 ```
 
 > **Note:** JUNOS CLI pipe filters (`| match`, `| count`, etc.) are not supported. PyEZ's `dev.cli()` sends commands via NETCONF RPC, which does not process pipe modifiers. Filter output with shell tools (e.g. `grep`) instead.
