@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+- `junos-ops -c accounts.ini` without a subcommand no longer fails with "invalid choice" error ([#36](https://github.com/shigechika/junos-ops/issues/36))
+
 ## [0.9.0] - 2026-02-21
 
 ### Added
