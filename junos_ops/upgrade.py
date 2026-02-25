@@ -985,33 +985,40 @@ def yymmddhhmm_type(dt_str: str) -> datetime.datetime:
         )
 
 
-def _run_health_check(hostname, dev, health_cmd) -> bool:
-    """Run health check command after commit confirmed.
+def _run_health_check(hostname, dev, health_cmds) -> bool:
+    """Run health check commands after commit confirmed.
 
-    :return: True on failure, False on success.
+    Try each command in order. Pass if any succeeds.
+
+    :param health_cmds: list of CLI commands to try.
+    :return: True on failure (all commands failed), False on success.
     """
-    print(f"\thealth check: {health_cmd}")
-    try:
-        output = dev.cli(health_cmd)
-    except Exception as e:
-        logger.error(f"{hostname}: health check command failed: {e}")
-        print(f"\thealth check error: {e}")
-        return True
+    for health_cmd in health_cmds:
+        print(f"\thealth check: {health_cmd}")
+        try:
+            output = dev.cli(health_cmd)
+        except Exception as e:
+            logger.error(f"{hostname}: health check command failed: {e}")
+            print(f"\thealth check error: {e}")
+            continue
 
-    # ping コマンドの場合: "N packets received" を解析
-    if health_cmd.strip().startswith("ping"):
-        match = re.search(r"(\d+) packets received", output)
-        if match and int(match.group(1)) > 0:
-            print(f"\thealth check passed "
-                  f"({match.group(1)} packets received)")
-            return False
+        # ping コマンドの場合: "N packets received" を解析
+        if health_cmd.strip().startswith("ping"):
+            match = re.search(r"(\d+) packets received", output)
+            if match and int(match.group(1)) > 0:
+                print(f"\thealth check passed "
+                      f"({match.group(1)} packets received)")
+                return False
+            else:
+                print(f"\thealth check: no packets received")
+                continue
         else:
-            print(f"\thealth check: no packets received")
-            return True
+            # ping 以外: 例外なく実行できれば成功
+            print(f"\thealth check passed")
+            return False
 
-    # ping 以外: 例外なく実行できれば成功
-    print(f"\thealth check passed")
-    return False
+    # 全コマンド失敗
+    return True
 
 
 def load_config(hostname, dev, configfile) -> bool:
@@ -1072,9 +1079,12 @@ def load_config(hostname, dev, configfile) -> bool:
             print(f"\tcommit confirmed {confirm_timeout} applied")
 
             # ヘルスチェック
-            health_cmd = getattr(common.args, "health_check", None)
-            if health_cmd:
-                if _run_health_check(hostname, dev, health_cmd):
+            no_health_check = getattr(common.args, "no_health_check", False)
+            health_cmds = getattr(common.args, "health_check", None)
+            if not no_health_check:
+                if health_cmds is None:
+                    health_cmds = ["ping count 3 255.255.255.255 rapid"]
+                if _run_health_check(hostname, dev, health_cmds):
                     # 失敗 — 最終 commit を送らず、タイマー満了で自動ロールバック
                     print(f"\thealth check FAILED — config will auto-rollback "
                           f"in {confirm_timeout} minute(s)")

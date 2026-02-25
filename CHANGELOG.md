@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+- `--health-check` now accepts multiple commands (repeatable). Commands are tried in order — passes if any succeeds, fails only if all fail. Enables fallback health checks for heterogeneous environments.
+- `--no-health-check` is now an independent flag (no longer mutually exclusive with `--health-check`)
+
 ## [0.11.1] - 2026-02-24
 
 ### Changed

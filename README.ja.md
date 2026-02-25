@@ -308,13 +308,13 @@ flowchart TD
 
 `config` サブコマンドは3段階のコミットフローを採用しています。`commit confirmed`（自動ロールバックタイマー） → **ヘルスチェック** → `commit`（確定）の順に実行します。ヘルスチェックが失敗した場合、最終 `commit` を送信せず、タイマー満了時に JUNOS が自動的にロールバックします。手動操作は不要です。
 
-デフォルトでは `ping count 3 255.255.255.255 rapid` がヘルスチェックとして実行されます。`--health-check` でカスタムコマンドを指定するか、`--no-health-check` でチェックをスキップできます。
+デフォルトでは `ping count 3 255.255.255.255 rapid` がヘルスチェックとして実行されます。`--health-check` は複数回指定可能で、順番に試行し1つでも成功すれば通過します。`--no-health-check` でチェックをスキップできます。
 
 `--no-confirm` を指定すると commit confirmed / ヘルスチェックのフローをスキップし、直接 commit します。commit confirmed が遅いデバイス（SRX3xx 等）で有用です。
 
 | オプション | 説明 |
 |-----------|------|
-| `--health-check CMD` | ヘルスチェックコマンドを指定（デフォルト: `"ping count 3 255.255.255.255 rapid"`） |
+| `--health-check CMD` | ヘルスチェックコマンドを指定（複数回指定可、デフォルト: `"ping count 3 255.255.255.255 rapid"`） |
 | `--no-health-check` | commit confirmed 後のヘルスチェックをスキップ |
 | `--confirm N` | commit confirmed のタイムアウト（分、デフォルト: 1） |
 | `--timeout N` | RPC タイムアウト（秒、デフォルト: 120）。config.ini の `timeout` でも設定可能。 |
@@ -347,6 +347,8 @@ flowchart TD
 - **ping コマンド** (`ping ...`): 出力から `N packets received` を解析し、N > 0 で成功
 - **それ以外のコマンド** (`show ...` 等): 例外なく実行できれば成功
 
+`--health-check` を複数指定した場合、順番に試行し1つでも成功すれば通過します。全コマンドが失敗した場合のみロールバックとなります。
+
 ```
 1. dry-run で差分を確認
    junos-ops config -f commands.set -n hostname
@@ -357,10 +359,15 @@ flowchart TD
 3. カスタムヘルスチェックで適用
    junos-ops config -f commands.set --health-check "ping count 5 10.0.0.1 rapid" hostname
 
-4. ヘルスチェックなしで適用
+4. フォールバック付きヘルスチェックで適用（1つ目失敗時に2つ目を試行）
+   junos-ops config -f commands.set \
+     --health-check "ping count 3 255.255.255.255 rapid" \
+     --health-check "ping count 3 ::1 rapid" hostname
+
+5. ヘルスチェックなしで適用
    junos-ops config -f commands.set --no-health-check hostname
 
-5. 直接 commit で適用（commit confirmed をスキップ）
+6. 直接 commit で適用（commit confirmed をスキップ）
    junos-ops config -f commands.set --no-confirm hostname
 ```
 

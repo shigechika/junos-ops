@@ -523,15 +523,15 @@ def main():
         "--confirm", dest="confirm_timeout", type=int, default=1,
         help="commit confirm timeout in minutes (default: 1)",
     )
-    hc_group = p_config.add_mutually_exclusive_group()
-    hc_group.add_argument(
+    p_config.add_argument(
         "--health-check", dest="health_check",
-        default="ping count 3 255.255.255.255 rapid",
-        help='health check CLI command after commit confirmed (default: "ping count 3 255.255.255.255 rapid")',
+        action="append", default=None,
+        help='health check CLI command after commit confirmed '
+             '(repeatable, tries in order; default: "ping count 3 255.255.255.255 rapid")',
     )
-    hc_group.add_argument(
-        "--no-health-check", dest="health_check",
-        action="store_const", const=None,
+    p_config.add_argument(
+        "--no-health-check", dest="no_health_check",
+        action="store_true",
         help="skip health check after commit confirmed",
     )
     p_config.add_argument(
@@ -628,6 +628,8 @@ def main():
         args.confirm_timeout = 1
     if not hasattr(args, "health_check"):
         args.health_check = None
+    if not hasattr(args, "no_health_check"):
+        args.no_health_check = False
     if not hasattr(args, "show_command"):
         args.show_command = None
     if not hasattr(args, "showfile"):

@@ -254,8 +254,8 @@ class TestHealthCheck:
         mock_cu.unlock.assert_called_once()
 
     def test_health_check_disabled(self, junos_upgrade, mock_args, mock_config):
-        """health_check=None → ヘルスチェックスキップ、commit 2回"""
-        mock_args.health_check = None
+        """--no-health-check → ヘルスチェックスキップ、commit 2回"""
+        mock_args.no_health_check = True
         dev = MagicMock()
         mock_cu = MagicMock()
         mock_cu.diff.return_value = "[edit]\n+  set system ..."
@@ -270,7 +270,7 @@ class TestHealthCheck:
 
     def test_health_check_custom_command(self, junos_upgrade, mock_args, mock_config):
         """非 ping コマンドが例外なく実行 → 成功"""
-        mock_args.health_check = "show chassis routing-engine"
+        mock_args.health_check = ["show chassis routing-engine"]
         dev = MagicMock()
         dev.cli.return_value = "Routing Engine status: OK"
         mock_cu = MagicMock()
@@ -285,8 +285,57 @@ class TestHealthCheck:
         assert mock_cu.commit.call_count == 2
 
     def test_health_check_default(self, mock_args):
-        """デフォルト値が "ping count 3 255.255.255.255 rapid" であること"""
-        assert mock_args.health_check == "ping count 3 255.255.255.255 rapid"
+        """デフォルト値がリスト ["ping count 3 255.255.255.255 rapid"] であること"""
+        assert mock_args.health_check == ["ping count 3 255.255.255.255 rapid"]
+
+    def test_health_check_fallback(self, junos_upgrade, mock_args, mock_config):
+        """1つ目失敗 → 2つ目成功でフォールバック、最終 commit 実行"""
+        mock_args.health_check = [
+            "ping count 3 255.255.255.255 rapid",
+            "ping count 3 ::1 rapid",
+        ]
+        dev = MagicMock()
+        dev.cli.side_effect = [
+            # 1つ目: 失敗
+            "PING 255.255.255.255 (255.255.255.255): 56 data bytes\n"
+            "...3 packets transmitted, 0 packets received, 100% packet loss",
+            # 2つ目: 成功
+            "PING6(56=40+8+8 bytes) ::1 --> ::1\n"
+            "...3 packets transmitted, 3 packets received, 0% packet loss",
+        ]
+        mock_cu = MagicMock()
+        mock_cu.diff.return_value = "[edit]\n+  set system ..."
+        with (
+            patch("junos_ops.upgrade.Config", return_value=mock_cu),
+            patch.object(common, "load_commands", return_value=["set system ntp"]),
+        ):
+            result = junos_upgrade.load_config("test-host", dev, "commands.set")
+        assert result is False
+        assert dev.cli.call_count == 2
+        assert mock_cu.commit.call_count == 2
+
+    def test_health_check_all_fail(self, junos_upgrade, mock_args, mock_config):
+        """全コマンド失敗 → 最終 commit なし、return True"""
+        mock_args.health_check = [
+            "ping count 3 255.255.255.255 rapid",
+            "ping count 3 ::1 rapid",
+        ]
+        dev = MagicMock()
+        dev.cli.side_effect = [
+            "...3 packets transmitted, 0 packets received, 100% packet loss",
+            "...3 packets transmitted, 0 packets received, 100% packet loss",
+        ]
+        mock_cu = MagicMock()
+        mock_cu.diff.return_value = "[edit]\n+  set system ..."
+        with (
+            patch("junos_ops.upgrade.Config", return_value=mock_cu),
+            patch.object(common, "load_commands", return_value=["set system ntp"]),
+        ):
+            result = junos_upgrade.load_config("test-host", dev, "commands.set")
+        assert result is True
+        assert dev.cli.call_count == 2
+        mock_cu.commit.assert_called_once_with(confirm=1)
+        mock_cu.unlock.assert_called_once()
 
 
 class TestRpcTimeout:

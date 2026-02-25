@@ -308,13 +308,13 @@ flowchart TD
 
 The `config` subcommand uses a three-phase commit flow: `commit confirmed` (auto-rollback timer) → **health check** → `commit` (permanent). If the health check fails, the final `commit` is withheld and JUNOS automatically rolls back the change when the timer expires — no manual intervention required.
 
-By default, `ping count 3 255.255.255.255 rapid` is executed as the health check. Use `--health-check` to specify a custom command, or `--no-health-check` to skip the check entirely.
+By default, `ping count 3 255.255.255.255 rapid` is executed as the health check. `--health-check` can be specified multiple times — commands are tried in order until one passes. Use `--no-health-check` to skip the check entirely.
 
 Use `--no-confirm` to skip the commit confirmed / health check flow and commit directly. This is useful for devices where commit confirmed is too slow (e.g., SRX3xx series).
 
 | Option | Description |
 |--------|-------------|
-| `--health-check CMD` | Custom health check command (default: `"ping count 3 255.255.255.255 rapid"`) |
+| `--health-check CMD` | Custom health check command (repeatable; default: `"ping count 3 255.255.255.255 rapid"`) |
 | `--no-health-check` | Skip health check after commit confirmed |
 | `--confirm N` | Commit confirmed timeout in minutes (default: 1) |
 | `--timeout N` | RPC timeout in seconds (default: 120). Also configurable via `timeout` in config.ini. |
@@ -347,6 +347,8 @@ The health check determines success as follows:
 - **ping commands** (`ping ...`): parse the output for `N packets received` — success if N > 0
 - **Other commands** (`show ...`, etc.): success if the command executes without exception
 
+When multiple `--health-check` commands are specified, they are tried in order. The check passes as soon as one command succeeds. The check fails only if all commands fail.
+
 ```
 1. Preview changes with dry-run
    junos-ops config -f commands.set -n hostname
@@ -357,10 +359,15 @@ The health check determines success as follows:
 3. Apply with custom health check
    junos-ops config -f commands.set --health-check "ping count 5 10.0.0.1 rapid" hostname
 
-4. Apply without health check
+4. Apply with fallback health check (try first, then second on failure)
+   junos-ops config -f commands.set \
+     --health-check "ping count 3 255.255.255.255 rapid" \
+     --health-check "ping count 3 ::1 rapid" hostname
+
+5. Apply without health check
    junos-ops config -f commands.set --no-health-check hostname
 
-5. Apply with direct commit (skip commit confirmed)
+6. Apply with direct commit (skip commit confirmed)
    junos-ops config -f commands.set --no-confirm hostname
 ```
 
