@@ -357,7 +357,7 @@ flowchart TD
    junos-ops config -f commands.set hostname
 
 3. カスタムヘルスチェックで適用
-   junos-ops config -f commands.set --health-check "ping count 5 10.0.0.1 rapid" hostname
+   junos-ops config -f commands.set --health-check "ping count 5 192.0.2.1 rapid" hostname
 
 4. フォールバック付きヘルスチェックで適用（1つ目失敗時に2つ目を試行）
    junos-ops config -f commands.set \

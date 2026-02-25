@@ -357,7 +357,7 @@ When multiple `--health-check` commands are specified, they are tried in order. 
    junos-ops config -f commands.set hostname
 
 3. Apply with custom health check
-   junos-ops config -f commands.set --health-check "ping count 5 10.0.0.1 rapid" hostname
+   junos-ops config -f commands.set --health-check "ping count 5 192.0.2.1 rapid" hostname
 
 4. Apply with fallback health check (try first, then second on failure)
    junos-ops config -f commands.set \
