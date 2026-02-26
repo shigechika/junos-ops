@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-02-26
+
+### Added
+- `lpath` config option: local firmware directory path for upgrade/copy operations (e.g., `lpath = ~/firmware`). Supports `~` expansion. When set, package files are resolved as `lpath/filename` instead of requiring CWD or absolute paths. Per-host override supported.
+- `RSI_DIR` now supports `~` expansion (e.g., `RSI_DIR = ~/rsi/`), consistent with `sshkey` and `lpath`
+
 ## [0.11.2] - 2026-02-25
 
 ### Changed
@@ -131,6 +137,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - Package install, rollback, and reboot scheduling
 - INI-based configuration
 
+[0.12.0]: https://github.com/shigechika/junos-ops/compare/v0.11.2...v0.12.0
 [0.11.2]: https://github.com/shigechika/junos-ops/compare/v0.11.1...v0.11.2
 [0.11.1]: https://github.com/shigechika/junos-ops/compare/v0.11.0...v0.11.1
 [0.11.0]: https://github.com/shigechika/junos-ops/compare/v0.10.1...v0.11.0

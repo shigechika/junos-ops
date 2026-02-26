@@ -127,6 +127,7 @@ sshkey = id_ed25519   # SSH秘密鍵ファイル
 port = 830            # NETCONFポート
 hashalgo = md5        # チェックサムアルゴリズム
 rpath = /var/tmp      # リモートパス
+# lpath = ~/firmware            # ローカルのファームウェア置き場（~ 展開対応、デフォルト: カレントディレクトリ）
 # huge_tree = true    # 大きなXMLレスポンスを許可
 # RSI_DIR = ./rsi/    # RSI/SCFファイル出力先
 # DISPLAY_STYLE = display set   # SCF出力形式（デフォルト: display set）
@@ -155,7 +156,7 @@ host = 192.0.2.1           # IPアドレスでオーバーライド
 pytest tests/ -v --tb=short
 ```
 
-166テスト（バージョン比較、設定読込、接続モック、process_host統合テスト、reboot・config変更検出・snapshot削除、config push・ヘルスチェック・RPCタイムアウト・no-confirm、show コマンド・リトライ、RSI収集モック・DISPLAY_STYLE、並列実行・タグフィルタリング、スレッド安全性、CLI引数パース、show_version .file未定義対応）。
+173テスト（バージョン比較、設定読込、lpath、接続モック、process_host統合テスト、reboot・config変更検出・snapshot削除、config push・ヘルスチェック・RPCタイムアウト・no-confirm、show コマンド・リトライ、RSI収集モック・DISPLAY_STYLE、並列実行・タグフィルタリング、スレッド安全性、CLI引数パース、show_version .file未定義対応）。
 
 ### ビルド検証
 

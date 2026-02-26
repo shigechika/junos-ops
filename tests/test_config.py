@@ -107,6 +107,52 @@ class TestGetModelFile:
         assert result == "junos-arm-32-22.4R3-S6.5.tgz"
 
 
+class TestGetLocalPath:
+    """get_local_path() のテスト"""
+
+    def test_with_lpath(self, junos_upgrade, mock_config):
+        """lpath 設定時はパスを結合する"""
+        from junos_ops import common
+        common.config.set("DEFAULT", "lpath", "/home/user/firmware")
+        result = junos_upgrade.get_local_path("test-host", "junos-arm-32-22.4R3-S6.5.tgz")
+        assert result == "/home/user/firmware/junos-arm-32-22.4R3-S6.5.tgz"
+
+    def test_without_lpath(self, junos_upgrade, mock_config):
+        """lpath 未設定時はファイル名のみ返す（既存互換）"""
+        result = junos_upgrade.get_local_path("test-host", "junos-arm-32-22.4R3-S6.5.tgz")
+        assert result == "junos-arm-32-22.4R3-S6.5.tgz"
+
+    def test_empty_lpath(self, junos_upgrade, mock_config):
+        """lpath が空文字の場合はファイル名のみ返す"""
+        from junos_ops import common
+        common.config.set("DEFAULT", "lpath", "")
+        result = junos_upgrade.get_local_path("test-host", "junos-arm-32-22.4R3-S6.5.tgz")
+        assert result == "junos-arm-32-22.4R3-S6.5.tgz"
+
+    def test_host_override_lpath(self, junos_upgrade, mock_config):
+        """ホストセクションで lpath を上書き"""
+        from junos_ops import common
+        common.config.set("DEFAULT", "lpath", "/default/path")
+        common.config.set("test-host", "lpath", "/host/specific/path")
+        result = junos_upgrade.get_local_path("test-host", "junos-arm-32-22.4R3-S6.5.tgz")
+        assert result == "/host/specific/path/junos-arm-32-22.4R3-S6.5.tgz"
+
+    def test_trailing_slash(self, junos_upgrade, mock_config):
+        """末尾スラッシュがあっても正しく結合"""
+        from junos_ops import common
+        common.config.set("DEFAULT", "lpath", "/home/user/firmware/")
+        result = junos_upgrade.get_local_path("test-host", "junos-arm-32-22.4R3-S6.5.tgz")
+        assert result == "/home/user/firmware/junos-arm-32-22.4R3-S6.5.tgz"
+
+    def test_tilde_expansion(self, junos_upgrade, mock_config):
+        """~ がホームディレクトリに展開される（sshkey と同じ仕様）"""
+        from junos_ops import common
+        common.config.set("DEFAULT", "lpath", "~/firmware")
+        result = junos_upgrade.get_local_path("test-host", "junos-arm-32-22.4R3-S6.5.tgz")
+        assert result == os.path.expanduser("~/firmware/junos-arm-32-22.4R3-S6.5.tgz")
+        assert "~" not in result
+
+
 class TestGetModelHash:
     """get_model_hash() のテスト"""
 

@@ -1,6 +1,7 @@
 """RSI/SCF collection: show configuration and request support information."""
 
 from lxml import etree
+import os
 from logging import getLogger
 
 from junos_ops import common
@@ -53,7 +54,8 @@ def cmd_rsi(hostname) -> int:
     if err or dev is None:
         return 1
 
-    rsi_dir = common.config.get(hostname, "RSI_DIR", fallback="./")
+    rsi_dir = os.path.expanduser(
+        common.config.get(hostname, "RSI_DIR", fallback="./"))
 
     try:
         # show configuration → SCF ファイル

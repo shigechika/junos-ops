@@ -127,6 +127,7 @@ sshkey = id_ed25519   # SSH private key file
 port = 830            # NETCONF port
 hashalgo = md5        # Checksum algorithm
 rpath = /var/tmp      # Remote path
+# lpath = ~/firmware   # Local firmware directory (~ expanded, default: current directory)
 # huge_tree = true    # Allow large XML responses
 # RSI_DIR = ./rsi/    # Output directory for RSI/SCF files
 # DISPLAY_STYLE = display set   # SCF output style (default: display set)

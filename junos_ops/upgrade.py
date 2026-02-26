@@ -13,6 +13,7 @@ from lxml import etree
 from ncclient.operations.errors import TimeoutExpiredError
 import argparse
 import datetime
+import os
 import re
 from logging import getLogger
 
@@ -96,12 +97,14 @@ def copy(hostname, dev):
     delete_snapshots(dev)
 
     # copy
+    file = get_model_file(hostname, dev.facts["model"])
+    local_file = get_local_path(hostname, file)
     if common.args.dry_run:
         print(
             "dry-run: scp(checksum:%s) %s %s:%s"
             % (
                 common.config.get(hostname, "hashalgo"),
-                get_model_file(hostname, dev.facts["model"]),
+                local_file,
                 hostname,
                 common.config.get(hostname, "rpath"),
             )
@@ -111,7 +114,7 @@ def copy(hostname, dev):
         try:
             sw = SW(dev)
             result = sw.safe_copy(
-                get_model_file(hostname, dev.facts["model"]),
+                local_file,
                 remote_path=common.config.get(hostname, "rpath"),
                 progress=True,
                 cleanfs=True,
@@ -339,6 +342,25 @@ def get_model_file(hostname, model):
         raise
 
 
+def get_local_path(hostname, filename):
+    """Build local file path by joining lpath with filename.
+
+    Supports ``~`` expansion (e.g., ``~/firmware``), consistent with
+    the ``sshkey`` setting in :func:`common.connect`.
+
+    :param hostname: hostname (config section key)
+    :param filename: package filename from get_model_file()
+    :return: full local path (lpath/filename), or filename if lpath is not set
+    """
+    try:
+        lpath = common.config.get(hostname, "lpath")
+    except Exception:
+        return filename
+    if not lpath:
+        return filename
+    return os.path.join(os.path.expanduser(lpath), filename)
+
+
 def get_model_hash(hostname, model):
     """Look up expected checksum for a device model."""
     try:
@@ -381,26 +403,27 @@ def check_local_package(hostname, dev):
     # model, file, hash, algo
     model = dev.facts["model"]
     file = get_model_file(hostname, model)
+    local_file = get_local_path(hostname, file)
     pkg_hash = get_model_hash(hostname, model)
     if len(file) == 0 or len(pkg_hash) == 0:
         return None
     algo = common.config.get(hostname, "hashalgo")
     sw = SW(dev)
     if get_hashcache("localhost", file) == pkg_hash:
-        print(f"  - local package: {file} is found. checksum(cache) is OK.")
+        print(f"  - local package: {local_file} is found. checksum(cache) is OK.")
         return True
     ret = None
     try:
-        val = sw.local_checksum(file, algorithm=algo)
+        val = sw.local_checksum(local_file, algorithm=algo)
         if val == pkg_hash:
-            print(f"  - local package: {file} is found. checksum is OK.")
+            print(f"  - local package: {local_file} is found. checksum is OK.")
             set_hashcache("localhost", file, val)
             ret = True
         else:
-            print(f"  - local package: {file} is found. checksum is BAD. COPY AGAIN!")
+            print(f"  - local package: {local_file} is found. checksum is BAD. COPY AGAIN!")
             ret = False
     except FileNotFoundError as e:
-        print(f"  - local package: {file} is not found.")
+        print(f"  - local package: {local_file} is not found.")
         logger.debug(e)
     except Exception as e:
         logger.error(e)
@@ -492,7 +515,8 @@ def dry_run(hostname, dev):
         print("dry-run: start")
         print("hostname: ", dev.facts["hostname"])
         print("model: ", dev.facts["model"])
-        print("file:", get_model_file(hostname, dev.facts["model"]))
+        print("file:", get_local_path(
+            hostname, get_model_file(hostname, dev.facts["model"])))
         print("hash:", get_model_hash(hostname, dev.facts["model"]))
         print("algo:", common.config.get(hostname, "hashalgo"))
     # show hostname, model, file, hash and algo

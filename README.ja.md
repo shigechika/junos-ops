@@ -127,6 +127,7 @@ sshkey = id_ed25519   # SSH秘密鍵ファイル
 port = 830            # NETCONFポート
 hashalgo = md5        # チェックサムアルゴリズム
 rpath = /var/tmp      # リモートパス
+# lpath = ~/firmware            # ローカルのファームウェア置き場（~ 展開対応、デフォルト: カレントディレクトリ）
 # huge_tree = true    # 大きなXMLレスポンスを許可
 # RSI_DIR = ./rsi/    # RSI/SCFファイルの出力先
 # DISPLAY_STYLE = display set   # SCF出力形式（デフォルト: display set）

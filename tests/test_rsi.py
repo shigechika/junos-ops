@@ -278,3 +278,30 @@ class TestCmdRsi:
         # デフォルト ./ が使われている
         m.assert_any_call("./test-host.SCF", mode="w")
         m.assert_any_call("./test-host.RSI", mode="w")
+
+    def test_rsi_dir_tilde_expansion(self, junos_common, mock_args, mock_config):
+        """RSI_DIR の ~ がホームディレクトリに展開される"""
+        import os
+        mock_config.set("test-host", "RSI_DIR", "~/rsi/")
+        mock_dev = MagicMock()
+        mock_dev.cli.return_value = "config"
+        rsi_xml = etree.Element("output")
+        rsi_xml.text = "RSI text"
+        mock_dev.rpc.get_support_information.return_value = rsi_xml
+        mock_dev.facts = {
+            "personality": "MX",
+            "model": "MX204",
+            "model_info": {"MX204": {}},
+            "hostname": "test-host",
+            "srx_cluster": None,
+        }
+
+        m = mock_open()
+        with patch.object(rsi.common, "connect", return_value=(False, mock_dev)):
+            with patch("builtins.open", m):
+                result = rsi.cmd_rsi("test-host")
+
+        assert result == 0
+        expected_dir = os.path.expanduser("~/rsi/")
+        m.assert_any_call(f"{expected_dir}test-host.SCF", mode="w")
+        m.assert_any_call(f"{expected_dir}test-host.RSI", mode="w")
