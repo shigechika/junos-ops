@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-03-14
+
+### Added
+- `--health-check uptime`: NETCONF RPC probe using `get-system-uptime-information` — verifies device responsiveness without ICMP/ping dependency
+- Jinja2 template support for `config` subcommand ([#30](https://github.com/shigechika/junos-ops/issues/30)): use `.j2` files to generate per-host set commands from a single template
+  - Template variables from `var_*` keys in config.ini (DEFAULT inheritance supported), device facts (`facts.*`), and `hostname`
+  - `StrictUndefined` mode for safety — undefined variables cause immediate error
+  - Jinja2 as optional dependency: `pip install junos-ops[template]`
+- Documentation: `docs/config.md` and `docs/template.md` with English/Japanese versions
+
+### Changed
+- Config push workflow documentation extracted from README to `docs/config.md` for better organization
+- Documentation IPs updated to RFC 5737 addresses (`192.0.2.0/24`, `198.51.100.0/24`, `203.0.113.0/24`)
+
 ## [0.12.0] - 2026-02-26
 
 ### Added
