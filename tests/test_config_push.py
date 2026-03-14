@@ -337,6 +337,84 @@ class TestHealthCheck:
         mock_cu.commit.assert_called_once_with(confirm=1)
         mock_cu.unlock.assert_called_once()
 
+    def test_health_check_rpc_success(self, junos_upgrade, mock_args, mock_config):
+        """NETCONF RPC probe success → commit confirmed"""
+        from lxml import etree
+
+        mock_args.health_check = ["uptime"]
+        dev = MagicMock()
+        root = etree.Element("system-uptime-information")
+        ct = etree.SubElement(root, "current-time")
+        dt = etree.SubElement(ct, "date-time")
+        dt.text = "2026-03-14 10:00:00 JST"
+        dev.rpc.get_system_uptime_information.return_value = root
+        mock_cu = MagicMock()
+        mock_cu.diff.return_value = "[edit]\n+  set system ..."
+        with (
+            patch("junos_ops.upgrade.Config", return_value=mock_cu),
+            patch.object(common, "load_commands", return_value=["set system ntp"]),
+        ):
+            result = junos_upgrade.load_config("test-host", dev, "commands.set")
+        assert result is False
+        dev.cli.assert_not_called()
+        dev.rpc.get_system_uptime_information.assert_called_once()
+        assert mock_cu.commit.call_count == 2
+
+    def test_health_check_rpc_no_data(self, junos_upgrade, mock_args, mock_config):
+        """RPC response has no current-time → failure"""
+        from lxml import etree
+
+        mock_args.health_check = ["uptime"]
+        dev = MagicMock()
+        root = etree.Element("system-uptime-information")
+        dev.rpc.get_system_uptime_information.return_value = root
+        mock_cu = MagicMock()
+        mock_cu.diff.return_value = "[edit]\n+  set system ..."
+        with (
+            patch("junos_ops.upgrade.Config", return_value=mock_cu),
+            patch.object(common, "load_commands", return_value=["set system ntp"]),
+        ):
+            result = junos_upgrade.load_config("test-host", dev, "commands.set")
+        assert result is True
+        mock_cu.commit.assert_called_once_with(confirm=1)
+
+    def test_health_check_rpc_exception(self, junos_upgrade, mock_args, mock_config):
+        """RPC exception → failure"""
+        mock_args.health_check = ["uptime"]
+        dev = MagicMock()
+        dev.rpc.get_system_uptime_information.side_effect = Exception("NETCONF timeout")
+        mock_cu = MagicMock()
+        mock_cu.diff.return_value = "[edit]\n+  set system ..."
+        with (
+            patch("junos_ops.upgrade.Config", return_value=mock_cu),
+            patch.object(common, "load_commands", return_value=["set system ntp"]),
+        ):
+            result = junos_upgrade.load_config("test-host", dev, "commands.set")
+        assert result is True
+        mock_cu.commit.assert_called_once_with(confirm=1)
+
+    def test_health_check_rpc_fallback_to_ping(
+        self, junos_upgrade, mock_args, mock_config
+    ):
+        """RPC fails → fallback to ping succeeds"""
+        mock_args.health_check = ["uptime", "ping count 3 255.255.255.255 rapid"]
+        dev = MagicMock()
+        dev.rpc.get_system_uptime_information.side_effect = Exception("timeout")
+        dev.cli.return_value = (
+            "...3 packets transmitted, 3 packets received, 0% packet loss"
+        )
+        mock_cu = MagicMock()
+        mock_cu.diff.return_value = "[edit]\n+  set system ..."
+        with (
+            patch("junos_ops.upgrade.Config", return_value=mock_cu),
+            patch.object(common, "load_commands", return_value=["set system ntp"]),
+        ):
+            result = junos_upgrade.load_config("test-host", dev, "commands.set")
+        assert result is False
+        dev.rpc.get_system_uptime_information.assert_called_once()
+        dev.cli.assert_called_once_with("ping count 3 255.255.255.255 rapid")
+        assert mock_cu.commit.call_count == 2
+
 
 class TestRpcTimeout:
     """RPC タイムアウトオプションのテスト (Issue #39)"""

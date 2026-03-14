@@ -526,8 +526,11 @@ def main():
     p_config.add_argument(
         "--health-check", dest="health_check",
         action="append", default=None,
-        help='health check CLI command after commit confirmed '
-             '(repeatable, tries in order; default: "ping count 3 255.255.255.255 rapid")',
+        help='health check after commit confirmed '
+             '(repeatable, tries in order; '
+             '"uptime" for NETCONF uptime probe, '
+             'or any CLI command; '
+             'if omitted: "ping count 3 255.255.255.255 rapid")',
     )
     p_config.add_argument(
         "--no-health-check", dest="no_health_check",

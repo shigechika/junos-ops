@@ -156,7 +156,7 @@ host = 192.0.2.1           # IPアドレスでオーバーライド
 pytest tests/ -v --tb=short
 ```
 
-173テスト（バージョン比較、設定読込、lpath、接続モック、process_host統合テスト、reboot・config変更検出・snapshot削除、config push・ヘルスチェック・RPCタイムアウト・no-confirm、show コマンド・リトライ、RSI収集モック・DISPLAY_STYLE、並列実行・タグフィルタリング、スレッド安全性、CLI引数パース、show_version .file未定義対応）。
+カバレッジ: バージョン比較、設定読込、接続モック、各サブコマンド（reboot・config・show・rsi）、並列実行・タグフィルタリング、スレッド安全性、CLI引数パース。
 
 ### ビルド検証
 
@@ -177,6 +177,8 @@ CI で sdist / wheel のビルドを検証。pyproject.toml の記述ミス（PE
 git tag v0.X.Y
 git push origin v0.X.Y
 ```
+
+PyPI リリース後、`shigechika/homebrew-tap` の `update-formula.yml` が `repository_dispatch` で自動トリガーされ、Formula 更新 → bottle ビルドまで自動で行われる。
 
 ## 既知の注意事項
 

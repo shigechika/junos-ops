@@ -1014,10 +1014,28 @@ def _run_health_check(hostname, dev, health_cmds) -> bool:
 
     Try each command in order. Pass if any succeeds.
 
-    :param health_cmds: list of CLI commands to try.
+    :param health_cmds: list of CLI commands or "rpc" keyword to try.
     :return: True on failure (all commands failed), False on success.
     """
     for health_cmd in health_cmds:
+        # NETCONF RPC probe
+        if health_cmd.strip() == "uptime":
+            print("\thealth check: uptime (NETCONF RPC)")
+            try:
+                reply = dev.rpc.get_system_uptime_information()
+                current_time = reply.find(".//current-time/date-time")
+                if current_time is not None and current_time.text:
+                    print(f"\thealth check passed "
+                          f"(uptime: {current_time.text.strip()})")
+                    return False
+                else:
+                    print("\thealth check: no valid uptime data")
+                    continue
+            except Exception as e:
+                logger.error(f"{hostname}: health check RPC failed: {e}")
+                print(f"\thealth check error: {e}")
+                continue
+
         print(f"\thealth check: {health_cmd}")
         try:
             output = dev.cli(health_cmd)
