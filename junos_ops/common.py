@@ -202,6 +202,54 @@ def load_commands(filepath: str) -> list[str]:
         ]
 
 
+def render_template(filepath: str, hostname: str, dev) -> list[str]:
+    """Render a Jinja2 template file with host variables and device facts.
+
+    Variables come from:
+    1. config.ini host section: keys starting with 'var_' (prefix stripped)
+    2. Device facts: injected as 'facts' dict
+    3. Built-in: 'hostname' (config section name)
+
+    :param filepath: path to .j2 template file
+    :param hostname: config section name
+    :param dev: connected Device object (for dev.facts)
+    :return: list of rendered command lines (blank/comment lines excluded)
+    :raises ImportError: if Jinja2 is not installed
+    """
+    try:
+        from jinja2 import Environment, FileSystemLoader, StrictUndefined
+    except ImportError:
+        raise ImportError(
+            "Jinja2 is required for template support. "
+            "Install it with: pip install junos-ops[template]"
+        )
+
+    # テンプレート変数の構築
+    variables = {"hostname": hostname, "facts": dict(dev.facts)}
+
+    # config.ini の var_ プレフィックス変数を収集
+    for key in config.options(hostname):
+        if key.startswith("var_"):
+            variables[key[4:]] = config.get(hostname, key)
+
+    # テンプレートレンダリング
+    template_dir = os.path.dirname(os.path.abspath(filepath))
+    template_name = os.path.basename(filepath)
+    env = Environment(
+        loader=FileSystemLoader(template_dir),
+        undefined=StrictUndefined,
+        keep_trailing_newline=True,
+    )
+    template = env.get_template(template_name)
+    rendered = template.render(variables)
+
+    # レンダリング結果をコマンドリストに変換（空行・コメント除去）
+    return [
+        line.strip() for line in rendered.splitlines()
+        if line.strip() and not line.strip().startswith("#")
+    ]
+
+
 def run_parallel(func, targets, max_workers=1):
     """Run a function against targets using ThreadPoolExecutor.
 

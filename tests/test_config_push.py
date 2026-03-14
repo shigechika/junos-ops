@@ -162,7 +162,7 @@ class TestConfigCommentStripping:
                 common, "load_commands",
                 return_value=[
                     "set system host-name test",
-                    "set system ntp server 10.0.0.1",
+                    "set system ntp server 192.0.2.1",
                 ],
             ) as mock_load_cmds,
         ):
@@ -173,7 +173,7 @@ class TestConfigCommentStripping:
         mock_load_cmds.assert_called_once_with("commands.set")
         # cu.load() に文字列が渡されている（path= ではない）
         mock_cu.load.assert_called_once_with(
-            "set system host-name test\nset system ntp server 10.0.0.1",
+            "set system host-name test\nset system ntp server 192.0.2.1",
             format="set",
         )
 
@@ -414,6 +414,402 @@ class TestHealthCheck:
         dev.rpc.get_system_uptime_information.assert_called_once()
         dev.cli.assert_called_once_with("ping count 3 255.255.255.255 rapid")
         assert mock_cu.commit.call_count == 2
+
+
+class TestJinja2Template:
+    """Jinja2 テンプレート機能のテスト (Issue #30)"""
+
+    def test_j2_renders_template(self, junos_upgrade, mock_args, mock_config):
+        """.j2 file triggers render_template instead of load_commands"""
+        dev = MagicMock()
+        dev.cli.return_value = "3 packets transmitted, 3 packets received"
+        mock_cu = MagicMock()
+        mock_cu.diff.return_value = "[edit]\n+  set system ..."
+        rendered = ["set system host-name rt1", "set system ntp server 192.0.2.1"]
+        with (
+            patch("junos_ops.upgrade.Config", return_value=mock_cu),
+            patch.object(
+                common, "render_template", return_value=rendered
+            ) as mock_render,
+        ):
+            result = junos_upgrade.load_config(
+                "test-host", dev, "commands.set.j2"
+            )
+        assert result is False
+        mock_render.assert_called_once_with("commands.set.j2", "test-host", dev)
+        mock_cu.load.assert_called_once_with(
+            "set system host-name rt1\nset system ntp server 192.0.2.1",
+            format="set",
+        )
+
+    def test_non_j2_uses_load_commands(self, junos_upgrade, mock_args, mock_config):
+        """Non-.j2 file uses load_commands as before"""
+        dev = MagicMock()
+        dev.cli.return_value = "3 packets transmitted, 3 packets received"
+        mock_cu = MagicMock()
+        mock_cu.diff.return_value = "[edit]\n+  set system ..."
+        with (
+            patch("junos_ops.upgrade.Config", return_value=mock_cu),
+            patch.object(
+                common, "load_commands", return_value=["set system ntp"]
+            ) as mock_load,
+        ):
+            result = junos_upgrade.load_config(
+                "test-host", dev, "commands.set"
+            )
+        assert result is False
+        mock_load.assert_called_once_with("commands.set")
+
+    def test_render_template_variables(self, mock_config):
+        """render_template injects var_ prefix, hostname, and facts"""
+        mock_config.set("test-host", "var_ntp_server", "192.0.2.1")
+        mock_config.set("test-host", "var_syslog_host", "192.0.2.2")
+        dev = MagicMock()
+        dev.facts = {"hostname": "rt1", "model": "MX240", "personality": "MX"}
+
+        import tempfile
+        import os
+
+        template_content = (
+            "set system host-name {{ hostname }}\n"
+            "set system ntp server {{ ntp_server }}\n"
+            "set system syslog host {{ syslog_host }} any warning\n"
+            "# this is a comment\n"
+            "\n"
+            "set system model-note {{ facts.model }}\n"
+        )
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".j2", delete=False
+        ) as f:
+            f.write(template_content)
+            f.flush()
+            try:
+                result = common.render_template(f.name, "test-host", dev)
+            finally:
+                os.unlink(f.name)
+
+        assert result == [
+            "set system host-name test-host",
+            "set system ntp server 192.0.2.1",
+            "set system syslog host 192.0.2.2 any warning",
+            "set system model-note MX240",
+        ]
+
+    def test_render_template_strict_undefined(self, mock_config):
+        """Undefined variable raises error"""
+        from jinja2 import UndefinedError
+
+        dev = MagicMock()
+        dev.facts = {}
+
+        import tempfile
+        import os
+
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".j2", delete=False
+        ) as f:
+            f.write("set system ntp server {{ undefined_var }}\n")
+            f.flush()
+            try:
+                import pytest
+
+                with pytest.raises(UndefinedError):
+                    common.render_template(f.name, "test-host", dev)
+            finally:
+                os.unlink(f.name)
+
+    def test_render_template_default_vars(self, mock_config):
+        """DEFAULT section var_ keys are inherited by all hosts"""
+        mock_config.set("DEFAULT", "var_ntp_server", "192.0.2.1")
+        dev = MagicMock()
+        dev.facts = {}
+
+        import tempfile
+        import os
+
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".j2", delete=False
+        ) as f:
+            f.write("set system ntp server {{ ntp_server }}\n")
+            f.flush()
+            try:
+                result = common.render_template(f.name, "test-host", dev)
+            finally:
+                os.unlink(f.name)
+
+        assert result == ["set system ntp server 192.0.2.1"]
+
+    def test_j2_dry_run_shows_rendered(
+        self, junos_upgrade, mock_args, mock_config, capsys
+    ):
+        """dry-run with .j2 shows rendered commands"""
+        mock_args.dry_run = True
+        dev = MagicMock()
+        mock_cu = MagicMock()
+        mock_cu.diff.return_value = "[edit]\n+  set system ..."
+        rendered = ["set system host-name rt1"]
+        with (
+            patch("junos_ops.upgrade.Config", return_value=mock_cu),
+            patch.object(common, "render_template", return_value=rendered),
+        ):
+            result = junos_upgrade.load_config(
+                "test-host", dev, "commands.set.j2"
+            )
+        assert result is False
+        captured = capsys.readouterr()
+        assert "set system host-name rt1" in captured.out
+        assert "dry-run" in captured.out
+
+    def test_render_template_switch_conditional(self, mock_config):
+        """Jinja2 conditional on facts.personality"""
+        mock_config.add_section("sw1.example.jp")
+        mock_config.set("DEFAULT", "var_ntp_server", "192.0.2.1")
+        dev = MagicMock()
+        dev.facts = {"personality": "SWITCH"}
+
+        import tempfile
+        import os
+
+        template_content = (
+            "set system ntp server {{ ntp_server }}\n"
+            "{% if facts.personality == 'SWITCH' %}\n"
+            "set protocols vstp\n"
+            "{% endif %}\n"
+        )
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".j2", delete=False
+        ) as f:
+            f.write(template_content)
+            f.flush()
+            try:
+                result = common.render_template(f.name, "sw1.example.jp", dev)
+            finally:
+                os.unlink(f.name)
+
+        assert "set protocols vstp" in result
+
+    def test_render_template_router_no_vstp(self, mock_config):
+        """Router personality does not include vstp"""
+        mock_config.add_section("rt1.example.jp")
+        mock_config.set("DEFAULT", "var_ntp_server", "192.0.2.1")
+        dev = MagicMock()
+        dev.facts = {"personality": "MX"}
+
+        import tempfile
+        import os
+
+        template_content = (
+            "set system ntp server {{ ntp_server }}\n"
+            "{% if facts.personality == 'SWITCH' %}\n"
+            "set protocols vstp\n"
+            "{% endif %}\n"
+        )
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".j2", delete=False
+        ) as f:
+            f.write(template_content)
+            f.flush()
+            try:
+                result = common.render_template(f.name, "rt1.example.jp", dev)
+            finally:
+                os.unlink(f.name)
+
+        assert "set protocols vstp" not in result
+        assert "set system ntp server 192.0.2.1" in result
+
+    def test_render_template_import_error(self, mock_config):
+        """Jinja2 not installed raises ImportError with install hint"""
+        import builtins
+        real_import = builtins.__import__
+
+        def mock_import(name, *args, **kwargs):
+            if name == "jinja2":
+                raise ImportError("No module named 'jinja2'")
+            return real_import(name, *args, **kwargs)
+
+        dev = MagicMock()
+        dev.facts = {}
+
+        import tempfile
+        import os
+
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".j2", delete=False
+        ) as f:
+            f.write("set system ntp\n")
+            f.flush()
+            try:
+                import pytest
+
+                with (
+                    patch.object(builtins, "__import__", side_effect=mock_import),
+                    pytest.raises(ImportError, match="pip install junos-ops"),
+                ):
+                    common.render_template(f.name, "test-host", dev)
+            finally:
+                os.unlink(f.name)
+
+    def test_render_template_file_not_found(self, mock_config):
+        """Non-existent template file raises error"""
+        dev = MagicMock()
+        dev.facts = {}
+        import pytest
+        from jinja2 import TemplateNotFound
+
+        with pytest.raises(TemplateNotFound):
+            common.render_template(
+                "/nonexistent/path/template.j2", "test-host", dev
+            )
+
+    def test_render_template_syntax_error(self, mock_config):
+        """Jinja2 syntax error raises TemplateSyntaxError"""
+        dev = MagicMock()
+        dev.facts = {}
+
+        import tempfile
+        import os
+        import pytest
+        from jinja2 import TemplateSyntaxError
+
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".j2", delete=False
+        ) as f:
+            f.write("{% if facts.model %}\nset system\n")  # missing endif
+            f.flush()
+            try:
+                with pytest.raises(TemplateSyntaxError):
+                    common.render_template(f.name, "test-host", dev)
+            finally:
+                os.unlink(f.name)
+
+    def test_render_template_host_overrides_default(self, mock_config):
+        """Host section var_ overrides DEFAULT var_"""
+        mock_config.set("DEFAULT", "var_ntp_server", "192.0.2.1")
+        mock_config.set("test-host", "var_ntp_server", "192.0.2.99")
+        dev = MagicMock()
+        dev.facts = {}
+
+        import tempfile
+        import os
+
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".j2", delete=False
+        ) as f:
+            f.write("set system ntp server {{ ntp_server }}\n")
+            f.flush()
+            try:
+                result = common.render_template(f.name, "test-host", dev)
+            finally:
+                os.unlink(f.name)
+
+        assert result == ["set system ntp server 192.0.2.99"]
+
+    def test_render_template_jinja2_comment(self, mock_config):
+        """{# Jinja2 comment #} is removed by Jinja2, not by # filter"""
+        dev = MagicMock()
+        dev.facts = {}
+
+        import tempfile
+        import os
+
+        template_content = (
+            "{# This is a Jinja2 comment #}\n"
+            "set system ntp server 192.0.2.1\n"
+            "# This is a shell-style comment\n"
+        )
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".j2", delete=False
+        ) as f:
+            f.write(template_content)
+            f.flush()
+            try:
+                result = common.render_template(f.name, "test-host", dev)
+            finally:
+                os.unlink(f.name)
+
+        assert result == ["set system ntp server 192.0.2.1"]
+
+    def test_render_template_for_loop(self, mock_config):
+        """{% for %} loop generates multiple commands"""
+        mock_config.set("DEFAULT", "var_ntp_servers", "192.0.2.1,192.0.2.2,192.0.2.3")
+        dev = MagicMock()
+        dev.facts = {}
+
+        import tempfile
+        import os
+
+        template_content = (
+            "{% for server in ntp_servers.split(',') %}\n"
+            "set system ntp server {{ server }}\n"
+            "{% endfor %}\n"
+        )
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".j2", delete=False
+        ) as f:
+            f.write(template_content)
+            f.flush()
+            try:
+                result = common.render_template(f.name, "test-host", dev)
+            finally:
+                os.unlink(f.name)
+
+        assert result == [
+            "set system ntp server 192.0.2.1",
+            "set system ntp server 192.0.2.2",
+            "set system ntp server 192.0.2.3",
+        ]
+
+    def test_render_template_empty_result(self, mock_config):
+        """Template that renders to only comments/blank lines returns empty"""
+        dev = MagicMock()
+        dev.facts = {}
+
+        import tempfile
+        import os
+
+        template_content = (
+            "{# all comments #}\n"
+            "# another comment\n"
+            "\n"
+        )
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".j2", delete=False
+        ) as f:
+            f.write(template_content)
+            f.flush()
+            try:
+                result = common.render_template(f.name, "test-host", dev)
+            finally:
+                os.unlink(f.name)
+
+        assert result == []
+
+    def test_render_template_facts_dict_access(self, mock_config):
+        """facts accessible via both dot notation and bracket notation"""
+        dev = MagicMock()
+        dev.facts = {"model": "EX2300-24T", "hostname": "sw1"}
+
+        import tempfile
+        import os
+
+        template_content = (
+            "set system model-note {{ facts.model }}\n"
+            "set system host-note {{ facts['hostname'] }}\n"
+        )
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".j2", delete=False
+        ) as f:
+            f.write(template_content)
+            f.flush()
+            try:
+                result = common.render_template(f.name, "test-host", dev)
+            finally:
+                os.unlink(f.name)
+
+        assert result == [
+            "set system model-note EX2300-24T",
+            "set system host-note sw1",
+        ]
 
 
 class TestRpcTimeout:

@@ -1086,7 +1086,11 @@ def load_config(hostname, dev, configfile) -> bool:
 
     try:
         # set コマンドファイル読み込み（コメント行・空行を除去）
-        commands = common.load_commands(configfile)
+        if configfile.endswith(".j2"):
+            commands = common.render_template(configfile, hostname, dev)
+            print(f"\ttemplate rendered: {len(commands)} command(s)")
+        else:
+            commands = common.load_commands(configfile)
         cu.load("\n".join(commands), format="set")
 
         # 差分確認
@@ -1095,6 +1099,11 @@ def load_config(hostname, dev, configfile) -> bool:
             print("\tno changes")
             cu.unlock()
             return False
+
+        # テンプレート使用時はレンダリング結果を表示
+        if configfile.endswith(".j2"):
+            for cmd in commands:
+                print(f"\t  {cmd}")
 
         cu.pdiff()
 

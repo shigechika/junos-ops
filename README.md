@@ -19,6 +19,7 @@ A tool for automatic detection of Juniper device models and automated JUNOS pack
 - Dry-run mode (`--dry-run`) for pre-flight verification
 - Parallel execution via ThreadPoolExecutor
 - Configuration push with commit confirmed safety (parallel execution supported)
+- Jinja2 template support for per-host configuration generation ([details](docs/template.md))
 - INI-based host and package management
 
 ## Table of Contents
@@ -307,69 +308,19 @@ flowchart TD
 
 ### Config Push Workflow
 
-The `config` subcommand uses a three-phase commit flow: `commit confirmed` (auto-rollback timer) → **health check** → `commit` (permanent). If the health check fails, the final `commit` is withheld and JUNOS automatically rolls back the change when the timer expires — no manual intervention required.
+The `config` subcommand uses a safe commit flow: `commit confirmed` (auto-rollback timer) → **health check** → `commit` (permanent). If the health check fails, the final `commit` is withheld and JUNOS automatically rolls back when the timer expires.
 
-By default, `ping count 3 255.255.255.255 rapid` is executed as the health check. `--health-check` can be specified multiple times — commands are tried in order until one passes. Use `--no-health-check` to skip the check entirely.
-
-Use `--no-confirm` to skip the commit confirmed / health check flow and commit directly. This is useful for devices where commit confirmed is too slow (e.g., SRX3xx series).
-
-| Option | Description |
-|--------|-------------|
-| `--health-check CMD` | Custom health check command (repeatable; default: `"ping count 3 255.255.255.255 rapid"`) |
-| `--no-health-check` | Skip health check after commit confirmed |
-| `--confirm N` | Commit confirmed timeout in minutes (default: 1) |
-| `--timeout N` | RPC timeout in seconds (default: 120). Also configurable via `timeout` in config.ini. |
-| `--no-confirm` | Skip commit confirmed and health check, commit directly. Use for devices where commit confirmed is too slow (e.g., SRX3xx). |
-
-```mermaid
-flowchart TD
-    A[lock config] --> B[load set commands]
-    B --> C{diff}
-    C -->|no changes| D[unlock]
-    C -->|changes found| E{dry-run?}
-    E -->|yes| F["print diff<br/>rollback"] --> D
-    E -->|no| G[commit check]
-    G --> H["commit confirmed N<br/>(auto-rollback timer)"]:::warned
-    H --> HC{"health check<br/>(default: ping 255.255.255.255)"}
-    HC -->|pass| I["commit<br/>changes permanent"]:::safe
-    HC -->|fail| AR["withhold commit<br/>→ auto-rollback<br/>in N minutes"]:::errstyle
-    AR --> D
-    I --> D
-    G -->|error| J[rollback + unlock]:::errstyle
-    H -->|error| J
-
-    classDef warned fill:#fff3cd,stroke:#ffc107,color:#000
-    classDef safe fill:#d4edda,stroke:#28a745,color:#000
-    classDef errstyle fill:#f8d7da,stroke:#dc3545,color:#000
-```
-
-The health check determines success as follows:
-
-- **ping commands** (`ping ...`): parse the output for `N packets received` — success if N > 0
-- **Other commands** (`show ...`, etc.): success if the command executes without exception
-
-When multiple `--health-check` commands are specified, they are tried in order. The check passes as soon as one command succeeds. The check fails only if all commands fail.
+See [docs/config.md](docs/config.md) for full details including health check options (`uptime`, ping, CLI commands), commit confirmed flow, `--no-confirm`, and parallel execution.
 
 ```
 1. Preview changes with dry-run
-   junos-ops config -f commands.set -n hostname
+   junos-ops config -f commands.set --dry-run hostname
 
-2. Apply changes (with default ping health check)
+2. Apply changes
    junos-ops config -f commands.set hostname
 
-3. Apply with custom health check
-   junos-ops config -f commands.set --health-check "ping count 5 192.0.2.1 rapid" hostname
-
-4. Apply with fallback health check (try first, then second on failure)
-   junos-ops config -f commands.set \
-     --health-check "ping count 3 255.255.255.255 rapid" \
-     --health-check "ping count 3 ::1 rapid" hostname
-
-5. Apply without health check
-   junos-ops config -f commands.set --no-health-check hostname
-
-6. Apply with direct commit (skip commit confirmed)
-   junos-ops config -f commands.set --no-confirm hostname
+3. Apply with NETCONF health check (no ping dependency)
+   junos-ops config -f commands.set --health-check uptime hostname
 ```
 
 ### Tag-based Host Filtering
@@ -476,6 +427,17 @@ set system login user viewer authentication ssh-ed25519 "ssh-ed25519 AAAA..."
 Use `--confirm N` to change the commit confirmed timeout (default: 1 minute). Use `--no-health-check` to skip the post-commit health check.
 
 Set files can include `#` comments and blank lines — they are automatically stripped before sending to the device.
+
+#### Jinja2 Templates
+
+Use `.j2` files to generate per-host configurations from a single template. Variables come from `var_*` keys in config.ini and device facts.
+
+```bash
+junos-ops config -f ntp.set.j2 --dry-run rt1.example.jp sw1.example.jp
+junos-ops config -f ntp.set.j2 rt1.example.jp sw1.example.jp
+```
+
+See [docs/template.md](docs/template.md) for details, usage patterns (conditionals, loops), and config.ini examples.
 
 ### show (run CLI command)
 
