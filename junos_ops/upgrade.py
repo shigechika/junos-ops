@@ -22,159 +22,320 @@ from junos_ops import common
 logger = getLogger(__name__)
 
 
-def delete_snapshots(dev) -> bool:
-    """Delete all snapshots on EX/QFX series for disk space.
+def delete_snapshots(dev) -> dict:
+    """Delete all snapshots on EX/QFX series to free disk space.
 
-    :return: True on error, False on success (no-op for non-SWITCH).
+    :return: dict with keys:
+
+        - ``applied`` (bool): False when the device is not a switch
+          (no-op); True when a snapshot delete RPC was attempted
+          (including dry-run and non-fatal exceptions).
+        - ``ok`` (bool): overall success from the caller's perspective.
+          Non-switches and non-fatal RPC exceptions are both reported as
+          ``ok=True`` because the legacy implementation treated them as
+          success too.
+        - ``dry_run`` (bool)
+        - ``message`` (str | None)
+        - ``error`` (str | None): exception class name if the RPC raised,
+          else None.
+
+    Does not print.
     """
     if dev.facts.get("personality") != "SWITCH":
-        return False
+        return {
+            "applied": False,
+            "ok": True,
+            "dry_run": common.args.dry_run,
+            "message": None,
+            "error": None,
+        }
 
     if common.args.dry_run:
-        print("dry-run: request system snapshot delete *")
-        return False
+        return {
+            "applied": True,
+            "ok": True,
+            "dry_run": True,
+            "message": "dry-run: request system snapshot delete *",
+            "error": None,
+        }
 
     try:
         rpc = dev.rpc.request_snapshot(delete="*", dev_timeout=60)
         xml_str = etree.tostring(rpc, encoding="unicode")
         logger.debug(f"delete_snapshots: {xml_str}")
-        print("copy: snapshot delete successful")
-    except RpcError as e:
-        logger.warning(f"snapshot delete: RpcError: {e}")
-        print(f"copy: snapshot delete skipped (RpcError: {e})")
-    except RpcTimeoutError as e:
-        logger.warning(f"snapshot delete: RpcTimeoutError: {e}")
-        print(f"copy: snapshot delete skipped (RpcTimeoutError: {e})")
+        return {
+            "applied": True,
+            "ok": True,
+            "dry_run": False,
+            "message": "copy: snapshot delete successful",
+            "error": None,
+        }
     except Exception as e:
-        logger.warning(f"snapshot delete: {e}")
-        print(f"copy: snapshot delete skipped ({e})")
-    return False
+        err_name = type(e).__name__
+        logger.warning(f"snapshot delete: {err_name}: {e}")
+        return {
+            "applied": True,
+            "ok": True,  # legacy: non-fatal skip
+            "dry_run": False,
+            "message": f"copy: snapshot delete skipped ({err_name}: {e})",
+            "error": err_name,
+        }
 
 
-def copy(hostname, dev):
-    """Copy package to remote device via SCP with checksum verification."""
+def copy(hostname, dev) -> dict:
+    """Copy package to remote device via SCP with checksum verification.
+
+    :return: dict with keys:
+
+        - ``hostname`` (str)
+        - ``ok`` (bool): overall success. True on successful copy, on
+          dry-run, and when skipped because the target version is already
+          running or the file is already present remotely.
+        - ``skipped`` (bool): True when pre-flight checks determined the
+          copy is unnecessary.
+        - ``skip_reason`` (str | None): ``"already_running"`` |
+          ``"already_copied"`` | None.
+        - ``dry_run`` (bool)
+        - ``local_file`` (str | None): resolved local package path (None
+          if skipped before resolution).
+        - ``remote_path`` (str)
+        - ``checksum_algo`` (str)
+        - ``storage_cleanup`` (dict | None): result of
+          ``request-system-storage-cleanup``.
+        - ``snapshot_delete`` (dict | None): result of
+          :func:`delete_snapshots`.
+        - ``steps`` (list[dict]): chronological per-action progress
+          entries, each with at minimum an ``action`` and ``message``.
+        - ``error`` (str | None): short error identifier when ``ok`` is
+          False.
+
+    Does not print. Progress is conveyed via the ``steps`` list for the
+    display layer.
+
+    Note: the nested ``check_running_package`` / ``check_remote_package``
+    helpers still print to stdout in the current refactor step; that is
+    cleaned up in Phase 6.
+    """
     logger.debug("copy: start")
+    steps: list[dict] = []
+    result = {
+        "hostname": hostname,
+        "ok": False,
+        "skipped": False,
+        "skip_reason": None,
+        "dry_run": common.args.dry_run,
+        "local_file": None,
+        "remote_path": common.config.get(hostname, "rpath"),
+        "checksum_algo": common.config.get(hostname, "hashalgo"),
+        "storage_cleanup": None,
+        "snapshot_delete": None,
+        "steps": steps,
+        "error": None,
+    }
+
+    # pre-flight skip checks
     if common.args.force:
         logger.debug("copy: force copy")
     else:
-        if check_running_package(hostname, dev):
-            print("Already Running, COPY Skip.")
-            return False
+        if check_running_package(hostname, dev)["match"]:
+            result["ok"] = True
+            result["skipped"] = True
+            result["skip_reason"] = "already_running"
+            steps.append({
+                "action": "skip",
+                "ok": True,
+                "message": "Already Running, COPY Skip.",
+            })
+            return result
         if check_remote_package(hostname, dev):
-            print("remote package is already copied successfully")
-            return False
+            result["ok"] = True
+            result["skipped"] = True
+            result["skip_reason"] = "already_copied"
+            steps.append({
+                "action": "skip",
+                "ok": True,
+                "message": "remote package is already copied successfully",
+            })
+            return result
 
     # request-system-storage-cleanup
+    cleanup: dict = {
+        "ok": False,
+        "dry_run": common.args.dry_run,
+        "message": None,
+        "error": None,
+    }
     if common.args.dry_run:
-        print("dry-run: request system storage cleanup")
+        cleanup["ok"] = True
+        cleanup["message"] = "dry-run: request system storage cleanup"
     else:
         try:
             rpc = dev.rpc.request_system_storage_cleanup(
                 no_confirm=True, dev_timeout=60
             )
-            # default dev_timeout is 30 seconds, but it's not enough QFX series.
             xml_str = etree.tostring(rpc, encoding="unicode")
             logger.debug(f"copy: request-system-storage-cleanup={xml_str}")
             if xml_str.find("<success/>") >= 0:
-                print("copy: system storage cleanup successful")
+                cleanup["ok"] = True
+                cleanup["message"] = "copy: system storage cleanup successful"
             else:
-                print("copy: system storage cleanup failed")
-                return True
-        except RpcError as e:
-            print("system storage cleanup failure caused by RpcError:", e)
-            return True
-        except RpcTimeoutError as e:
-            print("system storage cleanup failure caused by RpcTimeoutError:", e)
-            return True
+                cleanup["ok"] = False
+                cleanup["message"] = "copy: system storage cleanup failed"
         except Exception as e:
-            print(e)
-            return True
+            err_name = type(e).__name__
+            cleanup["ok"] = False
+            cleanup["error"] = err_name
+            cleanup["message"] = (
+                f"system storage cleanup failure caused by {err_name}: {e}"
+            )
+    result["storage_cleanup"] = cleanup
+    steps.append({"action": "storage_cleanup", **cleanup})
+    if not cleanup["ok"]:
+        result["error"] = "storage_cleanup_failed"
+        return result
 
-    # EX/QFXシリーズ: スナップショット削除でディスク容量を確保
-    delete_snapshots(dev)
+    # EX/QFX: snapshot delete to free disk
+    snap = delete_snapshots(dev)
+    result["snapshot_delete"] = snap
+    if snap.get("applied"):
+        steps.append({"action": "snapshot_delete", **snap})
 
-    # copy
+    # scp
     file = get_model_file(hostname, dev.facts["model"])
     local_file = get_local_path(hostname, file)
+    result["local_file"] = local_file
+
     if common.args.dry_run:
-        print(
-            "dry-run: scp(checksum:%s) %s %s:%s"
-            % (
-                common.config.get(hostname, "hashalgo"),
-                local_file,
-                hostname,
-                common.config.get(hostname, "rpath"),
-            )
+        msg = "dry-run: scp(checksum:%s) %s %s:%s" % (
+            result["checksum_algo"], local_file, hostname, result["remote_path"],
         )
-        ret = False
-    else:
-        try:
-            sw = SW(dev)
-            result = sw.safe_copy(
-                local_file,
-                remote_path=common.config.get(hostname, "rpath"),
-                progress=True,
-                cleanfs=True,
-                cleanfs_timeout=300,  # default 300
-                checksum=get_model_hash(hostname, dev.facts["model"]),
-                checksum_timeout=1200,  # default 300
-                checksum_algorithm=common.config.get(hostname, "hashalgo"),
-                force_copy=common.args.force,
-            )
-            if result:
-                logger.debug("copy: successful")
-                ret = False
-            else:
-                logger.debug("copy: failed")
-                ret = True
-        except TimeoutExpiredError as e:
-            print("Copy failure caused by TimeoutExpiredError:", e)
-            ret = True
-        except RpcTimeoutError as e:
-            print("Copy failure caused by RpcTimeoutError:", e)
-            return True
-        except Exception as e:
-            print(e)
-            ret = True
+        steps.append({
+            "action": "scp",
+            "ok": True,
+            "dry_run": True,
+            "message": msg,
+            "error": None,
+        })
+        result["ok"] = True
+        logger.debug("copy: end (dry-run)")
+        return result
 
-    logger.debug(f"copy: end ret={ret}")
-    return ret
+    try:
+        sw = SW(dev)
+        success = sw.safe_copy(
+            local_file,
+            remote_path=result["remote_path"],
+            progress=True,
+            cleanfs=True,
+            cleanfs_timeout=300,
+            checksum=get_model_hash(hostname, dev.facts["model"]),
+            checksum_timeout=1200,
+            checksum_algorithm=result["checksum_algo"],
+            force_copy=common.args.force,
+        )
+        if success:
+            logger.debug("copy: successful")
+            steps.append({
+                "action": "scp",
+                "ok": True,
+                "dry_run": False,
+                "message": "copy: scp successful",
+                "error": None,
+            })
+            result["ok"] = True
+        else:
+            logger.debug("copy: failed")
+            steps.append({
+                "action": "scp",
+                "ok": False,
+                "dry_run": False,
+                "message": "copy: scp failed",
+                "error": "scp_failed",
+            })
+            result["error"] = "scp_failed"
+    except TimeoutExpiredError as e:
+        msg = f"Copy failure caused by TimeoutExpiredError: {e}"
+        steps.append({"action": "scp", "ok": False, "message": msg, "error": "TimeoutExpiredError"})
+        result["error"] = "TimeoutExpiredError"
+    except RpcTimeoutError as e:
+        msg = f"Copy failure caused by RpcTimeoutError: {e}"
+        steps.append({"action": "scp", "ok": False, "message": msg, "error": "RpcTimeoutError"})
+        result["error"] = "RpcTimeoutError"
+    except Exception as e:
+        msg = str(e)
+        err_name = type(e).__name__
+        steps.append({"action": "scp", "ok": False, "message": msg, "error": err_name})
+        result["error"] = err_name
+
+    logger.debug(f"copy: end ok={result['ok']}")
+    return result
 
 
-def rollback(hostname, dev):
-    """Rollback to previous package version."""
+def rollback(hostname, dev) -> dict:
+    """Rollback to the previously installed package version.
+
+    :return: dict with keys:
+
+        - ``hostname`` (str)
+        - ``ok`` (bool): True on success (or dry-run).
+        - ``dry_run`` (bool)
+        - ``rpc_output`` (str | None): full XML/text response from
+          ``request-package-rollback`` on success or when the RPC
+          returned a recognisable failure response.
+        - ``message`` (str): human-readable summary.
+        - ``error`` (str | None): exception class name on exception,
+          ``"unrecognized_response"`` if the RPC completed but returned
+          text the parser couldn't classify as success.
+
+    Does not print.
+    """
+    result = {
+        "hostname": hostname,
+        "ok": False,
+        "dry_run": common.args.dry_run,
+        "rpc_output": None,
+        "message": "",
+        "error": None,
+    }
     if common.args.dry_run:
-        print("dry-run: request system software rollback")
-    else:
-        try:
-            rpc = dev.rpc.request_package_rollback({"format": "text"}, dev_timeout=120)
-            # default dev_timeout is 30 seconds, but it's not enough SRX4600, MX5 and QFX5110.
-            xml_str = etree.tostring(rpc, encoding="unicode")
-            logger.debug(f"rollback: rpc={rpc} xml_str={xml_str}")
-            if (
-                xml_str.find("Deleting bootstrap installer") >= 0  # MX
-                or xml_str.find("NOTICE: The 'pending' set has been removed") >= 0  # EX
-                or xml_str.find("will become active at next reboot") >= 0  # SRX3xx
-                or xml_str.find("Rollback of staged upgrade succeeded") >= 0  # SRX1500
-                or xml_str.find("There is NO image for ROLLBACK") >= 0  # SRX4600
-            ):
-                print(f"rollback: request system software rollback successful:\n{xml_str}")
-            else:
-                print(f"rollback: request system software rollback failed:\n{xml_str}")
-                return True
-        except RpcError as e:
-            print("request system software rollback failure caused by RpcError:", e)
-            return True
-        except RpcTimeoutError as e:
-            print(
-                "request system software rollback failure caused by RpcTimeoutError:",
-                e,
+        result["ok"] = True
+        result["message"] = "dry-run: request system software rollback"
+        return result
+    try:
+        rpc = dev.rpc.request_package_rollback({"format": "text"}, dev_timeout=120)
+        xml_str = etree.tostring(rpc, encoding="unicode")
+        logger.debug(f"rollback: rpc={rpc} xml_str={xml_str}")
+        result["rpc_output"] = xml_str
+        if (
+            xml_str.find("Deleting bootstrap installer") >= 0  # MX
+            or xml_str.find("NOTICE: The 'pending' set has been removed") >= 0  # EX
+            or xml_str.find("will become active at next reboot") >= 0  # SRX3xx
+            or xml_str.find("Rollback of staged upgrade succeeded") >= 0  # SRX1500
+            or xml_str.find("There is NO image for ROLLBACK") >= 0  # SRX4600
+        ):
+            result["ok"] = True
+            result["message"] = (
+                f"rollback: request system software rollback successful:\n{xml_str}"
             )
-            return True
-        except Exception as e:
-            print(e)
-            return True
-    return False
+        else:
+            result["error"] = "unrecognized_response"
+            result["message"] = (
+                f"rollback: request system software rollback failed:\n{xml_str}"
+            )
+    except RpcTimeoutError as e:
+        result["error"] = "RpcTimeoutError"
+        result["message"] = (
+            f"request system software rollback failure caused by RpcTimeoutError: {e}"
+        )
+    except RpcError as e:
+        result["error"] = "RpcError"
+        result["message"] = (
+            f"request system software rollback failure caused by RpcError: {e}"
+        )
+    except Exception as e:
+        result["error"] = type(e).__name__
+        result["message"] = str(e)
+    return result
 
 
 def clear_reboot(dev) -> bool:
@@ -208,92 +369,170 @@ def clear_reboot(dev) -> bool:
     return False
 
 
-def install(hostname, dev):
-    """Install package with pre-flight checks."""
+def install(hostname, dev) -> dict:
+    """Install package with pre-flight checks.
+
+    :return: dict with keys:
+
+        - ``hostname`` (str)
+        - ``ok`` (bool): overall success.
+        - ``skipped`` (bool): True when pre-flight determined no action
+          was needed (already running or pending already ahead).
+        - ``skip_reason`` (str | None): ``"already_running"`` |
+          ``"pending_ge_planning"`` | ``"remote_missing"`` | None.
+        - ``dry_run`` (bool)
+        - ``pending`` (str | None): current pending version.
+        - ``planning`` (str | None): planned version (from package name).
+        - ``compare`` (int | None): result of
+          :func:`compare_version` (1 / 0 / -1 / None).
+        - ``rollback_result`` (dict | None): nested
+          :func:`rollback` result when a rollback was performed.
+        - ``copy_result`` (dict | None): nested :func:`copy` result.
+        - ``rescue_save`` (dict | None): ``{ok, message, error}`` for
+          ``request system configuration rescue save``.
+        - ``install_message`` (str | None): message from PyEZ
+          ``SW.install`` or the dry-run equivalent.
+        - ``steps`` (list[dict]): chronological per-action progress for
+          the display layer.
+        - ``error`` (str | None): short identifier for the first
+          fatal failure.
+
+    Does not print.
+    """
     logger.debug("install: start")
-    if common.args.force:
-        logger.debug("install: force install")
-    else:
-        if check_running_package(hostname, dev):
-            print("Already Running, INSTALL Skip.")
-            return False
+    steps: list[dict] = []
+    result: dict = {
+        "hostname": hostname,
+        "ok": False,
+        "skipped": False,
+        "skip_reason": None,
+        "dry_run": common.args.dry_run,
+        "pending": None,
+        "planning": None,
+        "compare": None,
+        "rollback_result": None,
+        "copy_result": None,
+        "rescue_save": None,
+        "install_message": None,
+        "steps": steps,
+        "error": None,
+    }
+
+    # pre-flight: already running?
+    if not common.args.force:
+        if check_running_package(hostname, dev)["match"]:
+            result["ok"] = True
+            result["skipped"] = True
+            result["skip_reason"] = "already_running"
+            steps.append({"action": "skip", "message": "Already Running, INSTALL Skip."})
+            return result
 
     pending = get_pending_version(hostname, dev)
+    result["pending"] = pending
     logger.debug(f"{pending=}")
     if pending is not None:
         planning = get_planning_version(hostname, dev)
+        result["planning"] = planning
         logger.debug(f"{planning=}")
-        ret = compare_version(pending, planning)
-        logger.debug(f"install: compare_version={ret}")
-        if ret == 1:
-            logger.debug(f"{pending=} > {planning=} : No need install.")
-            print(f"\t{pending=} > {planning=} : No need install.")
-        elif ret == -1:
-            logger.debug(f"{pending=} < {planning=} : NEED INSTALL.")
-            print(f"\t{pending=} < {planning=} : NEED INSTALL.")
-        elif ret == 0:
-            logger.debug(f"{pending=} = {planning=} : No need install.")
-            print(f"\t{pending=} = {planning=} : No need install.")
+        cmp_ret = compare_version(pending, planning)
+        result["compare"] = cmp_ret
+        logger.debug(f"install: compare_version={cmp_ret}")
+        if cmp_ret == 1:
+            steps.append({
+                "action": "compare",
+                "message": f"\t{pending=} > {planning=} : No need install.",
+            })
+        elif cmp_ret == -1:
+            steps.append({
+                "action": "compare",
+                "message": f"\t{pending=} < {planning=} : NEED INSTALL.",
+            })
+        elif cmp_ret == 0:
+            steps.append({
+                "action": "compare",
+                "message": f"\t{pending=} = {planning=} : No need install.",
+            })
 
-        if ret == 1 or ret == 0:
-            if common.args.force:
-                # force INSTALL
-                pass
-            else:
-                return False
+        if cmp_ret in (0, 1) and not common.args.force:
+            result["ok"] = True
+            result["skipped"] = True
+            result["skip_reason"] = "pending_ge_planning"
+            return result
 
-        ret = rollback(hostname, dev)
-        if ret:
-            if common.args.force:
-                pass
-            else:
-                return True
+        rollback_result = rollback(hostname, dev)
+        result["rollback_result"] = rollback_result
+        if not rollback_result.get("ok") and not common.args.force:
+            result["error"] = "rollback_failed"
+            return result
 
-    # EX series delete remote package after installed. so, must check first pending version before copy.
+    # EX series deletes remote package after install; remote check first.
     if common.args.dry_run and (common.args.copy or common.args.update):
-        print("dry-run: skip remote package check")
+        steps.append({
+            "action": "remote_check",
+            "message": "dry-run: skip remote package check",
+        })
     elif check_remote_package(hostname, dev) is not True and common.args.install:
-        # install() does not copy
-        logger.info("remote package file not found. Please consider --copy before --install")
-        return True
+        logger.info(
+            "remote package file not found. Please consider --copy before --install"
+        )
+        result["skip_reason"] = "remote_missing"
+        result["error"] = "remote_missing"
+        steps.append({
+            "action": "remote_check",
+            "message": "remote package file not found. "
+                       "Please consider --copy before --install",
+        })
+        return result
 
-    if copy(hostname, dev):
-        return True
+    copy_result = copy(hostname, dev)
+    result["copy_result"] = copy_result
+    if not copy_result.get("ok"):
+        result["error"] = "copy_failed"
+        return result
 
     if clear_reboot(dev):
-        return True
+        result["error"] = "clear_reboot_failed"
+        return result
 
-    # request system configuration rescue save
+    # rescue config save
+    rescue_save: dict = {"ok": False, "dry_run": common.args.dry_run, "message": None, "error": None}
     if common.args.dry_run:
-        print("dry-run: request system configuration rescue save")
+        rescue_save["ok"] = True
+        rescue_save["message"] = "dry-run: request system configuration rescue save"
     else:
         cu = Config(dev)
         try:
-            ret = cu.rescue("save")
-            if ret:
-                print("install: rescue config save successful")
+            saved = cu.rescue("save")
+            if saved:
+                rescue_save["ok"] = True
+                rescue_save["message"] = "install: rescue config save successful"
             else:
-                print("install: rescue config save failed")
-                return True
+                rescue_save["message"] = "install: rescue config save failed"
         except ValueError as e:
-            print("wrong rescue action", e)
-            return True
+            rescue_save["error"] = "ValueError"
+            rescue_save["message"] = f"wrong rescue action {e}"
         except Exception as e:
-            print(e)
-            return True
+            rescue_save["error"] = type(e).__name__
+            rescue_save["message"] = str(e)
+    result["rescue_save"] = rescue_save
+    steps.append({"action": "rescue_save", **rescue_save})
+    if not rescue_save["ok"]:
+        result["error"] = "rescue_save_failed"
+        return result
 
     # request system software add ...
     if common.args.dry_run:
-        print(
-            "dry-run: request system software add %s/%s"
-            % (
-                common.config.get(hostname, "rpath"),
-                get_model_file(hostname, dev.facts["model"]),
-            )
+        msg = "dry-run: request system software add %s/%s" % (
+            common.config.get(hostname, "rpath"),
+            get_model_file(hostname, dev.facts["model"]),
         )
-        ret = False
-    else:
-        sw = SW(dev)
+        result["install_message"] = msg
+        result["ok"] = True
+        steps.append({"action": "sw_install", "ok": True, "dry_run": True, "message": msg})
+        return result
+
+    sw = SW(dev)
+    try:
         status, msg = sw.install(
             get_model_file(hostname, dev.facts["model"]),
             remote_path=common.config.get(hostname, "rpath"),
@@ -303,25 +542,29 @@ def install(hostname, dev):
             no_copy=True,
             issu=False,
             nssu=False,
-            timeout=2400,  # default 1800
-            cleanfs_timeout=300,  # default 300
+            timeout=2400,
+            cleanfs_timeout=300,
             checksum=get_model_hash(hostname, dev.facts["model"]),
-            checksum_timeout=1200,  # default 300
+            checksum_timeout=1200,
             checksum_algorithm=common.config.get(hostname, "hashalgo"),
             force_copy=common.args.force,
             all_re=True,
         )
+    finally:
         del sw
-        logger.debug(f"{msg=}")
-        if status:
-            logger.info("install successful")
-            ret = False
-        else:
-            logger.info("install failed")
-            ret = True
+    logger.debug(f"{msg=}")
+    result["install_message"] = msg
+    if status:
+        logger.info("install successful")
+        result["ok"] = True
+        steps.append({"action": "sw_install", "ok": True, "message": msg})
+    else:
+        logger.info("install failed")
+        result["error"] = "sw_install_failed"
+        steps.append({"action": "sw_install", "ok": False, "message": msg})
 
-    logger.debug(f"end {ret=}")
-    return ret
+    logger.debug(f"install: end ok={result['ok']}")
+    return result
 
 
 def get_model_file(hostname, model):
@@ -464,85 +707,123 @@ def check_remote_package(hostname, dev):
     return ret
 
 
-def list_remote_path(hostname, dev):
-    """List files on remote device path."""
+def list_remote_path(hostname, dev) -> dict:
+    """List files on the remote device's ``rpath`` directory.
+
+    :return: dict with keys:
+
+        - ``hostname`` (str)
+        - ``path`` (str): the directory inspected (``rpath``).
+        - ``files`` (list[dict]): one entry per child with keys ``name``,
+          ``type`` ("file" | "dir" | ...), ``path``, ``size``, ``owner``,
+          ``permissions_text``, ``ts_date``. Unknown fields are None.
+        - ``file_count`` (int): total file count reported by PyEZ FS.ls.
+        - ``format`` (str): "short" or "long" from ``args.list_format``
+          (passed through so display can honour the CLI flag).
+
+    Does not print.
+    """
     logger.debug("list_remote_path: start")
-    # file list /var/tmp/
     fs = FS(dev)
     rpath = common.config.get(hostname, "rpath")
     dir_info = fs.ls(path=rpath, brief=False)
-    print(dir_info.get("path") + ":")
-    a = dir_info.get("files")
-    if common.args.list_format == "short":
-        for i in a.keys():
-            b = a.get(i)
-            if b.get("type") == "file":
-                print(b.get("path"))
-            else:
-                print(b.get("path") + "/")
-    else:
-        for i in a.keys():
-            b = a.get(i)
-            print(
-                "%s %s %9d %s %s"
-                % (
-                    b.get("permissions_text"),
-                    b.get("owner"),
-                    b.get("size"),
-                    b.get("ts_date"),
-                    b.get("path"),
-                )
-            )
-        print("total files: %d" % dir_info.get("file_count"))
+    raw_files = dir_info.get("files") or {}
+    files = []
+    for name, entry in raw_files.items():
+        files.append({
+            "name": name,
+            "type": entry.get("type"),
+            "path": entry.get("path"),
+            "size": entry.get("size"),
+            "owner": entry.get("owner"),
+            "permissions_text": entry.get("permissions_text"),
+            "ts_date": entry.get("ts_date"),
+        })
     logger.debug("list_remote_path: end")
-    return dir_info
+    return {
+        "hostname": hostname,
+        "path": dir_info.get("path"),
+        "files": files,
+        "file_count": dir_info.get("file_count"),
+        "format": getattr(common.args, "list_format", None),
+    }
 
 
-def dry_run(hostname, dev):
-    """Perform dry-run checks for local and remote packages."""
+def dry_run(hostname, dev) -> dict:
+    """Perform dry-run checks for local and remote packages.
+
+    :return: dict with keys:
+
+        - ``hostname`` (str)
+        - ``model`` (str)
+        - ``local_file`` (str): full local path of the expected package.
+        - ``planning_hash`` (str): expected checksum from config.
+        - ``algo`` (str): checksum algorithm name.
+        - ``local_package`` (bool | None): result of
+          :func:`check_local_package` (True=ok, False=bad, None=missing).
+        - ``remote_package`` (bool | None): result of
+          :func:`check_remote_package`.
+        - ``ok`` (bool): True iff both ``local_package`` and
+          ``remote_package`` are True.
+
+    Note: the nested ``check_local_package`` / ``check_remote_package``
+    helpers still print to stdout in the current refactor step.
+    """
     logger.debug("dry-run: start")
+    model = dev.facts["model"]
+    file = get_model_file(hostname, model)
+    local_file = get_local_path(hostname, file)
+    planning_hash = get_model_hash(hostname, model)
+    algo = common.config.get(hostname, "hashalgo")
     logger.debug(f"hostname: {dev.facts['hostname']}")
-    logger.debug(f"model: {dev.facts['model']}")
-    logger.debug(
-        f"file: {get_local_path(hostname, get_model_file(hostname, dev.facts['model']))}"
-    )
-    logger.debug(f"hash: {get_model_hash(hostname, dev.facts['model'])}")
-    logger.debug(f"algo: {common.config.get(hostname, 'hashalgo')}")
-    # show hostname, model, file, hash and algo
-    # local package check
+    logger.debug(f"model: {model}")
+    logger.debug(f"file: {local_file}")
+    logger.debug(f"hash: {planning_hash}")
+    logger.debug(f"algo: {algo}")
     local = check_local_package(hostname, dev)
-    # remote package check
     remote = check_remote_package(hostname, dev)
     logger.debug("dry-run: end")
-    if local and remote:
-        return True
-    else:
-        return False
+    return {
+        "hostname": hostname,
+        "model": model,
+        "local_file": local_file,
+        "planning_hash": planning_hash,
+        "algo": algo,
+        "local_package": local,
+        "remote_package": remote,
+        "ok": bool(local and remote),
+    }
 
 
-def check_running_package(hostname, dev):
-    """Compare running version with planning version.
+def check_running_package(hostname, dev) -> dict:
+    """Compare the running Junos version with the planning package file.
 
-    :returns:
-       * ``True`` same (already running target version).
-       * ``False`` different (upgrade needed).
+    :return: dict with keys:
+
+        - ``hostname`` (str)
+        - ``running`` (str): running version from ``dev.facts["version"]``.
+        - ``expected_file`` (str): planned package filename for the model.
+        - ``match`` (bool): True iff ``running`` appears in
+          ``expected_file`` (meaning the device is already on the
+          planned version).
+
+    Does not print.
     """
     logger.debug("check_running_package: start")
-    ret = None
     ver = dev.facts["version"]
     rever = re.sub(r"\.", r"\\.", ver)
-    logger.debug(f"check_running_package: ver={ver}")
-    logger.debug(f"check_running_package: rever={rever}")
-    m = re.search(rever, get_model_file(hostname, dev.facts["model"]))
+    expected_file = get_model_file(hostname, dev.facts["model"])
+    logger.debug(f"check_running_package: ver={ver} rever={rever}")
+    m = re.search(rever, expected_file)
     logger.debug(f"check_running_package: m={m}")
-    if m is None:
-        # unmatch(different version)
-        ret = False
-    else:
-        # match(same version)
-        ret = True
+    match = m is not None
     logger.debug("check_running_package: end")
-    return ret
+    return {
+        "hostname": hostname,
+        "running": ver,
+        "expected_file": expected_file,
+        "match": match,
+    }
 
 
 def compare_version(left: str, right: str) -> int | None:
@@ -868,115 +1149,260 @@ def show_version(hostname, dev) -> dict:
     }
 
 
-def check_and_reinstall(hostname, dev) -> bool:
-    """Re-install firmware if config was modified after install.
+def check_and_reinstall(hostname, dev) -> dict:
+    """Re-install firmware if config was modified after the last install.
 
-    :return: True on error, False on success (including no re-install needed).
+    :return: dict with keys:
+
+        - ``hostname`` (str)
+        - ``ok`` (bool): True on success (including the common "no
+          action needed" path); False only if rescue save or re-install
+          raised an error.
+        - ``reinstalled`` (bool): True iff the PyEZ install RPC was
+          actually invoked (not dry-run, not skipped).
+        - ``skipped`` (bool): True when we decided no re-install was
+          needed.
+        - ``skip_reason`` (str | None): ``"no_pending"`` |
+          ``"no_commit_info"`` | ``"config_unchanged"`` | ``"dry_run"``
+          | None.
+        - ``dry_run`` (bool)
+        - ``commit`` (dict | None): ``{epoch, datetime, user, client}``
+          of the most recent commit, when available.
+        - ``rescue_epoch`` (int | None): mtime of the rescue config.
+        - ``rescue_save`` (dict | None): ``{ok, message, error}``.
+        - ``install_message`` (str | None): PyEZ ``SW.install`` message.
+        - ``steps`` (list[dict]): chronological progress for display.
+        - ``error`` (str | None).
+
+    Does not print.
     """
+    steps: list[dict] = []
+    result: dict = {
+        "hostname": hostname,
+        "ok": True,
+        "reinstalled": False,
+        "skipped": False,
+        "skip_reason": None,
+        "dry_run": common.args.dry_run,
+        "commit": None,
+        "rescue_epoch": None,
+        "rescue_save": None,
+        "install_message": None,
+        "steps": steps,
+        "error": None,
+    }
+
     pending = get_pending_version(hostname, dev)
     if pending is None:
         logger.debug("check_and_reinstall: no pending version, skip")
-        return False
+        result["skipped"] = True
+        result["skip_reason"] = "no_pending"
+        return result
 
     commit_info = get_commit_information(dev)
     if commit_info is None:
         logger.debug("check_and_reinstall: cannot get commit information, skip")
-        return False
+        result["skipped"] = True
+        result["skip_reason"] = "no_commit_info"
+        return result
 
     commit_epoch, commit_dt_str, commit_user, commit_client = commit_info
+    result["commit"] = {
+        "epoch": commit_epoch,
+        "datetime": commit_dt_str,
+        "user": commit_user,
+        "client": commit_client,
+    }
     rescue_epoch = get_rescue_config_time(dev)
+    result["rescue_epoch"] = rescue_epoch
 
     if rescue_epoch is not None and commit_epoch <= rescue_epoch:
         logger.debug("check_and_reinstall: config not modified after rescue save, skip")
-        return False
+        result["skipped"] = True
+        result["skip_reason"] = "config_unchanged"
+        return result
 
-    # config が rescue config 保存後に変更されている（または rescue config がない）
+    # Config modified after rescue save (or no rescue config exists).
     if rescue_epoch is None:
-        print(f"\tWARNING: rescue config not found. Re-installing firmware with current config.")
+        steps.append({
+            "action": "warning",
+            "message": "\tWARNING: rescue config not found. "
+                       "Re-installing firmware with current config.",
+        })
     else:
-        print(f"\tWARNING: config modified after firmware install ({commit_dt_str} by {commit_user} via {commit_client}).")
-        print(f"\tRe-installing firmware to validate current config.")
+        steps.append({
+            "action": "warning",
+            "message": (
+                f"\tWARNING: config modified after firmware install "
+                f"({commit_dt_str} by {commit_user} via {commit_client})."
+            ),
+        })
+        steps.append({
+            "action": "warning",
+            "message": "\tRe-installing firmware to validate current config.",
+        })
 
     if common.args.dry_run:
-        print("\tdry-run: re-install and rescue config save skipped")
-        return False
+        result["skipped"] = True
+        result["skip_reason"] = "dry_run"
+        steps.append({
+            "action": "dry_run",
+            "message": "\tdry-run: re-install and rescue config save skipped",
+        })
+        return result
 
-    # rescue config 再保存
+    # rescue config save
+    rescue_save: dict = {"ok": False, "message": None, "error": None}
     cu = Config(dev)
     try:
-        ret = cu.rescue("save")
-        if ret:
-            print("\tre-install: rescue config save successful")
+        saved = cu.rescue("save")
+        if saved:
+            rescue_save["ok"] = True
+            rescue_save["message"] = "\tre-install: rescue config save successful"
         else:
-            print("\tre-install: rescue config save failed")
-            return True
+            rescue_save["message"] = "\tre-install: rescue config save failed"
     except Exception as e:
+        rescue_save["error"] = type(e).__name__
+        rescue_save["message"] = f"\tre-install: rescue config save failed: {e}"
         logger.error(f"check_and_reinstall: rescue save failed: {e}")
-        return True
+    result["rescue_save"] = rescue_save
+    steps.append({"action": "rescue_save", **rescue_save})
+    if not rescue_save["ok"]:
+        result["ok"] = False
+        result["error"] = "rescue_save_failed"
+        return result
 
-    # 再インストール（validation 付き）
+    # re-install (with validation)
     try:
         sw = SW(dev)
-        status, msg = sw.install(
-            get_model_file(hostname, dev.facts["model"]),
-            remote_path=common.config.get(hostname, "rpath"),
-            progress=True,
-            validate=True,
-            cleanfs=False,
-            no_copy=True,
-            issu=False,
-            nssu=False,
-            timeout=2400,
-            checksum=get_model_hash(hostname, dev.facts["model"]),
-            checksum_timeout=1200,
-            checksum_algorithm=common.config.get(hostname, "hashalgo"),
-            all_re=True,
-        )
-        del sw
+        try:
+            status, msg = sw.install(
+                get_model_file(hostname, dev.facts["model"]),
+                remote_path=common.config.get(hostname, "rpath"),
+                progress=True,
+                validate=True,
+                cleanfs=False,
+                no_copy=True,
+                issu=False,
+                nssu=False,
+                timeout=2400,
+                checksum=get_model_hash(hostname, dev.facts["model"]),
+                checksum_timeout=1200,
+                checksum_algorithm=common.config.get(hostname, "hashalgo"),
+                all_re=True,
+            )
+        finally:
+            del sw
         logger.debug(f"check_and_reinstall: {msg=}")
+        result["install_message"] = msg
+        result["reinstalled"] = True
         if status:
-            print("\tre-install: successful")
-            return False
+            steps.append({
+                "action": "reinstall",
+                "ok": True,
+                "message": "\tre-install: successful",
+            })
         else:
-            print(f"\tre-install: failed: {msg}")
-            return True
+            result["ok"] = False
+            result["error"] = "reinstall_failed"
+            steps.append({
+                "action": "reinstall",
+                "ok": False,
+                "message": f"\tre-install: failed: {msg}",
+            })
     except Exception as e:
+        result["ok"] = False
+        result["error"] = type(e).__name__
         logger.error(f"check_and_reinstall: install failed: {e}")
-        return True
+        steps.append({
+            "action": "reinstall",
+            "ok": False,
+            "message": f"\tre-install: failed: {e}",
+        })
+    return result
 
 
-def reboot(hostname: str, dev, reboot_dt: datetime.datetime):
-    """Schedule device reboot at specified time."""
+def reboot(hostname: str, dev, reboot_dt: datetime.datetime) -> dict:
+    """Schedule device reboot at the specified time.
+
+    :return: dict with keys:
+
+        - ``hostname`` (str)
+        - ``ok`` (bool): True iff ``code == 0``.
+        - ``code`` (int): legacy exit code (0 = success, 2 = cannot read
+          reboot info, 3 = clear_reboot failed, 4 = ConnectError on
+          reboot RPC, 5 = RpcError on reboot RPC, 6 =
+          check_and_reinstall failed).
+        - ``dry_run`` (bool)
+        - ``reboot_at`` (str): formatted ``yymmddhhmm`` target time.
+        - ``existing_schedule`` (str | None): summary of any
+          pre-existing reboot/shutdown schedule detected.
+        - ``cleared_existing`` (bool): True iff we forcibly cleared a
+          pre-existing schedule.
+        - ``reinstall_result`` (dict | None): nested
+          :func:`check_and_reinstall` result.
+        - ``message`` (str | None): PyEZ ``SW.reboot`` response (or
+          dry-run equivalent).
+        - ``steps`` (list[dict]): chronological progress for display.
+        - ``error`` (str | None).
+
+    Does not print. Note: the legacy implementation called
+    ``dev.close()`` on success; callers should now close the device.
+    """
     logger.debug(f"{reboot_dt=}")
+    at_str = reboot_dt.strftime("%y%m%d%H%M")
+    steps: list[dict] = []
+    result: dict = {
+        "hostname": hostname,
+        "ok": False,
+        "code": 0,
+        "dry_run": common.args.dry_run,
+        "reboot_at": at_str,
+        "existing_schedule": None,
+        "cleared_existing": False,
+        "reinstall_result": None,
+        "message": None,
+        "steps": steps,
+        "error": None,
+    }
+
     try:
         rpc = dev.rpc.get_reboot_information({"format": "text"})
     except ConnectError as err:
         logger.error(f"{err=}")
-        return 2
+        result["code"] = 2
+        result["error"] = "ConnectError"
+        return result
     xml_str = etree.tostring(rpc, encoding="unicode")
     logger.debug(f"{xml_str=}")
-    if xml_str.find("No shutdown/reboot scheduled.") >= 0:
-        pass
-    else:
+    if xml_str.find("No shutdown/reboot scheduled.") < 0:
         logger.debug("ANY SHUTDWON/REBOOT SCHEDULE EXISTS")
         match = re.search(r"^(\w+) requested by (\w+) at (.*)$", xml_str, re.MULTILINE)
-        if len(match.groups()) == 3:
+        if match and len(match.groups()) == 3:
             dt = datetime.datetime.strptime(match.group(3), "%a %b %d %H:%M:%S %Y")
-            print(f"\t{match.group(1).upper()} SCHEDULE EXISTS AT {dt}")
+            existing_msg = f"\t{match.group(1).upper()} SCHEDULE EXISTS AT {dt}"
+            result["existing_schedule"] = existing_msg
+            steps.append({"action": "existing_schedule", "message": existing_msg})
             if common.args.force:
                 logger.debug("force clear reboot")
-                print("\tforce: clear reboot")
+                steps.append({"action": "force_clear", "message": "\tforce: clear reboot"})
                 if clear_reboot(dev):
-                    return 3
+                    result["code"] = 3
+                    result["error"] = "clear_reboot_failed"
+                    return result
+                result["cleared_existing"] = True
             else:
                 logger.debug("skip clear reboot")
 
-    # config 変更検出 + 自動再インストール
-    if check_and_reinstall(hostname, dev):
-        return 6
+    # config change detection + automatic re-install
+    reinstall_result = check_and_reinstall(hostname, dev)
+    result["reinstall_result"] = reinstall_result
+    if not reinstall_result.get("ok"):
+        result["code"] = 6
+        result["error"] = "reinstall_failed"
+        return result
 
     # reboot
-    at_str = reboot_dt.strftime("%y%m%d%H%M")
     sw = SW(dev)
     try:
         if common.args.dry_run:
@@ -985,16 +1411,22 @@ def reboot(hostname: str, dev, reboot_dt: datetime.datetime):
             msg = sw.reboot(at=at_str)
     except ConnectError as e:
         logger.error(f"{e=}")
-        return 4
+        result["code"] = 4
+        result["error"] = "ConnectError"
+        return result
     except RpcError as e:
         logger.error(f"{e}")
-        return 5
-    print(f"\t{msg}")
-    del sw
+        result["code"] = 5
+        result["error"] = "RpcError"
+        return result
+    finally:
+        del sw
 
-    dev.close()
+    result["message"] = msg
+    steps.append({"action": "reboot", "message": f"\t{msg}"})
+    result["ok"] = True
     logger.debug("success")
-    return 0
+    return result
 
 
 def yymmddhhmm_type(dt_str: str) -> datetime.datetime:

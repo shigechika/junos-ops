@@ -134,10 +134,10 @@ def cmd_upgrade(hostname) -> int:
     if dev is None:
         return 1
     try:
-        print(f"# {hostname}")
-        if upgrade.install(hostname, dev):
-            return 1
-        return 0
+        display.print_host_header(hostname)
+        result = upgrade.install(hostname, dev)
+        display.print_install(result)
+        return 0 if result.get("ok") else 1
     except Exception as e:
         logger.error(f"{hostname}: {e}")
         return 1
@@ -154,10 +154,10 @@ def cmd_copy(hostname) -> int:
     if dev is None:
         return 1
     try:
-        print(f"# {hostname}")
-        if upgrade.copy(hostname, dev):
-            return 1
-        return 0
+        display.print_host_header(hostname)
+        result = upgrade.copy(hostname, dev)
+        display.print_copy(result)
+        return 0 if result.get("ok") else 1
     except Exception as e:
         logger.error(f"{hostname}: {e}")
         return 1
@@ -174,10 +174,10 @@ def cmd_install(hostname) -> int:
     if dev is None:
         return 1
     try:
-        print(f"# {hostname}")
-        if upgrade.install(hostname, dev):
-            return 1
-        return 0
+        display.print_host_header(hostname)
+        result = upgrade.install(hostname, dev)
+        display.print_install(result)
+        return 0 if result.get("ok") else 1
     except Exception as e:
         logger.error(f"{hostname}: {e}")
         return 1
@@ -194,16 +194,18 @@ def cmd_rollback(hostname) -> int:
     if dev is None:
         return 1
     try:
-        print(f"# {hostname}")
+        display.print_host_header(hostname)
         pending = upgrade.get_pending_version(hostname, dev)
         print(f"rollback: pending version is {pending}")
         if pending is None:
             print("rollback: skip")
-        else:
-            if upgrade.rollback(hostname, dev):
-                return 1
-            if not common.args.dry_run:
-                print("rollback: successful")
+            return 0
+        result = upgrade.rollback(hostname, dev)
+        display.print_rollback(result)
+        if not result.get("ok"):
+            return 1
+        if not common.args.dry_run:
+            print("rollback: successful")
         return 0
     except Exception as e:
         logger.error(f"{hostname}: {e}")
@@ -241,9 +243,10 @@ def cmd_reboot(hostname) -> int:
     if dev is None:
         return 1
     try:
-        print(f"# {hostname}")
-        ret = upgrade.reboot(hostname, dev, common.args.rebootat)
-        return ret
+        display.print_host_header(hostname)
+        result = upgrade.reboot(hostname, dev, common.args.rebootat)
+        display.print_reboot(result)
+        return result.get("code", 1)
     except Exception as e:
         logger.error(f"{hostname}: {e}")
         return 1
@@ -343,8 +346,9 @@ def cmd_ls(hostname) -> int:
     if dev is None:
         return 1
     try:
-        print(f"# {hostname}")
-        upgrade.list_remote_path(hostname, dev)
+        display.print_host_header(hostname)
+        result = upgrade.list_remote_path(hostname, dev)
+        display.print_list_remote(result)
         return 0
     except Exception as e:
         logger.error(f"{hostname}: {e}")
@@ -384,10 +388,11 @@ def process_host(hostname: str) -> int:
         ) or common.args.debug:
             pprint(dev.facts)
         if common.args.list_format is not None:
-            list_remote_path(hostname, dev)
+            display.print_list_remote(list_remote_path(hostname, dev))
         if common.args.copy:
-            err = copy(hostname, dev)
-            if err:
+            copy_result = copy(hostname, dev)
+            display.print_copy(copy_result)
+            if not copy_result.get("ok"):
                 return 1
         if common.args.rollback:
             pending = get_pending_version(hostname, dev)
@@ -395,23 +400,26 @@ def process_host(hostname: str) -> int:
             if pending is None:
                 print("rollback: skip")
             else:
-                err = rollback(hostname, dev)
-                if err:
+                rollback_result = rollback(hostname, dev)
+                display.print_rollback(rollback_result)
+                if not rollback_result.get("ok"):
                     return 1
-                else:
-                    if common.args.dry_run is False:
-                        print("rollback: successful")
+                if common.args.dry_run is False:
+                    print("rollback: successful")
         if common.args.install or common.args.update:
-            err = install(hostname, dev)
-            if err:
+            install_result = install(hostname, dev)
+            display.print_install(install_result)
+            if not install_result.get("ok"):
                 return 1
         if common.args.showversion:
             result = show_version(hostname, dev)
             display.print_version(result)
         if common.args.rebootat:
-            ret = reboot(hostname, dev, common.args.rebootat)
-            if ret:
-                return ret
+            reboot_result = reboot(hostname, dev, common.args.rebootat)
+            display.print_reboot(reboot_result)
+            code = reboot_result.get("code", 1)
+            if code:
+                return code
         return 0
     except Exception as e:
         logger.error(f"{hostname}: {e}")

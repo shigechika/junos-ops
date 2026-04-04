@@ -30,7 +30,7 @@ class TestProcessHost:
         mock_dev = MagicMock()
         mock_dev.facts = {"model": "EX2300-24T"}
         with patch.object(junos_update, "connect", return_value={"hostname": "test-host", "host": "test-host", "ok": True, "dev": mock_dev, "error": None, "error_message": None}):
-            with patch.object(junos_update, "copy", return_value=False):
+            with patch.object(junos_update, "copy", return_value={"ok": True, "steps": []}):
                 result = junos_update.process_host("test-host")
                 assert result == 0
 
@@ -40,7 +40,7 @@ class TestProcessHost:
         mock_dev = MagicMock()
         mock_dev.facts = {"model": "EX2300-24T"}
         with patch.object(junos_update, "connect", return_value={"hostname": "test-host", "host": "test-host", "ok": True, "dev": mock_dev, "error": None, "error_message": None}):
-            with patch.object(junos_update, "copy", return_value=True):
+            with patch.object(junos_update, "copy", return_value={"ok": False, "steps": [], "error": "scp_failed"}):
                 result = junos_update.process_host("test-host")
                 assert result == 1
 
@@ -71,7 +71,7 @@ class TestProcessHost:
         mock_dev = MagicMock()
         mock_dev.facts = {"model": "EX2300-24T"}
         with patch.object(junos_update, "connect", return_value={"hostname": "test-host", "host": "test-host", "ok": True, "dev": mock_dev, "error": None, "error_message": None}):
-            with patch.object(junos_update, "copy", return_value=True):
+            with patch.object(junos_update, "copy", return_value={"ok": False, "steps": [], "error": "scp_failed"}):
                 junos_update.process_host("test-host")
                 mock_dev.close.assert_called_once()
 
@@ -103,6 +103,6 @@ class TestProcessHost:
         mock_dev = MagicMock()
         mock_dev.facts = {"model": "EX2300-24T"}
         with patch.object(junos_update, "connect", return_value={"hostname": "test-host", "host": "test-host", "ok": True, "dev": mock_dev, "error": None, "error_message": None}):
-            with patch.object(junos_update, "install", return_value=False):
+            with patch.object(junos_update, "install", return_value={"ok": True, "steps": []}):
                 result = junos_update.process_host("test-host")
                 assert result == 0

@@ -132,33 +132,172 @@ def print_version(result: dict) -> None:
 
 
 def print_copy(result: dict) -> None:
-    """Print ``upgrade.copy`` result (walks ``steps`` list)."""
-    raise NotImplementedError
+    """Print ``upgrade.copy`` result by walking its ``steps`` list.
+
+    Each step carries a ``message`` field that mirrors the legacy
+    single-line output. Messages with no content are silently skipped.
+    """
+    lines = []
+    for step in result.get("steps", []):
+        msg = step.get("message")
+        if msg:
+            lines.append(msg)
+    if not lines:
+        return
+    with _print_lock:
+        for line in lines:
+            print(line)
 
 
 def print_install(result: dict) -> None:
-    """Print ``upgrade.install`` result (including nested copy/rollback)."""
-    raise NotImplementedError
+    """Print ``upgrade.install`` result including nested copy/rollback.
+
+    Walks, in order:
+
+    1. Steps before the rollback (e.g. ``skip`` / ``compare``).
+    2. Nested rollback result, if any.
+    3. Nested copy result, if any (via :func:`print_copy`).
+    4. Remaining steps (rescue_save, sw_install, ...).
+    """
+    steps = result.get("steps", [])
+    lines: list[str] = []
+
+    # Pre-rollback steps
+    for step in steps:
+        if step.get("action") in ("skip", "compare", "remote_check"):
+            msg = step.get("message")
+            if msg:
+                lines.append(msg)
+    if lines:
+        with _print_lock:
+            for line in lines:
+                print(line)
+
+    # Nested rollback
+    rollback_result = result.get("rollback_result")
+    if rollback_result:
+        print_rollback(rollback_result)
+
+    # Nested copy
+    copy_result = result.get("copy_result")
+    if copy_result:
+        print_copy(copy_result)
+
+    # Post-copy steps (rescue_save, sw_install, ...)
+    post_lines: list[str] = []
+    for step in steps:
+        if step.get("action") in ("rescue_save", "sw_install"):
+            msg = step.get("message")
+            if msg:
+                post_lines.append(msg)
+    if post_lines:
+        with _print_lock:
+            for line in post_lines:
+                print(line)
 
 
 def print_rollback(result: dict) -> None:
-    """Print ``upgrade.rollback`` result."""
-    raise NotImplementedError
+    """Print ``upgrade.rollback`` result.
+
+    Mirrors the legacy single-message behaviour: prints ``message`` as-is
+    (it already contains the XML body on success and the exception text
+    on failure).
+    """
+    msg = result.get("message")
+    if not msg:
+        return
+    with _print_lock:
+        print(msg)
 
 
 def print_reboot(result: dict) -> None:
-    """Print ``upgrade.reboot`` result (including nested reinstall result)."""
-    raise NotImplementedError
+    """Print ``upgrade.reboot`` result including nested reinstall output.
+
+    Walks steps up to the ``reinstall_result`` boundary, prints the
+    nested :func:`print_reinstall` output if present, then emits the
+    remaining steps (the actual reboot schedule message).
+    """
+    steps = result.get("steps", [])
+    # Pre-reinstall: existing schedule / force clear / warnings
+    pre_actions = {"existing_schedule", "force_clear"}
+    pre = [s["message"] for s in steps if s.get("action") in pre_actions and s.get("message")]
+    if pre:
+        with _print_lock:
+            for line in pre:
+                print(line)
+
+    reinstall = result.get("reinstall_result")
+    if reinstall:
+        print_reinstall(reinstall)
+
+    post = [
+        s["message"] for s in steps
+        if s.get("action") == "reboot" and s.get("message")
+    ]
+    if post:
+        with _print_lock:
+            for line in post:
+                print(line)
+
+
+def print_reinstall(result: dict) -> None:
+    """Print ``upgrade.check_and_reinstall`` result by walking steps."""
+    lines = [s["message"] for s in result.get("steps", []) if s.get("message")]
+    if not lines:
+        return
+    with _print_lock:
+        for line in lines:
+            print(line)
 
 
 def print_dry_run(result: dict) -> None:
-    """Print ``upgrade.dry_run`` result."""
-    raise NotImplementedError
+    """Print ``upgrade.dry_run`` result (debug-style summary)."""
+    lines = [
+        f"  - hostname: {result['hostname']}",
+        f"  - model: {result['model']}",
+        f"  - local file: {result['local_file']}",
+        f"  - planning hash: {result['planning_hash']}",
+        f"  - algo: {result['algo']}",
+        f"  - local_package: {result['local_package']}",
+        f"  - remote_package: {result['remote_package']}",
+        f"  - ok: {result['ok']}",
+    ]
+    with _print_lock:
+        for line in lines:
+            print(line)
 
 
 def print_list_remote(result: dict) -> None:
-    """Print ``upgrade.list_remote_path`` result."""
-    raise NotImplementedError
+    """Print ``upgrade.list_remote_path`` result.
+
+    Honours the ``format`` field ("short" or "long"). ``long`` mirrors
+    ``ls -l`` style and appends a ``total files`` footer; ``short`` lists
+    one path per line and appends a ``/`` to directories.
+    """
+    lines = [f"{result['path']}:"]
+    fmt = result.get("format") or "short"
+    if fmt == "short":
+        for entry in result["files"]:
+            if entry.get("type") == "file":
+                lines.append(entry.get("path", entry.get("name", "")))
+            else:
+                lines.append((entry.get("path") or entry.get("name", "")) + "/")
+    else:
+        for entry in result["files"]:
+            lines.append(
+                "%s %s %9d %s %s"
+                % (
+                    entry.get("permissions_text"),
+                    entry.get("owner"),
+                    entry.get("size") or 0,
+                    entry.get("ts_date"),
+                    entry.get("path"),
+                )
+            )
+        lines.append("total files: %d" % (result.get("file_count") or 0))
+    with _print_lock:
+        for line in lines:
+            print(line)
 
 
 def print_load_config(result: dict) -> None:
