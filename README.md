@@ -232,7 +232,7 @@ flowchart TD
 
 ```
 1. Pre-flight check with dry-run
-   junos-ops upgrade -n hostname
+   junos-ops upgrade --dry-run hostname
 
 2. Copy and install with upgrade
    junos-ops upgrade hostname
@@ -399,7 +399,7 @@ Push a set-format command file to multiple devices. Uses a safe commit flow: com
 set system login user viewer class read-only
 set system login user viewer authentication ssh-ed25519 "ssh-ed25519 AAAA..."
 
-% junos-ops config -f add-user.set -n rt1.example.jp rt2.example.jp
+% junos-ops config -f add-user.set --dry-run rt1.example.jp rt2.example.jp
 # rt1.example.jp
 [edit system login]
 +    user viewer {
@@ -444,7 +444,7 @@ See [docs/template.md](docs/template.md) for details, usage patterns (conditiona
 Run an arbitrary CLI command across multiple devices in parallel. Use `--retry N` to automatically retry on `RpcTimeoutError` (useful for large-scale parallel execution).
 
 ```
-% junos-ops show "show bgp summary" -c accounts.ini gw1.example.jp gw2.example.jp
+% junos-ops show "show bgp summary" --config accounts.ini gw1.example.jp gw2.example.jp
 # gw1.example.jp
 Groups: 4 Peers: 6 Down peers: 0
 ...
@@ -461,7 +461,7 @@ Use `-f` to run multiple commands from a file within a single NETCONF session pe
 show security policies hit-count
 show security flow session summary
 
-% junos-ops show -f commands.txt -c accounts.ini fw1.example.jp
+% junos-ops show -f commands.txt --config accounts.ini fw1.example.jp
 # fw1.example.jp
 ## show security policies hit-count
 ...
@@ -473,7 +473,7 @@ show security flow session summary
 Use `--retry N` to retry commands that fail with `RpcTimeoutError` (with incremental backoff: 5s, 10s, 15s, ...):
 
 ```
-% junos-ops show "show system alarms" --retry 2 --workers 10 -c accounts.ini
+% junos-ops show "show system alarms" --retry 2 --workers 10 --config accounts.ini
 ```
 
 > **Note:** JUNOS CLI pipe filters (`| match`, `| count`, etc.) are not supported. PyEZ's `dev.cli()` sends commands via NETCONF RPC, which does not process pipe modifiers. Filter output with shell tools (e.g. `grep`) instead.

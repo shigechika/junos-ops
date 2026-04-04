@@ -232,7 +232,7 @@ flowchart TD
 
 ```
 1. dry-run で事前確認
-   junos-ops upgrade -n hostname
+   junos-ops upgrade --dry-run hostname
 
 2. upgrade でコピー＋インストール
    junos-ops upgrade hostname
@@ -399,7 +399,7 @@ set 形式のコマンドファイルを複数デバイスに適用します。c
 set system login user viewer class read-only
 set system login user viewer authentication ssh-ed25519 "ssh-ed25519 AAAA..."
 
-% junos-ops config -f add-user.set -n rt1.example.jp rt2.example.jp
+% junos-ops config -f add-user.set --dry-run rt1.example.jp rt2.example.jp
 # rt1.example.jp
 [edit system login]
 +    user viewer {
@@ -444,7 +444,7 @@ junos-ops config -f ntp.set.j2 rt1.example.jp sw1.example.jp
 任意の CLI コマンドを複数デバイスに対して並列実行します。`--retry N` で `RpcTimeoutError` 発生時に自動リトライできます（大量ホストへの一括実行時に有効）。
 
 ```
-% junos-ops show "show bgp summary" -c accounts.ini gw1.example.jp gw2.example.jp
+% junos-ops show "show bgp summary" --config accounts.ini gw1.example.jp gw2.example.jp
 # gw1.example.jp
 Groups: 4 Peers: 6 Down peers: 0
 ...
@@ -461,7 +461,7 @@ Groups: 3 Peers: 4 Down peers: 0
 show security policies hit-count
 show security flow session summary
 
-% junos-ops show -f commands.txt -c accounts.ini fw1.example.jp
+% junos-ops show -f commands.txt --config accounts.ini fw1.example.jp
 # fw1.example.jp
 ## show security policies hit-count
 ...
@@ -473,7 +473,7 @@ show security flow session summary
 `--retry N` で `RpcTimeoutError` 時に自動リトライします（バックオフ: 5秒, 10秒, 15秒, ...）:
 
 ```
-% junos-ops show "show system alarms" --retry 2 --workers 10 -c accounts.ini
+% junos-ops show "show system alarms" --retry 2 --workers 10 --config accounts.ini
 ```
 
 > **注意:** JUNOS CLI のパイプフィルタ（`| match`、`| count` 等）は使用できません。PyEZ の `dev.cli()` は NETCONF RPC 経由でコマンドを送信するため、パイプ修飾子は処理されません。出力のフィルタにはシェル側のツール（`grep` 等）を使用してください。

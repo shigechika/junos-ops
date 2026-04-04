@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.14.0] - 2026-04-05
+
+### Changed
+- **Core refactor ([#40](https://github.com/shigechika/junos-ops/issues/40)): all core functions now return dicts and no longer print to stdout.** Human-readable output is produced by the new `junos_ops.display` module that consumes those dicts. Non-CLI consumers (e.g. `junos-mcp`) can opt out of stdout writes entirely by not importing `display`.
+- `common.connect()` now returns `{hostname, host, ok, dev, error, error_message}` (previously `(err, dev)` tuple).
+- `common.read_config()` now returns `{ok, path, sections, error}` (previously a bool).
+- `upgrade.copy()`, `install()`, `rollback()`, `reboot()`, `load_config()`, `list_remote_path()`, `dry_run()`, `delete_snapshots()`, `check_running_package()`, `check_and_reinstall()` all return structured dicts. `copy`/`install`/`reboot`/`load_config`/`check_and_reinstall` expose a `steps` list for per-action progress. `reboot` preserves the legacy 0..6 exit codes in `result["code"]`.
+- `rsi.collect_rsi()` added as the dict-returning core; `cmd_rsi` is now a thin CLI wrapper. `get_support_information()` also returns a dict.
+- `load_config()` emits `logger.info` per step so operators watching logs still see real-time progress.
+- `display` layer prints are serialised through a module-level lock so `--workers N` produces readable interleaved output.
+
+### Removed
+- `cli.process_host()` and its backward-compat function aliases (`cli.copy`, `cli.install`, etc.) — dead code from the pre-subcommand CLI era. CLI dispatches directly to `cmd_*` functions.
+- `tests/test_process_host.py` (covered the removed code path).
+
 ## [0.13.0] - 2026-03-14
 
 ### Added

@@ -52,45 +52,6 @@ from junos_ops import display  # noqa: E402
 from junos_ops import upgrade  # noqa: E402
 from junos_ops import rsi  # noqa: E402
 
-# upgrade モジュールの関数への参照（後方互換）
-delete_snapshots = upgrade.delete_snapshots
-copy = upgrade.copy
-rollback = upgrade.rollback
-clear_reboot = upgrade.clear_reboot
-install = upgrade.install
-get_model_file = upgrade.get_model_file
-get_model_hash = upgrade.get_model_hash
-get_hashcache = upgrade.get_hashcache
-set_hashcache = upgrade.set_hashcache
-check_local_package = upgrade.check_local_package
-check_remote_package = upgrade.check_remote_package
-list_remote_path = upgrade.list_remote_path
-dry_run = upgrade.dry_run
-check_running_package = upgrade.check_running_package
-compare_version = upgrade.compare_version
-get_pending_version = upgrade.get_pending_version
-get_planning_version = upgrade.get_planning_version
-get_reboot_information = upgrade.get_reboot_information
-get_commit_information = upgrade.get_commit_information
-get_rescue_config_time = upgrade.get_rescue_config_time
-check_and_reinstall = upgrade.check_and_reinstall
-show_version = upgrade.show_version
-reboot = upgrade.reboot
-yymmddhhmm_type = upgrade.yymmddhhmm_type
-load_config = upgrade.load_config
-
-# common モジュールの関数への参照（後方互換）
-get_default_config = common.get_default_config
-read_config = common.read_config
-connect = common.connect
-
-
-# cli.py 内の関数が config/args/config_lock をモジュール外からもアクセスできるようにする
-def __getattr__(name):
-    if name in ("config", "config_lock", "args"):
-        return getattr(common, name)
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-
 
 # --- サブコマンド用エントリ関数 ---
 
@@ -360,78 +321,6 @@ def cmd_ls(hostname) -> int:
             pass
 
 
-# --- 後方互換: process_host ---
-
-
-def process_host(hostname: str) -> int:
-    """Process a single host (legacy compatibility)."""
-    import datetime
-    logger.debug(f"{hostname=}")
-    logger.debug(f"{datetime.datetime.now()=}")
-    print(f"# {hostname}")
-
-    conn = connect(hostname)
-    if not conn["ok"]:
-        display.print_connect_error(conn)
-        return 1
-    dev = conn["dev"]
-
-    try:
-        if (
-            common.args.list_format is None
-            and common.args.copy is False
-            and common.args.install is False
-            and common.args.update is False
-            and common.args.showversion is False
-            and common.args.rollback is False
-            and common.args.rebootat is None
-        ) or common.args.debug:
-            pprint(dev.facts)
-        if common.args.list_format is not None:
-            display.print_list_remote(list_remote_path(hostname, dev))
-        if common.args.copy:
-            copy_result = copy(hostname, dev)
-            display.print_copy(copy_result)
-            if not copy_result.get("ok"):
-                return 1
-        if common.args.rollback:
-            pending = get_pending_version(hostname, dev)
-            print(f"rollback: pending version is {pending}")
-            if pending is None:
-                print("rollback: skip")
-            else:
-                rollback_result = rollback(hostname, dev)
-                display.print_rollback(rollback_result)
-                if not rollback_result.get("ok"):
-                    return 1
-                if common.args.dry_run is False:
-                    print("rollback: successful")
-        if common.args.install or common.args.update:
-            install_result = install(hostname, dev)
-            display.print_install(install_result)
-            if not install_result.get("ok"):
-                return 1
-        if common.args.showversion:
-            result = show_version(hostname, dev)
-            display.print_version(result)
-        if common.args.rebootat:
-            reboot_result = reboot(hostname, dev, common.args.rebootat)
-            display.print_reboot(reboot_result)
-            code = reboot_result.get("code", 1)
-            if code:
-                return code
-        return 0
-    except Exception as e:
-        logger.error(f"{hostname}: {e}")
-        return 1
-    finally:
-        try:
-            dev.close()
-        except (ConnectClosedError, Exception):
-            pass
-        print("")
-
-
 # --- メイン ---
 
 
@@ -669,12 +558,6 @@ def main():
         args.rpc_timeout = None
     if not hasattr(args, "no_confirm"):
         args.no_confirm = False
-    # process_host 互換用
-    args.copy = False
-    args.install = False
-    args.update = False
-    args.showversion = False
-    args.rollback = False
 
     # show サブコマンド: show_args を show_command + specialhosts に分離
     if args.subcommand == "show":

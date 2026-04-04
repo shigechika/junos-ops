@@ -3,7 +3,6 @@ import configparser
 import pytest
 
 from junos_ops import common
-from junos_ops import cli as junos_update_mod
 from junos_ops import upgrade as junos_upgrade_mod
 
 
@@ -11,12 +10,6 @@ from junos_ops import upgrade as junos_upgrade_mod
 def junos_common():
     """common モジュールを返す"""
     return common
-
-
-@pytest.fixture
-def junos_update():
-    """junos_ops.cli モジュールを返す（後方互換）"""
-    return junos_update_mod
 
 
 @pytest.fixture
@@ -34,11 +27,6 @@ def mock_args(junos_common):
         force=False,
         config="config.ini",
         list_format=None,
-        copy=False,
-        install=False,
-        update=False,
-        showversion=False,
-        rollback=False,
         rebootat=None,
         configfile=None,
         confirm_timeout=1,

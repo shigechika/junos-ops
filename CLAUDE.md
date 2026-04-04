@@ -31,7 +31,6 @@ tests/
 ├── test_config.py  # 設定読込・モデル取得・ハッシュキャッシュのテスト
 ├── test_connect.py # 接続モックテスト
 ├── test_version.py # バージョン関連関数のテスト
-├── test_process_host.py # process_host統合テスト（後方互換）
 ├── test_parallel.py    # 並列実行・ターゲット決定のテスト
 ├── test_reboot.py      # reboot・config変更検出・snapshot削除のテスト
 ├── test_config_push.py # config サブコマンド（load_config）のテスト
@@ -58,32 +57,41 @@ LICENSE
 - `get_targets()` — ターゲットホストリスト決定（`--tags` 対応）
 - `run_parallel()` — ThreadPoolExecutorラッパー（max_workers=1でシリアル実行）
 
-### upgrade.py — パッケージ操作
-- `delete_snapshots()` — EX/QFXシリーズのスナップショット全削除（ディスク容量確保）
-- `copy()` — SCP転送＋チェックサム検証（storage cleanup + snapshot delete 付き）
-- `install()` — パッケージインストール（pre/postフライトチェック）
-- `rollback()` — 前バージョンへの復帰
-- `reboot()` — スケジュールリブート（config変更検出時は自動再インストール）
-- `show_version()` — バージョン情報表示（config変更警告付き）
+### upgrade.py — パッケージ操作（すべて dict を返す）
+- `delete_snapshots()` — EX/QFXシリーズのスナップショット全削除（dict: applied/ok/dry_run/message/error）
+- `copy()` — SCP転送＋チェックサム検証（dict: storage_cleanup/snapshot_delete/steps/error）
+- `install()` — パッケージインストール（dict: copy_result/rollback_result/rescue_save/steps など nested）
+- `rollback()` — 前バージョンへの復帰（dict: ok/rpc_output/message/error）
+- `reboot()` — スケジュールリブート（dict: code/reinstall_result/steps。code は従来の 0..6 を保持）
+- `show_version()` — バージョン情報収集（dict: running/planning/pending/commit/config_changed_after_install 他）
 - `get_model_file()` / `get_model_hash()` — モデル→パッケージマッピング
 - `get_pending_version()` / `get_planning_version()` / `compare_version()` — バージョン比較
 - `get_commit_information()` — 最新コミット情報取得（epoch秒、ユーザー、クライアント）
 - `get_rescue_config_time()` — rescue config ファイルの更新時刻取得
-- `check_and_reinstall()` — config変更検出＋validation付き自動再インストール
+- `check_and_reinstall()` — config変更検出＋validation付き自動再インストール（dict）
+- `check_running_package()` — running とパッケージ名を突き合わせ（dict: running/expected_file/match）
 - `get_hashcache()` / `set_hashcache()` — チェックサムキャッシュ（スレッド安全）
-- `load_config()` — set コマンドファイルのロード＋コミット（lock→load→diff→commit_check→commit confirmed→health check→confirm→unlock）、`--workers` で並列実行対応
-- `list_remote_path()` — リモートファイル一覧
+- `load_config()` — set コマンドファイルのロード＋コミット（dict: steps + logger.info でリアルタイム進捗）
+- `list_remote_path()` — リモートファイル一覧（dict: files/file_count/format）
+- `dry_run()` — local/remote package の検証（dict）
+- すべての core 関数は stdout に print しない。人間向け整形は `display` 層が担う。
+
+### display.py — 表示層
+- `print_version()`, `print_copy()`, `print_install()`, `print_rollback()`, `print_reboot()`, `print_reinstall()`, `print_load_config()`, `print_list_remote()`, `print_dry_run()`, `print_rsi()`, `print_connect_error()`, `print_read_config_error()`, `print_host_header()`, `print_host_footer()` — core が返す dict を人間向けに整形
+- `_print_lock` (`threading.Lock`) でマルチワーカー時の出力インターリーブを防止
+- junos-mcp など非 CLI 利用者は display を import しなければ stdout 出力ゼロ
 
 ### rsi.py — RSI/SCF収集
 - RSI = request support information
 - SCF = show configuration | display set
-- `get_support_information()` — 機種別タイムアウト設定でRSI取得
-- `cmd_rsi()` — 1ホストのSCF+RSI収集→ファイル出力（DISPLAY_STYLEで出力形式変更可能）
+- `get_support_information()` — 機種別タイムアウト設定でRSI取得（dict: ok/rpc/timeout/node/error）
+- `collect_rsi()` — core（dict: scf/rsi ファイルパスとバイト数、error）
+- `cmd_rsi()` — CLI エントリ（collect_rsi を呼び、display.print_rsi で出力）
 
 ### cli.py — サブコマンドルーティング
 - `main()` — argparse サブコマンド定義、ディスパッチ
-- `cmd_upgrade()`, `cmd_copy()`, `cmd_install()`, `cmd_rollback()`, `cmd_version()`, `cmd_reboot()`, `cmd_ls()`, `cmd_show()`, `cmd_config()`, `cmd_facts()` — サブコマンド用エントリ関数
-- `process_host()` — 旧CLI互換の統合処理関数
+- `cmd_upgrade()`, `cmd_copy()`, `cmd_install()`, `cmd_rollback()`, `cmd_version()`, `cmd_reboot()`, `cmd_ls()`, `cmd_show()`, `cmd_config()`, `cmd_facts()` — サブコマンド用エントリ関数（connect → header → core(dict) → display）
+- `_open_connection()` — NETCONF 接続＋エラー時の display 出力ヘルパー
 
 ## CLI設計
 
@@ -102,7 +110,7 @@ junos-ops [hostname ...]                   # サブコマンド省略 → device
 junos-ops --version                        # プログラムバージョン
 ```
 
-共通オプション: `-c`, `-n`, `-d`, `--force`, `--workers N`, `--tags TAG,...`
+共通オプション: `--config` (`-c`), `--dry-run` (`-n`), `-d`, `--force`, `--workers N`, `--tags TAG,...`
 
 ## 開発環境セットアップ
 
