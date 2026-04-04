@@ -38,8 +38,8 @@ class TestGetDefaultConfig:
 class TestReadConfig:
     """read_config() のテスト"""
 
-    def test_valid_config(self, junos_common, mock_args, tmp_path):
-        """正常なINIファイルを読み込める"""
+    def test_valid_config(self, junos_common, mock_args, tmp_path, capsys):
+        """正常なINIファイルを読み込める（dict 返却）"""
         ini = tmp_path / "test.ini"
         ini.write_text(
             "[DEFAULT]\n"
@@ -53,17 +53,25 @@ class TestReadConfig:
         )
         junos_common.args.config = str(ini)
         result = junos_common.read_config()
-        assert result is False
+        assert result["ok"] is True
+        assert result["path"] == str(ini)
+        assert set(result["sections"]) == {"host1.example.jp", "host2.example.jp"}
+        assert result["error"] is None
         assert junos_common.config.has_section("host1.example.jp")
         assert junos_common.config.has_section("host2.example.jp")
+        # core は print しない
+        assert capsys.readouterr().out == ""
 
-    def test_empty_config(self, junos_common, mock_args, tmp_path):
-        """空のINIファイルはエラー（True）を返す"""
+    def test_empty_config(self, junos_common, mock_args, tmp_path, capsys):
+        """空のINIファイルは ok=False を返し print しない"""
         ini = tmp_path / "empty.ini"
         ini.write_text("")
         junos_common.args.config = str(ini)
         result = junos_common.read_config()
-        assert result is True
+        assert result["ok"] is False
+        assert result["sections"] == []
+        assert "empty" in result["error"]
+        assert capsys.readouterr().out == ""
 
     def test_host_default_to_section_name(self, junos_common, mock_args, tmp_path):
         """hostキー省略時にセクション名がhostとして設定される"""

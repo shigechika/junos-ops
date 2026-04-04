@@ -95,10 +95,24 @@ def __getattr__(name):
 # --- サブコマンド用エントリ関数 ---
 
 
+def _open_connection(hostname: str):
+    """Open a NETCONF connection and render any error via the display layer.
+
+    :return: live :class:`jnpr.junos.Device` on success, None on failure
+        (after the error has already been printed through the display layer).
+    """
+    conn = common.connect(hostname)
+    if not conn["ok"]:
+        display.print_host_header(hostname)
+        display.print_connect_error(conn)
+        return None
+    return conn["dev"]
+
+
 def cmd_facts(hostname) -> int:
     """Display device facts."""
-    err, dev = common.connect(hostname)
-    if err or dev is None:
+    dev = _open_connection(hostname)
+    if dev is None:
         return 1
     try:
         print(f"# {hostname}")
@@ -116,8 +130,8 @@ def cmd_facts(hostname) -> int:
 
 def cmd_upgrade(hostname) -> int:
     """Copy and install package."""
-    err, dev = common.connect(hostname)
-    if err or dev is None:
+    dev = _open_connection(hostname)
+    if dev is None:
         return 1
     try:
         print(f"# {hostname}")
@@ -136,8 +150,8 @@ def cmd_upgrade(hostname) -> int:
 
 def cmd_copy(hostname) -> int:
     """Copy package to remote device."""
-    err, dev = common.connect(hostname)
-    if err or dev is None:
+    dev = _open_connection(hostname)
+    if dev is None:
         return 1
     try:
         print(f"# {hostname}")
@@ -156,8 +170,8 @@ def cmd_copy(hostname) -> int:
 
 def cmd_install(hostname) -> int:
     """Install previously copied package."""
-    err, dev = common.connect(hostname)
-    if err or dev is None:
+    dev = _open_connection(hostname)
+    if dev is None:
         return 1
     try:
         print(f"# {hostname}")
@@ -176,8 +190,8 @@ def cmd_install(hostname) -> int:
 
 def cmd_rollback(hostname) -> int:
     """Rollback to previous version."""
-    err, dev = common.connect(hostname)
-    if err or dev is None:
+    dev = _open_connection(hostname)
+    if dev is None:
         return 1
     try:
         print(f"# {hostname}")
@@ -203,8 +217,8 @@ def cmd_rollback(hostname) -> int:
 
 def cmd_version(hostname) -> int:
     """Show device version information."""
-    err, dev = common.connect(hostname)
-    if err or dev is None:
+    dev = _open_connection(hostname)
+    if dev is None:
         return 1
     try:
         display.print_host_header(hostname)
@@ -223,8 +237,8 @@ def cmd_version(hostname) -> int:
 
 def cmd_reboot(hostname) -> int:
     """Schedule device reboot."""
-    err, dev = common.connect(hostname)
-    if err or dev is None:
+    dev = _open_connection(hostname)
+    if dev is None:
         return 1
     try:
         print(f"# {hostname}")
@@ -263,8 +277,8 @@ def _cli_with_retry(dev, command, hostname, max_retries):
 
 def cmd_show(hostname) -> int:
     """Run CLI command on device and print output."""
-    err, dev = common.connect(hostname)
-    if err or dev is None:
+    dev = _open_connection(hostname)
+    if dev is None:
         return 1
     retry = getattr(common.args, "retry", 0)
     try:
@@ -295,8 +309,8 @@ def cmd_show(hostname) -> int:
 
 def cmd_config(hostname) -> int:
     """Push set command file to device."""
-    err, dev = common.connect(hostname)
-    if err or dev is None:
+    dev = _open_connection(hostname)
+    if dev is None:
         return 1
     try:
         # RPC タイムアウトの設定（CLI > config.ini > デフォルト 120秒）
@@ -325,8 +339,8 @@ def cmd_config(hostname) -> int:
 
 def cmd_ls(hostname) -> int:
     """List remote files."""
-    err, dev = common.connect(hostname)
-    if err or dev is None:
+    dev = _open_connection(hostname)
+    if dev is None:
         return 1
     try:
         print(f"# {hostname}")
@@ -352,9 +366,11 @@ def process_host(hostname: str) -> int:
     logger.debug(f"{datetime.datetime.now()=}")
     print(f"# {hostname}")
 
-    err, dev = connect(hostname)
-    if err or dev is None:
+    conn = connect(hostname)
+    if not conn["ok"]:
+        display.print_connect_error(conn)
         return 1
+    dev = conn["dev"]
 
     try:
         if (
@@ -672,8 +688,9 @@ def main():
 
     logger.debug("start")
 
-    if common.read_config():
-        print(common.args.config, "is not ready")
+    cfg_result = common.read_config()
+    if not cfg_result["ok"]:
+        display.print_read_config_error(cfg_result)
         sys.exit(1)
 
     targets = common.get_targets()

@@ -13,7 +13,7 @@ class TestNoSubcommandParsing:
 
     @patch("junos_ops.common.run_parallel", return_value={})
     @patch("junos_ops.common.get_targets", return_value=["test-host"])
-    @patch("junos_ops.common.read_config", return_value=0)
+    @patch("junos_ops.common.read_config", return_value={"ok": True, "path": "config.ini", "sections": ["test-host"], "error": None})
     @patch("junos_ops.common.get_default_config", return_value="config.ini")
     def test_config_only(self, mock_default, mock_read, mock_targets, mock_run):
         """-c のみ指定時にエラーにならない（Issue #36）"""
@@ -26,7 +26,7 @@ class TestNoSubcommandParsing:
 
     @patch("junos_ops.common.run_parallel", return_value={})
     @patch("junos_ops.common.get_targets", return_value=["test-host"])
-    @patch("junos_ops.common.read_config", return_value=0)
+    @patch("junos_ops.common.read_config", return_value={"ok": True, "path": "config.ini", "sections": ["test-host"], "error": None})
     @patch("junos_ops.common.get_default_config", return_value="config.ini")
     def test_config_with_hostname(self, mock_default, mock_read, mock_targets, mock_run):
         """-c とホスト名を指定"""
@@ -38,7 +38,7 @@ class TestNoSubcommandParsing:
 
     @patch("junos_ops.common.run_parallel", return_value={})
     @patch("junos_ops.common.get_targets", return_value=["test-host"])
-    @patch("junos_ops.common.read_config", return_value=0)
+    @patch("junos_ops.common.read_config", return_value={"ok": True, "path": "config.ini", "sections": ["test-host"], "error": None})
     @patch("junos_ops.common.get_default_config", return_value="config.ini")
     def test_hostname_only(self, mock_default, mock_read, mock_targets, mock_run):
         """ホスト名のみ指定で facts として実行"""
@@ -50,7 +50,7 @@ class TestNoSubcommandParsing:
 
     @patch("junos_ops.common.run_parallel", return_value={})
     @patch("junos_ops.common.get_targets", return_value=["test-host"])
-    @patch("junos_ops.common.read_config", return_value=0)
+    @patch("junos_ops.common.read_config", return_value={"ok": True, "path": "config.ini", "sections": ["test-host"], "error": None})
     @patch("junos_ops.common.get_default_config", return_value="config.ini")
     def test_config_with_dry_run(self, mock_default, mock_read, mock_targets, mock_run):
         """-c -n で facts dry-run"""
@@ -61,7 +61,7 @@ class TestNoSubcommandParsing:
 
     @patch("junos_ops.common.run_parallel", return_value={})
     @patch("junos_ops.common.get_targets", return_value=["test-host"])
-    @patch("junos_ops.common.read_config", return_value=0)
+    @patch("junos_ops.common.read_config", return_value={"ok": True, "path": "config.ini", "sections": ["test-host"], "error": None})
     def test_subcommand_still_works(self, mock_read, mock_targets, mock_run):
         """サブコマンド指定時は従来通り動作"""
         with patch.object(sys, "argv", ["junos-ops", "version", "-c", "config.ini", "host1"]):

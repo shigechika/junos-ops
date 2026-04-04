@@ -119,7 +119,7 @@ class TestCmdRsi:
 
     def test_connect_fail(self, junos_common, mock_args, mock_config):
         """接続失敗時に 1 を返す"""
-        with patch.object(rsi.common, "connect", return_value=(True, None)):
+        with patch.object(rsi.common, "connect", return_value={"hostname": "test-host", "host": "test-host", "ok": False, "dev": None, "error": "ConnectError", "error_message": "mock connect error"}):
             result = rsi.cmd_rsi("test-host")
             assert result == 1
 
@@ -139,7 +139,7 @@ class TestCmdRsi:
             "srx_cluster": None,
         }
 
-        with patch.object(rsi.common, "connect", return_value=(False, mock_dev)):
+        with patch.object(rsi.common, "connect", return_value={"hostname": "test-host", "host": "test-host", "ok": True, "dev": mock_dev, "error": None, "error_message": None}):
             result = rsi.cmd_rsi("test-host")
 
         assert result == 0
@@ -163,7 +163,7 @@ class TestCmdRsi:
             "srx_cluster": None,
         }
 
-        with patch.object(rsi.common, "connect", return_value=(False, mock_dev)):
+        with patch.object(rsi.common, "connect", return_value={"hostname": "test-host", "host": "test-host", "ok": True, "dev": mock_dev, "error": None, "error_message": None}):
             result = rsi.cmd_rsi("test-host")
 
         assert result == 2
@@ -175,7 +175,7 @@ class TestCmdRsi:
         mock_dev.cli.side_effect = Exception("unexpected")
         mock_dev.facts = {}
 
-        with patch.object(rsi.common, "connect", return_value=(False, mock_dev)):
+        with patch.object(rsi.common, "connect", return_value={"hostname": "test-host", "host": "test-host", "ok": True, "dev": mock_dev, "error": None, "error_message": None}):
             result = rsi.cmd_rsi("test-host")
 
         assert result == 1
@@ -199,7 +199,7 @@ class TestCmdRsi:
             "srx_cluster": None,
         }
 
-        with patch.object(rsi.common, "connect", return_value=(False, mock_dev)):
+        with patch.object(rsi.common, "connect", return_value={"hostname": "test-host", "host": "test-host", "ok": True, "dev": mock_dev, "error": None, "error_message": None}):
             result = rsi.cmd_rsi("test-host")
 
         assert result == 0
@@ -223,7 +223,7 @@ class TestCmdRsi:
             "srx_cluster": None,
         }
 
-        with patch.object(rsi.common, "connect", return_value=(False, mock_dev)):
+        with patch.object(rsi.common, "connect", return_value={"hostname": "test-host", "host": "test-host", "ok": True, "dev": mock_dev, "error": None, "error_message": None}):
             result = rsi.cmd_rsi("test-host")
 
         assert result == 0
@@ -248,7 +248,7 @@ class TestCmdRsi:
             "srx_cluster": None,
         }
 
-        with patch.object(rsi.common, "connect", return_value=(False, mock_dev)):
+        with patch.object(rsi.common, "connect", return_value={"hostname": "test-host", "host": "test-host", "ok": True, "dev": mock_dev, "error": None, "error_message": None}):
             result = rsi.cmd_rsi("test-host")
 
         assert result == 0
@@ -270,7 +270,7 @@ class TestCmdRsi:
         }
 
         m = mock_open()
-        with patch.object(rsi.common, "connect", return_value=(False, mock_dev)):
+        with patch.object(rsi.common, "connect", return_value={"hostname": "test-host", "host": "test-host", "ok": True, "dev": mock_dev, "error": None, "error_message": None}):
             with patch("builtins.open", m):
                 result = rsi.cmd_rsi("test-host")
 
@@ -297,7 +297,7 @@ class TestCmdRsi:
         }
 
         m = mock_open()
-        with patch.object(rsi.common, "connect", return_value=(False, mock_dev)):
+        with patch.object(rsi.common, "connect", return_value={"hostname": "test-host", "host": "test-host", "ok": True, "dev": mock_dev, "error": None, "error_message": None}):
             with patch("builtins.open", m):
                 result = rsi.cmd_rsi("test-host")
 

@@ -13,7 +13,7 @@ class TestCmdShow:
     def test_connect_fail(self, junos_common, mock_args, mock_config):
         """接続失敗時に 1 を返す"""
         mock_args.show_command = "show version"
-        with patch.object(cli.common, "connect", return_value=(True, None)):
+        with patch.object(cli.common, "connect", return_value={"hostname": "test-host", "host": "test-host", "ok": False, "dev": None, "error": "ConnectError", "error_message": "mock connect error"}):
             result = cli.cmd_show("test-host")
             assert result == 1
 
@@ -23,7 +23,7 @@ class TestCmdShow:
         mock_dev = MagicMock()
         mock_dev.cli.return_value = "  Hostname: test-host\nModel: MX204  \n"
 
-        with patch.object(cli.common, "connect", return_value=(False, mock_dev)):
+        with patch.object(cli.common, "connect", return_value={"hostname": "test-host", "host": "test-host", "ok": True, "dev": mock_dev, "error": None, "error_message": None}):
             result = cli.cmd_show("test-host")
 
         assert result == 0
@@ -40,7 +40,7 @@ class TestCmdShow:
         mock_dev = MagicMock()
         mock_dev.cli.side_effect = Exception("RPC timeout")
 
-        with patch.object(cli.common, "connect", return_value=(False, mock_dev)):
+        with patch.object(cli.common, "connect", return_value={"hostname": "test-host", "host": "test-host", "ok": True, "dev": mock_dev, "error": None, "error_message": None}):
             result = cli.cmd_show("test-host")
 
         assert result == 1
@@ -52,7 +52,7 @@ class TestCmdShow:
         mock_dev = MagicMock()
         mock_dev.cli.side_effect = RuntimeError("unexpected")
 
-        with patch.object(cli.common, "connect", return_value=(False, mock_dev)):
+        with patch.object(cli.common, "connect", return_value={"hostname": "test-host", "host": "test-host", "ok": True, "dev": mock_dev, "error": None, "error_message": None}):
             result = cli.cmd_show("test-host")
 
         assert result == 1
@@ -65,7 +65,7 @@ class TestCmdShow:
         mock_dev.cli.return_value = "output"
         mock_dev.close.side_effect = Exception("close failed")
 
-        with patch.object(cli.common, "connect", return_value=(False, mock_dev)):
+        with patch.object(cli.common, "connect", return_value={"hostname": "test-host", "host": "test-host", "ok": True, "dev": mock_dev, "error": None, "error_message": None}):
             result = cli.cmd_show("test-host")
 
         assert result == 0
@@ -76,7 +76,7 @@ class TestCmdShow:
         mock_dev = MagicMock()
         mock_dev.cli.return_value = "user nttview { ... }"
 
-        with patch.object(cli.common, "connect", return_value=(False, mock_dev)):
+        with patch.object(cli.common, "connect", return_value={"hostname": "test-host", "host": "test-host", "ok": True, "dev": mock_dev, "error": None, "error_message": None}):
             result = cli.cmd_show("test-host")
 
         assert result == 0
@@ -99,7 +99,7 @@ class TestCmdShowFile:
         ]
 
         with (
-            patch.object(cli.common, "connect", return_value=(False, mock_dev)),
+            patch.object(cli.common, "connect", return_value={"hostname": "test-host", "host": "test-host", "ok": True, "dev": mock_dev, "error": None, "error_message": None}),
             patch.object(
                 cli.common, "load_commands",
                 return_value=["show interfaces terse", "show route summary"],
@@ -130,7 +130,7 @@ class TestCmdShowFile:
         mock_dev.cli.return_value = "output"
 
         with (
-            patch.object(cli.common, "connect", return_value=(False, mock_dev)),
+            patch.object(cli.common, "connect", return_value={"hostname": "test-host", "host": "test-host", "ok": True, "dev": mock_dev, "error": None, "error_message": None}),
             patch.object(
                 cli.common, "load_commands",
                 return_value=["show version"],
@@ -152,7 +152,7 @@ class TestCmdShowFile:
         mock_dev.cli.side_effect = Exception("RPC timeout")
 
         with (
-            patch.object(cli.common, "connect", return_value=(False, mock_dev)),
+            patch.object(cli.common, "connect", return_value={"hostname": "test-host", "host": "test-host", "ok": True, "dev": mock_dev, "error": None, "error_message": None}),
             patch.object(
                 cli.common, "load_commands",
                 return_value=["show version", "show bgp summary"],
@@ -167,7 +167,7 @@ class TestCmdShowFile:
         """接続失敗時に 1 を返す"""
         mock_args.showfile = "commands.txt"
         mock_args.show_command = None
-        with patch.object(cli.common, "connect", return_value=(True, None)):
+        with patch.object(cli.common, "connect", return_value={"hostname": "test-host", "host": "test-host", "ok": False, "dev": None, "error": "ConnectError", "error_message": "mock connect error"}):
             result = cli.cmd_show("test-host")
             assert result == 1
 
@@ -283,7 +283,7 @@ class TestCmdShowRetry:
             "No alarms currently active",
         ]
 
-        with patch.object(cli.common, "connect", return_value=(False, mock_dev)):
+        with patch.object(cli.common, "connect", return_value={"hostname": "test-host", "host": "test-host", "ok": True, "dev": mock_dev, "error": None, "error_message": None}):
             result = cli.cmd_show("test-host")
 
         assert result == 0
@@ -300,7 +300,7 @@ class TestCmdShowRetry:
         mock_dev = MagicMock()
         mock_dev.cli.side_effect = RpcTimeoutError(MagicMock(hostname="test-host"), "command", 30)
 
-        with patch.object(cli.common, "connect", return_value=(False, mock_dev)):
+        with patch.object(cli.common, "connect", return_value={"hostname": "test-host", "host": "test-host", "ok": True, "dev": mock_dev, "error": None, "error_message": None}):
             result = cli.cmd_show("test-host")
 
         assert result == 1
@@ -322,7 +322,7 @@ class TestCmdShowRetry:
         ]
 
         with (
-            patch.object(cli.common, "connect", return_value=(False, mock_dev)),
+            patch.object(cli.common, "connect", return_value={"hostname": "test-host", "host": "test-host", "ok": True, "dev": mock_dev, "error": None, "error_message": None}),
             patch.object(
                 cli.common, "load_commands",
                 return_value=["show interfaces terse", "show route summary"],

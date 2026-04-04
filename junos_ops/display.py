@@ -51,13 +51,27 @@ def print_host_footer() -> None:
 
 
 def print_connect_error(result: dict) -> None:
-    """Print a NETCONF connection error from ``common.connect`` result."""
-    raise NotImplementedError
+    """Print a NETCONF connection error from ``common.connect`` result.
+
+    Expects ``result["ok"] is False``. Prints ``error_message`` verbatim,
+    preserving the legacy single-line format from the pre-dict implementation.
+    """
+    msg = result.get("error_message")
+    if msg is None:
+        msg = f"connect failed: {result.get('error', 'unknown error')}"
+    with _print_lock:
+        print(msg)
 
 
 def print_read_config_error(result: dict) -> None:
-    """Print a config file read error from ``common.read_config`` result."""
-    raise NotImplementedError
+    """Print a config file read error from ``common.read_config`` result.
+
+    Expects ``result["ok"] is False``.
+    """
+    msg = result.get("error") or "config read failed"
+    with _print_lock:
+        print(msg)
+        print(f"{result.get('path', '')} is not ready")
 
 
 def print_facts(hostname: str, facts: dict) -> None:

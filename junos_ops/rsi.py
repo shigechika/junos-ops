@@ -50,9 +50,12 @@ def cmd_rsi(hostname) -> int:
     logger.debug(f"cmd_rsi: {hostname} start")
     print(f"# {hostname}")
 
-    err, dev = common.connect(hostname)
-    if err or dev is None:
+    conn = common.connect(hostname)
+    if not conn["ok"]:
+        from junos_ops import display
+        display.print_connect_error(conn)
         return 1
+    dev = conn["dev"]
 
     rsi_dir = os.path.expanduser(
         common.config.get(hostname, "RSI_DIR", fallback="./"))

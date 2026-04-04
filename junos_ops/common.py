@@ -38,15 +38,33 @@ def get_default_config():
     return DEFAULT_CONFIG
 
 
-def read_config():
-    """Read and parse the INI config file."""
+def read_config() -> dict:
+    """Read and parse the INI config file.
+
+    :return: dict with keys:
+
+        - ``ok`` (bool): True if config was read and contained at least one
+          section.
+        - ``path`` (str): the config file path that was read.
+        - ``sections`` (list[str]): section names (host identifiers).
+        - ``error`` (str | None): human-readable error message if ``ok`` is
+          False, else None.
+
+    Side effect: populates the module-level :data:`config` with the parsed
+    ``configparser.ConfigParser`` instance. Does not print.
+    """
     global config
     config = configparser.ConfigParser(allow_no_value=True)
     config.read(args.config)
-    if len(config.sections()) == 0:
-        print(args.config, "is empty")
-        return True
-    for section in config.sections():
+    sections = config.sections()
+    if len(sections) == 0:
+        return {
+            "ok": False,
+            "path": args.config,
+            "sections": [],
+            "error": f"{args.config} is empty",
+        }
+    for section in sections:
         if config.has_option(section, "host"):
             host = config.get(section, "host")
         else:
@@ -56,51 +74,81 @@ def read_config():
             config.set(section, "host", section)
         for key in config[section]:
             logger.debug(f"{section} > {key} : {config[section][key]}")
-    return False
+    return {
+        "ok": True,
+        "path": args.config,
+        "sections": list(sections),
+        "error": None,
+    }
 
 
-def connect(hostname):
-    """Open NETCONF connection to a device."""
+def connect(hostname: str) -> dict:
+    """Open a NETCONF connection to a device.
+
+    :param hostname: config section name (host identifier).
+    :return: dict with keys:
+
+        - ``hostname`` (str): the config section name passed in.
+        - ``host`` (str): resolved host/IP from config.
+        - ``ok`` (bool): True if the connection opened.
+        - ``dev`` (:class:`jnpr.junos.Device` | None): live PyEZ Device when
+          ``ok`` is True, else None. NOT JSON-serializable; programmatic
+          consumers should strip before serializing.
+        - ``error`` (str | None): exception class name when ``ok`` is False,
+          else None.
+        - ``error_message`` (str | None): human-readable error message when
+          ``ok`` is False, else None.
+
+    Does not print.
+    """
     logger.debug("connect: start")
+    host = config.get(hostname, "host")
     dev = Device(
-        host=config.get(hostname, "host"),
+        host=host,
         port=int(config.get(hostname, "port")),
         user=config.get(hostname, "id"),
         passwd=config.get(hostname, "pw"),
         ssh_private_key_file=os.path.expanduser(config.get(hostname, "sshkey")),
         huge_tree=config.getboolean(hostname, "huge_tree", fallback=False),
     )
-    err = None
+    _ERROR_PREFIX = {
+        ConnectAuthError: "Authentication credentials fail to login",
+        ConnectRefusedError: "NETCONF Connection refused",
+        ConnectTimeoutError: "Connection timeout",
+        ConnectUnknownHostError: "Unknown Host",
+        ConnectError: "Cannot connect to device",
+    }
     try:
         dev.open()
-        err = False
-    except ConnectAuthError as e:
-        print("Authentication credentials fail to login: {0}".format(e))
-        dev = None
-        err = True
-    except ConnectRefusedError as e:
-        print("NETCONF Connection refused: {0}".format(e))
-        dev = None
-        err = True
-    except ConnectTimeoutError as e:
-        print("Connection timeout: {0}".format(e))
-        dev = None
-        err = True
-    except ConnectError as e:
-        print("Cannot connect to device: {0}".format(e))
-        dev = None
-        err = True
-    except ConnectUnknownHostError as e:
-        print("Unknown Host: {0}".format(e))
-        dev = None
-        err = True
+        logger.debug(f"connect: ok dev={dev}")
+        return {
+            "hostname": hostname,
+            "host": host,
+            "ok": True,
+            "dev": dev,
+            "error": None,
+            "error_message": None,
+        }
     except Exception as e:
-        print(e)
-        dev = None
-        err = True
-    logger.debug(f"connect: err={err} dev={dev}")
-    logger.debug("connect: end")
-    return err, dev
+        err_name = type(e).__name__
+        prefix = None
+        for exc_type, text in _ERROR_PREFIX.items():
+            if isinstance(e, exc_type):
+                prefix = text
+                break
+        if prefix is not None:
+            msg = f"{prefix}: {e}"
+        else:
+            msg = str(e)
+        logger.debug(f"connect: error={err_name} msg={msg}")
+        return {
+            "hostname": hostname,
+            "host": host,
+            "ok": False,
+            "dev": None,
+            "error": err_name,
+            "error_message": msg,
+        }
 
 
 def _get_host_tags(section: str) -> set[str]:

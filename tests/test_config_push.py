@@ -824,7 +824,7 @@ class TestRpcTimeout:
         mock_cu = MagicMock()
         mock_cu.diff.return_value = "[edit]\n+  set system ..."
         with (
-            patch.object(cli.common, "connect", return_value=(False, mock_dev)),
+            patch.object(cli.common, "connect", return_value={"hostname": "test-host", "host": "test-host", "ok": True, "dev": mock_dev, "error": None, "error_message": None}),
             patch("junos_ops.upgrade.Config", return_value=mock_cu),
             patch.object(common, "load_commands", return_value=["set system ntp"]),
         ):
@@ -842,7 +842,7 @@ class TestRpcTimeout:
         mock_cu = MagicMock()
         mock_cu.diff.return_value = "[edit]\n+  set system ..."
         with (
-            patch.object(cli.common, "connect", return_value=(False, mock_dev)),
+            patch.object(cli.common, "connect", return_value={"hostname": "test-host", "host": "test-host", "ok": True, "dev": mock_dev, "error": None, "error_message": None}),
             patch("junos_ops.upgrade.Config", return_value=mock_cu),
             patch.object(common, "load_commands", return_value=["set system ntp"]),
         ):
@@ -860,7 +860,7 @@ class TestRpcTimeout:
         mock_cu = MagicMock()
         mock_cu.diff.return_value = "[edit]\n+  set system ..."
         with (
-            patch.object(cli.common, "connect", return_value=(False, mock_dev)),
+            patch.object(cli.common, "connect", return_value={"hostname": "test-host", "host": "test-host", "ok": True, "dev": mock_dev, "error": None, "error_message": None}),
             patch("junos_ops.upgrade.Config", return_value=mock_cu),
             patch.object(common, "load_commands", return_value=["set system ntp"]),
         ):
@@ -878,7 +878,7 @@ class TestRpcTimeout:
         mock_cu = MagicMock()
         mock_cu.diff.return_value = "[edit]\n+  set system ..."
         with (
-            patch.object(cli.common, "connect", return_value=(False, mock_dev)),
+            patch.object(cli.common, "connect", return_value={"hostname": "test-host", "host": "test-host", "ok": True, "dev": mock_dev, "error": None, "error_message": None}),
             patch("junos_ops.upgrade.Config", return_value=mock_cu),
             patch.object(common, "load_commands", return_value=["set system ntp"]),
         ):
