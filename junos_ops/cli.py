@@ -326,10 +326,10 @@ def cmd_config(hostname) -> int:
         if timeout is None:
             timeout = 120
         dev.timeout = timeout
-        print(f"# {hostname}")
-        if upgrade.load_config(hostname, dev, common.args.configfile):
-            return 1
-        return 0
+        display.print_host_header(hostname)
+        result = upgrade.load_config(hostname, dev, common.args.configfile)
+        display.print_load_config(result)
+        return 0 if result.get("ok") else 1
     except Exception as e:
         logger.error(f"{hostname}: {e}")
         return 1

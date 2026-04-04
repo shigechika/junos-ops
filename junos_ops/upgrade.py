@@ -1493,94 +1493,175 @@ def _run_health_check(hostname, dev, health_cmds) -> bool:
     return True
 
 
-def load_config(hostname, dev, configfile) -> bool:
+def load_config(hostname, dev, configfile) -> dict:
     """Load set command file and commit to device.
 
     Commit flow (default):
-        lock -> load -> diff -> commit_check -> commit confirmed -> health check -> confirm -> unlock.
-    Commit flow (--no-confirm):
+        lock -> load -> diff -> commit_check -> commit confirmed ->
+        health check -> confirm -> unlock.
+    Commit flow (``--no-confirm``):
         lock -> load -> diff -> commit_check -> commit -> unlock.
     On error, rollback + unlock for cleanup.
 
-    :return: True on error, False on success.
+    :return: dict with keys:
+
+        - ``hostname`` (str)
+        - ``ok`` (bool): overall success.
+        - ``dry_run`` (bool)
+        - ``configfile`` (str): the input file path.
+        - ``template`` (bool): True iff the input is a ``.j2`` Jinja2
+          template (rendered through ``common.render_template``).
+        - ``rendered_commands`` (list[str] | None): the set commands
+          actually loaded (template output or file lines).
+        - ``diff`` (str | None): the device-reported diff; None means
+          "no changes".
+        - ``no_changes`` (bool): True iff ``diff is None`` — shortcut
+          for the common happy path.
+        - ``commit_mode`` (str): ``"confirmed"`` | ``"no_confirm"`` |
+          ``"dry_run"`` | ``"none"`` (no commit happened, e.g. lock
+          failed or no_changes).
+        - ``confirm_timeout`` (int | None): confirm timeout in minutes
+          for ``commit_mode == "confirmed"``, else None.
+        - ``health_check`` (dict): ``{"ran": bool, "commands_tried":
+          list[str], "passed": bool}``.
+        - ``steps`` (list[dict]): chronological progress entries, each
+          with an ``action`` key and a ``message`` for display.
+        - ``error`` (str | None): short identifier of the first fatal
+          failure.
+        - ``error_message`` (str | None): full error detail.
+
+    During execution, each step is also echoed via ``logger.info`` so
+    operators watching the log see real-time progress. Does not print.
     """
+    steps: list[dict] = []
+    result: dict = {
+        "hostname": hostname,
+        "ok": False,
+        "dry_run": common.args.dry_run,
+        "configfile": configfile,
+        "template": configfile.endswith(".j2"),
+        "rendered_commands": None,
+        "diff": None,
+        "no_changes": False,
+        "commit_mode": "none",
+        "confirm_timeout": None,
+        "health_check": {"ran": False, "commands_tried": [], "passed": False},
+        "steps": steps,
+        "error": None,
+        "error_message": None,
+    }
+
+    def _step(action: str, message: str, **extra) -> None:
+        """Append to steps and echo via logger.info for live progress."""
+        entry = {"action": action, "message": message}
+        entry.update(extra)
+        steps.append(entry)
+        logger.info(f"{hostname}: {message.strip()}")
+
     cu = Config(dev)
 
-    # config ロック取得
+    # acquire config lock
     try:
         cu.lock()
     except Exception as e:
         logger.error(f"{hostname}: config lock failed: {e}")
-        print(f"\tconfig lock failed: {e}")
-        return True
+        result["error"] = "lock_failed"
+        result["error_message"] = str(e)
+        _step("lock", f"\tconfig lock failed: {e}", ok=False)
+        return result
 
     try:
-        # set コマンドファイル読み込み（コメント行・空行を除去）
-        if configfile.endswith(".j2"):
+        # Load set command file (strip comments/blank lines)
+        if result["template"]:
             commands = common.render_template(configfile, hostname, dev)
-            print(f"\ttemplate rendered: {len(commands)} command(s)")
+            _step("template", f"\ttemplate rendered: {len(commands)} command(s)")
         else:
             commands = common.load_commands(configfile)
+        result["rendered_commands"] = commands
         cu.load("\n".join(commands), format="set")
 
-        # 差分確認
+        # diff
         diff = cu.diff()
+        result["diff"] = diff
         if diff is None:
-            print("\tno changes")
+            result["no_changes"] = True
+            result["ok"] = True
+            _step("diff", "\tno changes")
             cu.unlock()
-            return False
+            return result
 
-        # テンプレート使用時はレンダリング結果を表示
-        if configfile.endswith(".j2"):
+        # Template mode: echo rendered commands
+        if result["template"]:
             for cmd in commands:
-                print(f"\t  {cmd}")
+                _step("rendered_command", f"\t  {cmd}")
 
         cu.pdiff()
 
-        # dry-run: diff 表示のみで終了
+        # dry-run: diff only, no commit
         if common.args.dry_run:
-            print("\tdry-run: rollback (no commit)")
+            _step("dry_run", "\tdry-run: rollback (no commit)")
             cu.rollback()
             cu.unlock()
-            return False
+            result["commit_mode"] = "dry_run"
+            result["ok"] = True
+            return result
 
         # validation
         cu.commit_check()
-        print("\tcommit check passed")
+        _step("commit_check", "\tcommit check passed")
 
         no_confirm = getattr(common.args, "no_confirm", False)
         if no_confirm:
-            # 直接 commit（commit confirmed をスキップ）
+            # Direct commit (skip commit confirmed)
             cu.commit()
-            print("\tcommit applied (no confirm)")
+            result["commit_mode"] = "no_confirm"
+            _step("commit", "\tcommit applied (no confirm)")
         else:
-            # commit confirmed（自動ロールバック付き）
+            # commit confirmed (auto-rollback on timer)
             confirm_timeout = getattr(common.args, "confirm_timeout", 1)
+            result["confirm_timeout"] = confirm_timeout
+            result["commit_mode"] = "confirmed"
             cu.commit(confirm=confirm_timeout)
-            print(f"\tcommit confirmed {confirm_timeout} applied")
+            _step("commit_confirmed",
+                  f"\tcommit confirmed {confirm_timeout} applied")
 
-            # ヘルスチェック
+            # health check
             no_health_check = getattr(common.args, "no_health_check", False)
             health_cmds = getattr(common.args, "health_check", None)
             if not no_health_check:
                 if health_cmds is None:
                     health_cmds = ["ping count 3 255.255.255.255 rapid"]
+                result["health_check"]["ran"] = True
+                result["health_check"]["commands_tried"] = list(health_cmds)
                 if _run_health_check(hostname, dev, health_cmds):
-                    # 失敗 — 最終 commit を送らず、タイマー満了で自動ロールバック
-                    print(f"\thealth check FAILED — config will auto-rollback "
-                          f"in {confirm_timeout} minute(s)")
-                    logger.error(f"{hostname}: health check failed, "
-                                 f"not confirming commit")
+                    # Failed — do not confirm; timer will auto-rollback.
+                    _step(
+                        "health_check_failed",
+                        f"\thealth check FAILED — config will auto-rollback "
+                        f"in {confirm_timeout} minute(s)",
+                    )
+                    logger.error(
+                        f"{hostname}: health check failed, "
+                        f"not confirming commit"
+                    )
                     cu.unlock()
-                    return True
+                    result["health_check"]["passed"] = False
+                    result["error"] = "health_check_failed"
+                    return result
+                result["health_check"]["passed"] = True
 
-            # 確定（タイマー解除）
+            # confirm (cancel timer)
             cu.commit()
-            print("\tcommit confirmed, changes are now permanent")
+            _step("commit_confirm_final",
+                  "\tcommit confirmed, changes are now permanent")
+
+        result["ok"] = True
 
     except Exception as e:
         logger.error(f"{hostname}: config push failed: {e}")
-        print(f"\tconfig push failed: {e}")
+        _step("exception", f"\tconfig push failed: {e}", ok=False)
+        result["error"] = "exception"
+        result["error_message"] = str(e)
         try:
             cu.rollback()
         except Exception:
@@ -1589,7 +1670,7 @@ def load_config(hostname, dev, configfile) -> bool:
             cu.unlock()
         except Exception:
             pass
-        return True
+        return result
 
     cu.unlock()
-    return False
+    return result

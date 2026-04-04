@@ -301,13 +301,35 @@ def print_list_remote(result: dict) -> None:
 
 
 def print_load_config(result: dict) -> None:
-    """Print ``upgrade.load_config`` result (walks ``steps`` list)."""
-    raise NotImplementedError
+    """Print ``upgrade.load_config`` result by walking its steps list.
+
+    Each step's ``message`` was already shaped to match the legacy
+    single-line output (indentation included), so we just print them
+    in order under the shared lock.
+    """
+    lines = [s["message"] for s in result.get("steps", []) if s.get("message")]
+    if not lines:
+        return
+    with _print_lock:
+        for line in lines:
+            print(line)
 
 
 def print_rsi(result: dict) -> None:
-    """Print ``rsi.collect_rsi`` result."""
-    raise NotImplementedError
+    """Print ``rsi.collect_rsi`` result (one line per file written)."""
+    lines = []
+    hostname = result.get("hostname", "")
+    if result.get("scf"):
+        lines.append(f"  {hostname}.SCF done")
+    if result.get("rsi"):
+        lines.append(f"  {hostname}.RSI done")
+    if not result.get("ok") and result.get("error_message"):
+        lines.append(f"  {hostname}: {result['error']}: {result['error_message']}")
+    if not lines:
+        return
+    with _print_lock:
+        for line in lines:
+            print(line)
 
 
 def print_show(result: dict) -> None:

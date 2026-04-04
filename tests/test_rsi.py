@@ -99,8 +99,8 @@ class TestGetSupportInformation:
             {"format": "text"}, dev_timeout=600, node="primary"
         )
 
-    def test_exception_returns_none(self):
-        """例外発生時は None を返す"""
+    def test_exception_returns_error_dict(self):
+        """例外発生時は ok=False の dict を返す"""
         dev = MagicMock()
         dev.facts = {
             "personality": "MX",
@@ -111,7 +111,10 @@ class TestGetSupportInformation:
         }
         dev.rpc.get_support_information.side_effect = Exception("RPC failed")
         result = rsi.get_support_information(dev)
-        assert result is None
+        assert result["ok"] is False
+        assert result["rpc"] is None
+        assert result["error"] == "Exception"
+        assert "RPC failed" in result["error_message"]
 
 
 class TestCmdRsi:

@@ -26,7 +26,7 @@ class TestLoadConfig:
             ),
         ):
             result = junos_upgrade.load_config("test-host", dev, "commands.set")
-        assert result is False
+        assert result["ok"] is True
         mock_cu.lock.assert_called_once()
         mock_cu.load.assert_called_once_with(
             "set system host-name test", format="set",
@@ -51,7 +51,7 @@ class TestLoadConfig:
             patch.object(common, "load_commands", return_value=["set system ntp"]),
         ):
             result = junos_upgrade.load_config("test-host", dev, "commands.set")
-        assert result is False
+        assert result["ok"] is True
         mock_cu.lock.assert_called_once()
         mock_cu.load.assert_called_once()
         mock_cu.commit.assert_not_called()
@@ -68,7 +68,7 @@ class TestLoadConfig:
             patch.object(common, "load_commands", return_value=["set system ntp"]),
         ):
             result = junos_upgrade.load_config("test-host", dev, "commands.set")
-        assert result is False
+        assert result["ok"] is True
         mock_cu.pdiff.assert_called_once()
         mock_cu.commit.assert_not_called()
         mock_cu.rollback.assert_called_once()
@@ -85,7 +85,7 @@ class TestLoadConfig:
             patch.object(common, "load_commands", return_value=["set system ntp"]),
         ):
             result = junos_upgrade.load_config("test-host", dev, "commands.set")
-        assert result is True
+        assert result["ok"] is False
         mock_cu.rollback.assert_called_once()
         mock_cu.unlock.assert_called_once()
         mock_cu.commit.assert_not_called()
@@ -101,7 +101,7 @@ class TestLoadConfig:
             patch.object(common, "load_commands", return_value=["set system ntp"]),
         ):
             result = junos_upgrade.load_config("test-host", dev, "commands.set")
-        assert result is True
+        assert result["ok"] is False
         mock_cu.rollback.assert_called_once()
         mock_cu.unlock.assert_called_once()
 
@@ -115,7 +115,7 @@ class TestLoadConfig:
             patch.object(common, "load_commands", return_value=["set system ntp"]),
         ):
             result = junos_upgrade.load_config("test-host", dev, "commands.set")
-        assert result is True
+        assert result["ok"] is False
         mock_cu.rollback.assert_called_once()
         mock_cu.unlock.assert_called_once()
         mock_cu.commit.assert_not_called()
@@ -127,7 +127,7 @@ class TestLoadConfig:
         mock_cu.lock.side_effect = Exception("lock failed")
         with patch("junos_ops.upgrade.Config", return_value=mock_cu):
             result = junos_upgrade.load_config("test-host", dev, "commands.set")
-        assert result is True
+        assert result["ok"] is False
         mock_cu.load.assert_not_called()
         mock_cu.commit.assert_not_called()
 
@@ -143,7 +143,7 @@ class TestLoadConfig:
             patch.object(common, "load_commands", return_value=["set system ntp"]),
         ):
             result = junos_upgrade.load_config("test-host", dev, "commands.set")
-        assert result is False
+        assert result["ok"] is True
         mock_cu.commit.assert_any_call(confirm=3)
 
 
@@ -168,7 +168,7 @@ class TestConfigCommentStripping:
         ):
             result = junos_upgrade.load_config("test-host", dev, "commands.set")
 
-        assert result is False
+        assert result["ok"] is True
         # load_commands がファイルパスで呼ばれている
         mock_load_cmds.assert_called_once_with("commands.set")
         # cu.load() に文字列が渡されている（path= ではない）
@@ -192,7 +192,7 @@ class TestConfigCommentStripping:
         ):
             result = junos_upgrade.load_config("test-host", dev, "commands.set")
 
-        assert result is False
+        assert result["ok"] is True
         mock_cu.load.assert_called_once_with(
             "set system host-name test", format="set",
         )
@@ -215,7 +215,7 @@ class TestHealthCheck:
             patch.object(common, "load_commands", return_value=["set system ntp"]),
         ):
             result = junos_upgrade.load_config("test-host", dev, "commands.set")
-        assert result is False
+        assert result["ok"] is True
         dev.cli.assert_called_once_with("ping count 3 255.255.255.255 rapid")
         assert mock_cu.commit.call_count == 2
 
@@ -233,7 +233,7 @@ class TestHealthCheck:
             patch.object(common, "load_commands", return_value=["set system ntp"]),
         ):
             result = junos_upgrade.load_config("test-host", dev, "commands.set")
-        assert result is True
+        assert result["ok"] is False
         # commit confirmed のみ（最終 commit なし）
         mock_cu.commit.assert_called_once_with(confirm=1)
         mock_cu.unlock.assert_called_once()
@@ -249,7 +249,7 @@ class TestHealthCheck:
             patch.object(common, "load_commands", return_value=["set system ntp"]),
         ):
             result = junos_upgrade.load_config("test-host", dev, "commands.set")
-        assert result is True
+        assert result["ok"] is False
         mock_cu.commit.assert_called_once_with(confirm=1)
         mock_cu.unlock.assert_called_once()
 
@@ -264,7 +264,7 @@ class TestHealthCheck:
             patch.object(common, "load_commands", return_value=["set system ntp"]),
         ):
             result = junos_upgrade.load_config("test-host", dev, "commands.set")
-        assert result is False
+        assert result["ok"] is True
         dev.cli.assert_not_called()
         assert mock_cu.commit.call_count == 2
 
@@ -280,7 +280,7 @@ class TestHealthCheck:
             patch.object(common, "load_commands", return_value=["set system ntp"]),
         ):
             result = junos_upgrade.load_config("test-host", dev, "commands.set")
-        assert result is False
+        assert result["ok"] is True
         dev.cli.assert_called_once_with("show chassis routing-engine")
         assert mock_cu.commit.call_count == 2
 
@@ -310,7 +310,7 @@ class TestHealthCheck:
             patch.object(common, "load_commands", return_value=["set system ntp"]),
         ):
             result = junos_upgrade.load_config("test-host", dev, "commands.set")
-        assert result is False
+        assert result["ok"] is True
         assert dev.cli.call_count == 2
         assert mock_cu.commit.call_count == 2
 
@@ -332,7 +332,7 @@ class TestHealthCheck:
             patch.object(common, "load_commands", return_value=["set system ntp"]),
         ):
             result = junos_upgrade.load_config("test-host", dev, "commands.set")
-        assert result is True
+        assert result["ok"] is False
         assert dev.cli.call_count == 2
         mock_cu.commit.assert_called_once_with(confirm=1)
         mock_cu.unlock.assert_called_once()
@@ -355,7 +355,7 @@ class TestHealthCheck:
             patch.object(common, "load_commands", return_value=["set system ntp"]),
         ):
             result = junos_upgrade.load_config("test-host", dev, "commands.set")
-        assert result is False
+        assert result["ok"] is True
         dev.cli.assert_not_called()
         dev.rpc.get_system_uptime_information.assert_called_once()
         assert mock_cu.commit.call_count == 2
@@ -375,7 +375,7 @@ class TestHealthCheck:
             patch.object(common, "load_commands", return_value=["set system ntp"]),
         ):
             result = junos_upgrade.load_config("test-host", dev, "commands.set")
-        assert result is True
+        assert result["ok"] is False
         mock_cu.commit.assert_called_once_with(confirm=1)
 
     def test_health_check_rpc_exception(self, junos_upgrade, mock_args, mock_config):
@@ -390,7 +390,7 @@ class TestHealthCheck:
             patch.object(common, "load_commands", return_value=["set system ntp"]),
         ):
             result = junos_upgrade.load_config("test-host", dev, "commands.set")
-        assert result is True
+        assert result["ok"] is False
         mock_cu.commit.assert_called_once_with(confirm=1)
 
     def test_health_check_rpc_fallback_to_ping(
@@ -410,7 +410,7 @@ class TestHealthCheck:
             patch.object(common, "load_commands", return_value=["set system ntp"]),
         ):
             result = junos_upgrade.load_config("test-host", dev, "commands.set")
-        assert result is False
+        assert result["ok"] is True
         dev.rpc.get_system_uptime_information.assert_called_once()
         dev.cli.assert_called_once_with("ping count 3 255.255.255.255 rapid")
         assert mock_cu.commit.call_count == 2
@@ -435,7 +435,7 @@ class TestJinja2Template:
             result = junos_upgrade.load_config(
                 "test-host", dev, "commands.set.j2"
             )
-        assert result is False
+        assert result["ok"] is True
         mock_render.assert_called_once_with("commands.set.j2", "test-host", dev)
         mock_cu.load.assert_called_once_with(
             "set system host-name rt1\nset system ntp server 192.0.2.1",
@@ -457,7 +457,7 @@ class TestJinja2Template:
             result = junos_upgrade.load_config(
                 "test-host", dev, "commands.set"
             )
-        assert result is False
+        assert result["ok"] is True
         mock_load.assert_called_once_with("commands.set")
 
     def test_render_template_variables(self, mock_config):
@@ -555,10 +555,13 @@ class TestJinja2Template:
             result = junos_upgrade.load_config(
                 "test-host", dev, "commands.set.j2"
             )
-        assert result is False
-        captured = capsys.readouterr()
-        assert "set system host-name rt1" in captured.out
-        assert "dry-run" in captured.out
+        assert result["ok"] is True
+        # core は print しないので、steps / rendered_commands 経由で検証
+        assert result["rendered_commands"] == rendered
+        messages = " ".join(s.get("message", "") for s in result["steps"])
+        assert "set system host-name rt1" in messages
+        assert "dry-run" in messages
+        assert capsys.readouterr().out == ""
 
     def test_render_template_switch_conditional(self, mock_config):
         """Jinja2 conditional on facts.personality"""
@@ -901,14 +904,14 @@ class TestNoConfirm:
             patch.object(common, "load_commands", return_value=["set system ntp"]),
         ):
             result = junos_upgrade.load_config("test-host", dev, "commands.set")
-        assert result is False
+        assert result["ok"] is True
         # commit は1回だけ（confirm= なし）
         mock_cu.commit.assert_called_once_with()
         # ヘルスチェックは実行されない
         dev.cli.assert_not_called()
 
     def test_no_confirm_output(self, junos_upgrade, mock_args, mock_config, capsys):
-        """--no-confirm で "commit applied (no confirm)" と表示"""
+        """--no-confirm では commit_mode=no_confirm と steps 内に文言"""
         mock_args.no_confirm = True
         dev = MagicMock()
         mock_cu = MagicMock()
@@ -917,9 +920,12 @@ class TestNoConfirm:
             patch("junos_ops.upgrade.Config", return_value=mock_cu),
             patch.object(common, "load_commands", return_value=["set system ntp"]),
         ):
-            junos_upgrade.load_config("test-host", dev, "commands.set")
-        captured = capsys.readouterr()
-        assert "commit applied (no confirm)" in captured.out
+            result = junos_upgrade.load_config("test-host", dev, "commands.set")
+        assert result["commit_mode"] == "no_confirm"
+        messages = " ".join(s.get("message", "") for s in result["steps"])
+        assert "commit applied (no confirm)" in messages
+        # core は print しない
+        assert capsys.readouterr().out == ""
 
     def test_no_confirm_commit_error(self, junos_upgrade, mock_args, mock_config):
         """--no-confirm で commit 失敗時も rollback + unlock"""
@@ -933,7 +939,7 @@ class TestNoConfirm:
             patch.object(common, "load_commands", return_value=["set system ntp"]),
         ):
             result = junos_upgrade.load_config("test-host", dev, "commands.set")
-        assert result is True
+        assert result["ok"] is False
         mock_cu.rollback.assert_called_once()
         mock_cu.unlock.assert_called_once()
 
@@ -949,7 +955,7 @@ class TestNoConfirm:
             patch.object(common, "load_commands", return_value=["set system ntp"]),
         ):
             result = junos_upgrade.load_config("test-host", dev, "commands.set")
-        assert result is False
+        assert result["ok"] is True
         # commit confirmed + commit の2回
         assert mock_cu.commit.call_count == 2
         mock_cu.commit.assert_any_call(confirm=1)
