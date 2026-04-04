@@ -53,11 +53,9 @@ def delete_snapshots(dev) -> bool:
 
 def copy(hostname, dev):
     """Copy package to remote device via SCP with checksum verification."""
-    if common.args.debug:
-        print("copy: start")
+    logger.debug("copy: start")
     if common.args.force:
-        if common.args.debug:
-            print("copy: force copy")
+        logger.debug("copy: force copy")
     else:
         if check_running_package(hostname, dev):
             print("Already Running, COPY Skip.")
@@ -76,8 +74,7 @@ def copy(hostname, dev):
             )
             # default dev_timeout is 30 seconds, but it's not enough QFX series.
             xml_str = etree.tostring(rpc, encoding="unicode")
-            if common.args.debug:
-                print("copy: request-system-storage-cleanup=", xml_str)
+            logger.debug(f"copy: request-system-storage-cleanup={xml_str}")
             if xml_str.find("<success/>") >= 0:
                 print("copy: system storage cleanup successful")
             else:
@@ -125,12 +122,10 @@ def copy(hostname, dev):
                 force_copy=common.args.force,
             )
             if result:
-                if common.args.debug:
-                    print("copy: successful")
+                logger.debug("copy: successful")
                 ret = False
             else:
-                if common.args.debug:
-                    print("copy: failed")
+                logger.debug("copy: failed")
                 ret = True
         except TimeoutExpiredError as e:
             print("Copy failure caused by TimeoutExpiredError:", e)
@@ -142,8 +137,7 @@ def copy(hostname, dev):
             print(e)
             ret = True
 
-    if common.args.debug:
-        print("copy: end", ret)
+    logger.debug(f"copy: end ret={ret}")
     return ret
 
 
@@ -156,8 +150,7 @@ def rollback(hostname, dev):
             rpc = dev.rpc.request_package_rollback({"format": "text"}, dev_timeout=120)
             # default dev_timeout is 30 seconds, but it's not enough SRX4600, MX5 and QFX5110.
             xml_str = etree.tostring(rpc, encoding="unicode")
-            if common.args.debug:
-                print("rollback: rpc=", rpc, "xml_str=", xml_str)
+            logger.debug(f"rollback: rpc={rpc} xml_str={xml_str}")
             if (
                 xml_str.find("Deleting bootstrap installer") >= 0  # MX
                 or xml_str.find("NOTICE: The 'pending' set has been removed") >= 0  # EX
@@ -217,11 +210,9 @@ def clear_reboot(dev) -> bool:
 
 def install(hostname, dev):
     """Install package with pre-flight checks."""
-    if common.args.debug:
-        print("install: start")
+    logger.debug("install: start")
     if common.args.force:
-        if common.args.debug:
-            print("install: force install")
+        logger.debug("install: force install")
     else:
         if check_running_package(hostname, dev):
             print("Already Running, INSTALL Skip.")
@@ -475,8 +466,7 @@ def check_remote_package(hostname, dev):
 
 def list_remote_path(hostname, dev):
     """List files on remote device path."""
-    if common.args.debug:
-        print("list_remote_path: start")
+    logger.debug("list_remote_path: start")
     # file list /var/tmp/
     fs = FS(dev)
     rpath = common.config.get(hostname, "rpath")
@@ -504,28 +494,26 @@ def list_remote_path(hostname, dev):
                 )
             )
         print("total files: %d" % dir_info.get("file_count"))
-    if common.args.debug:
-        print("list_remote_path: end")
+    logger.debug("list_remote_path: end")
     return dir_info
 
 
 def dry_run(hostname, dev):
     """Perform dry-run checks for local and remote packages."""
-    if common.args.debug:
-        print("dry-run: start")
-        print("hostname: ", dev.facts["hostname"])
-        print("model: ", dev.facts["model"])
-        print("file:", get_local_path(
-            hostname, get_model_file(hostname, dev.facts["model"])))
-        print("hash:", get_model_hash(hostname, dev.facts["model"]))
-        print("algo:", common.config.get(hostname, "hashalgo"))
+    logger.debug("dry-run: start")
+    logger.debug(f"hostname: {dev.facts['hostname']}")
+    logger.debug(f"model: {dev.facts['model']}")
+    logger.debug(
+        f"file: {get_local_path(hostname, get_model_file(hostname, dev.facts['model']))}"
+    )
+    logger.debug(f"hash: {get_model_hash(hostname, dev.facts['model'])}")
+    logger.debug(f"algo: {common.config.get(hostname, 'hashalgo')}")
     # show hostname, model, file, hash and algo
     # local package check
     local = check_local_package(hostname, dev)
     # remote package check
     remote = check_remote_package(hostname, dev)
-    if common.args.debug:
-        print("dry-run: end")
+    logger.debug("dry-run: end")
     if local and remote:
         return True
     else:
@@ -539,25 +527,21 @@ def check_running_package(hostname, dev):
        * ``True`` same (already running target version).
        * ``False`` different (upgrade needed).
     """
-    if common.args.debug:
-        print("check_running_package: start")
+    logger.debug("check_running_package: start")
     ret = None
     ver = dev.facts["version"]
     rever = re.sub(r"\.", r"\\.", ver)
-    if common.args.debug:
-        print("check_running_package: ver", ver)
-        print("check_running_package: rever", rever)
+    logger.debug(f"check_running_package: ver={ver}")
+    logger.debug(f"check_running_package: rever={rever}")
     m = re.search(rever, get_model_file(hostname, dev.facts["model"]))
-    if common.args.debug:
-        print("check_running_package: m", m)
+    logger.debug(f"check_running_package: m={m}")
     if m is None:
         # unmatch(different version)
         ret = False
     else:
         # match(same version)
         ret = True
-    if common.args.debug:
-        print("check_running_package: end")
+    logger.debug("check_running_package: end")
     return ret
 
 
@@ -571,8 +555,7 @@ def compare_version(left: str, right: str) -> int | None:
               0 if left == right
              -1 if left  < right
     """
-    if common.args.debug:
-        print(f"compare_version: left={left}, right={right}.")
+    logger.debug(f"compare_version: left={left}, right={right}.")
     if left is None or right is None:
         return None
     if LooseVersion(left.replace("-S", "00")) > LooseVersion(right.replace("-S", "00")):
@@ -593,20 +576,17 @@ def get_pending_version(hostname, dev) -> str:
     try:
         rpc = dev.rpc.get_software_information({"format": "text"})
         xml_str = etree.tostring(rpc, encoding="unicode")
-        if common.args.debug:
-            print(
-                "get_pending_version: rpc=", rpc, "type(xml_str)=", type(xml_str), "xml_str=", xml_str
-            )
+        logger.debug(
+            f"get_pending_version: rpc={rpc} type(xml_str)={type(xml_str)} xml_str={xml_str}"
+        )
         if dev.facts["personality"] == "SWITCH":
-            if common.args.debug:
-                print("get_pending_version: EX/QFX series")
+            logger.debug("get_pending_version: EX/QFX series")
             # Pending: 18.4R3-S10
             m = re.search(r"^Pending:\s(.*)$", xml_str, re.MULTILINE)
             if m is not None:
                 pending = m.group(1)
         elif dev.facts["personality"] == "MX":
-            if common.args.debug:
-                print("get_pending_version: MX series")
+            logger.debug("get_pending_version: MX series")
             # JUNOS Installation Software [18.4R3-S10]
             m = re.search(
                 r"^JUNOS\sInstallation\sSoftware\s\[(.*)\]$", xml_str, re.MULTILINE
@@ -615,24 +595,20 @@ def get_pending_version(hostname, dev) -> str:
                 pending = m.group(1)
         elif dev.facts["personality"] == "SRX_BRANCH":
             # Dual Partition - SRX300, SRX345
-            if common.args.debug:
-                print("get_pending_version: SRX_BRANCH series")
+            logger.debug("get_pending_version: SRX_BRANCH series")
             xml = dev.rpc.get_snapshot_information(media="internal")
-            if common.args.debug:
-                print(f"get_snapshot_information: xml={etree.dump(xml)}")
+            logger.debug(f"get_snapshot_information: xml={etree.dump(xml)}")
             primary = False
             for i in range(len(xml)):
-                if common.args.debug:
-                    print(
-                        f"get_snapshot_information: i={i}, tag={xml[i].tag}, text={xml[i].text}"
-                    )
+                logger.debug(
+                    f"get_snapshot_information: i={i}, tag={xml[i].tag}, text={xml[i].text}"
+                )
                 if (
                     xml[i].tag == "snapshot-medium"
                     and re.match(".*primary", xml[i].text, re.MULTILINE | re.DOTALL)
                     is not None
                 ):
-                    if common.args.debug:
-                        print("primary find")
+                    logger.debug("primary find")
                     primary = True
                 if (
                     primary
@@ -647,23 +623,16 @@ def get_pending_version(hostname, dev) -> str:
             or dev.facts["personality"] == "SRX_HIGHEND"
         ):
             # SRX1500, SRX4600
-            if common.args.debug:
-                print("get_pending_version: SRX_MIDRANGE or SRX_HIGHEND series")
+            logger.debug("get_pending_version: SRX_MIDRANGE or SRX_HIGHEND series")
             # show log install
             # upgrade_platform: Staging of /var/tmp/junos-srxentedge-x86-64-20.4R3.8-linux.tgz completed
             # &lt;package-result&gt;0&lt;/package-result&gt;
             try:
                 rpc = dev.rpc.get_log({"format": "text"}, filename="install")
                 xml_str = etree.tostring(rpc, encoding="unicode")
-                if common.args.debug:
-                    print(
-                        "get_pending_version: rpc=",
-                        rpc,
-                        "type(xml_str)=",
-                        type(xml_str),
-                        "xml_str=",
-                        xml_str,
-                    )
+                logger.debug(
+                    f"get_pending_version: rpc={rpc} type(xml_str)={type(xml_str)} xml_str={xml_str}"
+                )
                 if xml_str is not None:
                     # search from last <output> block
                     start = xml_str.rfind("&lt;output&gt;")
@@ -733,8 +702,7 @@ def get_reboot_information(hostname, dev):
         logger.error(e)
         return None
     xml_str = etree.tostring(rpc, encoding="unicode")
-    if common.args.debug:
-        print(xml_str)
+    logger.debug(xml_str)
     m = re.search(
         r"((halt|shutdown|reboot)\srequested\sby\s.*\sat\s(.*\d)|No\sshutdown\/reboot\sscheduled\.)",
         xml_str,
@@ -805,69 +773,99 @@ def get_rescue_config_time(dev):
     return int(seconds)
 
 
-def show_version(hostname, dev):
-    """Show version information and suggest next action."""
+def show_version(hostname, dev) -> dict:
+    """Collect version information for a device.
 
+    Gathers running/planning/pending versions, last commit info,
+    local/remote package presence, and scheduled reboot (if any).
+    Does not print — callers use :func:`junos_ops.display.print_version`
+    to render for humans, or consume the dict directly.
+
+    :returns: dict with the following keys:
+
+        - ``hostname`` (str): device hostname from ``dev.facts``
+        - ``model`` (str): device model
+        - ``running`` (str): currently-running JUNOS version
+        - ``planning`` (str | None): version parsed from the package
+          filename in config.ini, or ``None`` if ``.file`` is not
+          configured for this model
+        - ``pending`` (str | None): staged version waiting for reboot
+        - ``running_vs_planning`` (int | None): ``compare_version``
+          result (-1/0/1), or ``None`` if either side is ``None``
+        - ``running_vs_pending`` (int | None): same, for pending
+        - ``commit`` (dict | None): ``{"epoch", "datetime", "user",
+          "client"}`` from the latest commit, or ``None``
+        - ``rescue_config_epoch`` (int | None): mtime of the rescue
+          config file, if any
+        - ``config_changed_after_install`` (bool): True when a pending
+          install exists and the config was modified after the rescue
+          config was saved (i.e., a reinstall will run on reboot)
+        - ``local_package`` (bool | None): local package file present?
+          ``None`` if not checkable
+        - ``remote_package`` (bool | None): remote package file present?
+        - ``reboot_scheduled`` (str | None): raw phrase from
+          ``get_reboot_information``, or ``None``
+    """
     logger.debug("start")
 
-    print("  - hostname:", dev.facts["hostname"])
-    print("  - model:", dev.facts["model"])
     running = dev.facts["version"]
-    print("  - running version:", running)
 
-    # compare with planning version (requires .file in config)
     try:
         planning = get_planning_version(hostname, dev)
     except Exception:
         planning = None
-    print("  - planning version:", planning)
-    ret = compare_version(running, planning)
-    if ret == 1:
-        print(f"    - {running=} > {planning=}")
-    elif ret == -1:
-        print(f"    - {running=} < {planning=}")
-    elif ret == 0:
-        print(f"    - {running=} = {planning=}")
-    # compare with pending version
-    pending = get_pending_version(hostname, dev)
-    print("  - pending version:", pending)
-    ret = compare_version(running, pending)
-    if ret == 1:
-        print(f"    - {running=} > {pending=} : Do you want to rollback?")
-    elif ret == -1:
-        print(f"    - {running=} < {pending=} : Please plan to reboot.")
-    elif ret == 0:
-        print(f"    - {running=} = {pending=}")
 
-    # コミット情報と config 変更検出
+    pending = get_pending_version(hostname, dev)
+
     commit_info = get_commit_information(dev)
     if commit_info is not None:
         commit_epoch, commit_dt_str, commit_user, commit_client = commit_info
-        print(f"  - last commit: {commit_dt_str} by {commit_user} via {commit_client}")
-        if pending is not None:
-            rescue_epoch = get_rescue_config_time(dev)
-            if rescue_epoch is None or commit_epoch > rescue_epoch:
-                print(f"    - WARNING: config modified after firmware install. Re-install will run on reboot.")
+        commit_dict = {
+            "epoch": commit_epoch,
+            "datetime": commit_dt_str,
+            "user": commit_user,
+            "client": commit_client,
+        }
+    else:
+        commit_dict = None
+        commit_epoch = None
 
-    # local package check (requires .file in config)
+    rescue_epoch = None
+    config_changed_after_install = False
+    if commit_dict is not None and pending is not None:
+        rescue_epoch = get_rescue_config_time(dev)
+        if rescue_epoch is None or commit_epoch > rescue_epoch:
+            config_changed_after_install = True
+
     try:
         local = check_local_package(hostname, dev)
     except Exception:
         local = None
 
-    # remote package check (requires .file in config)
     try:
         remote = check_remote_package(hostname, dev)
     except Exception:
         remote = None
 
     rebooting = get_reboot_information(hostname, dev)
-    if rebooting is not None:
-        print(f"  - {rebooting}")
 
     logger.debug("end")
 
-    return False
+    return {
+        "hostname": dev.facts["hostname"],
+        "model": dev.facts["model"],
+        "running": running,
+        "planning": planning,
+        "pending": pending,
+        "running_vs_planning": compare_version(running, planning),
+        "running_vs_pending": compare_version(running, pending),
+        "commit": commit_dict,
+        "rescue_config_epoch": rescue_epoch,
+        "config_changed_after_install": config_changed_after_install,
+        "local_package": local,
+        "remote_package": remote,
+        "reboot_scheduled": rebooting,
+    }
 
 
 def check_and_reinstall(hostname, dev) -> bool:

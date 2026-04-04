@@ -54,17 +54,14 @@ def read_config():
         if host is None:
             # host is [section] name
             config.set(section, "host", section)
-        if args.debug:
-            for key in config[section]:
-                print(section, ">", key, ":", config[section][key])
-            print()
+        for key in config[section]:
+            logger.debug(f"{section} > {key} : {config[section][key]}")
     return False
 
 
 def connect(hostname):
     """Open NETCONF connection to a device."""
-    if args.debug:
-        print("connect: start")
+    logger.debug("connect: start")
     dev = Device(
         host=config.get(hostname, "host"),
         port=int(config.get(hostname, "port")),
@@ -101,10 +98,8 @@ def connect(hostname):
         print(e)
         dev = None
         err = True
-    if args.debug:
-        print("connect: err=", err, "dev=", dev)
-    if args.debug:
-        print("connect: end")
+    logger.debug(f"connect: err={err} dev={dev}")
+    logger.debug("connect: end")
     return err, dev
 
 

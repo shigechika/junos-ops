@@ -245,29 +245,130 @@ class TestShowVersionWithoutFile:
         )
         junos_common.config = cfg
 
-    def test_no_file_option_returns_false(self, junos_upgrade, junos_common, mock_args):
-        """.file 未定義でも show_version は False（正常終了）を返す"""
+    def test_no_file_returns_dict(self, junos_upgrade, junos_common, mock_args):
+        """.file 未定義でも show_version は dict を返し、エラーにならない"""
         self._make_config_without_file(junos_common)
         dev = self._make_dev()
         result = junos_upgrade.show_version("sw1.example.com", dev)
-        assert result is False
+        assert isinstance(result, dict)
+        assert result["hostname"] == "sw1"
+        assert result["model"] == "EX2300-24T"
+        assert result["running"] == "22.4R3-S6.5"
 
-    def test_no_file_option_shows_version(self, junos_upgrade, junos_common,
-                                           mock_args, capsys):
-        """.file 未定義でもホスト名・モデル・バージョンは表示される"""
+    def test_no_file_planning_is_none(self, junos_upgrade, junos_common, mock_args):
+        """.file 未定義時 planning は None"""
+        self._make_config_without_file(junos_common)
+        dev = self._make_dev()
+        result = junos_upgrade.show_version("sw1.example.com", dev)
+        assert result["planning"] is None
+        assert result["running_vs_planning"] is None
+
+    def test_no_file_local_remote_none(self, junos_upgrade, junos_common, mock_args):
+        """.file 未定義時 local_package / remote_package は None"""
+        self._make_config_without_file(junos_common)
+        dev = self._make_dev()
+        result = junos_upgrade.show_version("sw1.example.com", dev)
+        assert result["local_package"] is None
+        assert result["remote_package"] is None
+
+    def test_pending_none_and_commit_none(self, junos_upgrade, junos_common, mock_args):
+        """pending なし & commit 情報なし → config_changed_after_install は False"""
+        self._make_config_without_file(junos_common)
+        dev = self._make_dev()
+        result = junos_upgrade.show_version("sw1.example.com", dev)
+        assert result["pending"] is None
+        assert result["commit"] is None
+        assert result["config_changed_after_install"] is False
+
+    def test_does_not_print(self, junos_upgrade, junos_common, mock_args, capsys):
+        """show_version は標準出力に何も print しない"""
         self._make_config_without_file(junos_common)
         dev = self._make_dev()
         junos_upgrade.show_version("sw1.example.com", dev)
         captured = capsys.readouterr()
-        assert "sw1" in captured.out
-        assert "EX2300-24T" in captured.out
-        assert "22.4R3-S6.5" in captured.out
+        assert captured.out == ""
 
-    def test_no_file_option_planning_none(self, junos_upgrade, junos_common,
-                                           mock_args, capsys):
-        """.file 未定義時 planning version は None 表示"""
-        self._make_config_without_file(junos_common)
-        dev = self._make_dev()
-        junos_upgrade.show_version("sw1.example.com", dev)
-        captured = capsys.readouterr()
-        assert "planning version: None" in captured.out
+
+class TestDisplayPrintVersion:
+    """display.print_version() のテスト"""
+
+    def _base_result(self):
+        return {
+            "hostname": "rt1",
+            "model": "MX240",
+            "running": "21.4R3-S5.4",
+            "planning": "21.4R3-S5.4",
+            "pending": None,
+            "running_vs_planning": 0,
+            "running_vs_pending": None,
+            "commit": None,
+            "rescue_config_epoch": None,
+            "config_changed_after_install": False,
+            "local_package": None,
+            "remote_package": None,
+            "reboot_scheduled": None,
+        }
+
+    def test_basic_fields(self, capsys):
+        from junos_ops import display
+        display.print_version(self._base_result())
+        out = capsys.readouterr().out
+        assert "- hostname: rt1" in out
+        assert "- model: MX240" in out
+        assert "- running version: 21.4R3-S5.4" in out
+        assert "- planning version: 21.4R3-S5.4" in out
+        assert "- pending version: None" in out
+
+    def test_planning_less_than_running(self, capsys):
+        from junos_ops import display
+        r = self._base_result()
+        r["planning"] = "22.4R3-S6"
+        r["running_vs_planning"] = -1
+        display.print_version(r)
+        out = capsys.readouterr().out
+        assert "running='21.4R3-S5.4' < planning='22.4R3-S6'" in out
+
+    def test_pending_greater_than_running(self, capsys):
+        from junos_ops import display
+        r = self._base_result()
+        r["pending"] = "22.4R3-S6"
+        r["running_vs_pending"] = -1
+        display.print_version(r)
+        out = capsys.readouterr().out
+        assert "Please plan to reboot" in out
+
+    def test_commit_line(self, capsys):
+        from junos_ops import display
+        r = self._base_result()
+        r["commit"] = {
+            "epoch": 1692679960,
+            "datetime": "2023-08-22 13:12:40 JST",
+            "user": "admin",
+            "client": "cli",
+        }
+        display.print_version(r)
+        out = capsys.readouterr().out
+        assert "last commit: 2023-08-22 13:12:40 JST by admin via cli" in out
+
+    def test_config_changed_warning(self, capsys):
+        from junos_ops import display
+        r = self._base_result()
+        r["commit"] = {
+            "epoch": 1692679960,
+            "datetime": "2023-08-22 13:12:40 JST",
+            "user": "admin",
+            "client": "cli",
+        }
+        r["pending"] = "22.4R3-S6"
+        r["config_changed_after_install"] = True
+        display.print_version(r)
+        out = capsys.readouterr().out
+        assert "WARNING: config modified after firmware install" in out
+
+    def test_reboot_scheduled(self, capsys):
+        from junos_ops import display
+        r = self._base_result()
+        r["reboot_scheduled"] = "reboot requested by admin at Sun Dec 5 01:00:00 2021"
+        display.print_version(r)
+        out = capsys.readouterr().out
+        assert "reboot requested by admin" in out

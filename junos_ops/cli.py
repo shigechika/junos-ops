@@ -48,6 +48,7 @@ logger = logging.getLogger(__name__)
 
 from junos_ops import __version__ as version  # noqa: E402
 from junos_ops import common  # noqa: E402
+from junos_ops import display  # noqa: E402
 from junos_ops import upgrade  # noqa: E402
 from junos_ops import rsi  # noqa: E402
 
@@ -206,9 +207,9 @@ def cmd_version(hostname) -> int:
     if err or dev is None:
         return 1
     try:
-        print(f"# {hostname}")
-        if upgrade.show_version(hostname, dev):
-            return 1
+        display.print_host_header(hostname)
+        result = upgrade.show_version(hostname, dev)
+        display.print_version(result)
         return 0
     except Exception as e:
         logger.error(f"{hostname}: {e}")
@@ -389,9 +390,8 @@ def process_host(hostname: str) -> int:
             if err:
                 return 1
         if common.args.showversion:
-            err = show_version(hostname, dev)
-            if err:
-                return 1
+            result = show_version(hostname, dev)
+            display.print_version(result)
         if common.args.rebootat:
             ret = reboot(hostname, dev, common.args.rebootat)
             if ret:

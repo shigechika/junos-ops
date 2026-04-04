@@ -86,13 +86,16 @@ class TestProcessHost:
 
     def test_showversion(self, junos_update, mock_args, mock_config):
         """--showversion 成功時に 0 を返す"""
+        from junos_ops import display
         junos_update.args.showversion = True
         mock_dev = MagicMock()
         mock_dev.facts = {"model": "EX2300-24T"}
+        fake_result = {"hostname": "test-host", "model": "EX2300-24T"}
         with patch.object(junos_update, "connect", return_value=(False, mock_dev)):
-            with patch.object(junos_update, "show_version", return_value=False):
-                result = junos_update.process_host("test-host")
-                assert result == 0
+            with patch.object(junos_update, "show_version", return_value=fake_result):
+                with patch.object(display, "print_version"):
+                    result = junos_update.process_host("test-host")
+                    assert result == 0
 
     def test_install_success(self, junos_update, mock_args, mock_config):
         """--install 成功時に 0 を返す"""
