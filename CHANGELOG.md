@@ -22,6 +22,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - `cli.process_host()` and its backward-compat function aliases (`cli.copy`, `cli.install`, etc.) — dead code from the pre-subcommand CLI era. CLI dispatches directly to `cmd_*` functions.
 - `tests/test_process_host.py` (covered the removed code path).
 
+### Fixed
+- `upgrade.install()` referenced the legacy `args.copy` / `args.update` / `args.install` attributes in its `remote_check` branch, which were removed alongside `process_host`. Switched the branch selection to `common.args.subcommand`. Found during the v0.14.0 smoke test on a QFX5110 where `check_running_package` did not match (running newer than the planning package) and `pending` was None, driving `install()` into this previously untested code path. Added `tests/test_install.py` as a regression guard.
+
 ## [0.13.0] - 2026-03-14
 
 ### Added
