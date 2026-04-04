@@ -466,12 +466,18 @@ def install(hostname, dev) -> dict:
             return result
 
     # EX series deletes remote package after install; remote check first.
-    if common.args.dry_run and (common.args.copy or common.args.update):
+    # Use the active subcommand to decide whether to skip or fail-fast.
+    # (Legacy ``args.copy`` / ``args.update`` / ``args.install`` flags were
+    # removed with ``process_host`` in v0.14.0.)
+    subcmd = getattr(common.args, "subcommand", None)
+    if common.args.dry_run and subcmd == "upgrade":
+        # dry-run upgrade: copy() will also be dry-run, remote check moot.
         steps.append({
             "action": "remote_check",
             "message": "dry-run: skip remote package check",
         })
-    elif check_remote_package(hostname, dev) is not True and common.args.install:
+    elif check_remote_package(hostname, dev) is not True and subcmd == "install":
+        # install-only mode: fail fast when the remote package is missing.
         logger.info(
             "remote package file not found. Please consider --copy before --install"
         )
