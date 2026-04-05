@@ -80,7 +80,10 @@ class TestInstallRemoteCheckBranch:
                     "error": None,
                 },
             ),
-            patch.object(junos_upgrade, "clear_reboot", return_value=False),
+            patch.object(
+                junos_upgrade, "clear_reboot",
+                return_value={"ok": True, "dry_run": True, "message": "", "error": None},
+            ),
         ):
             result = junos_upgrade.install("test-host", dev)
 
@@ -120,8 +123,22 @@ class TestInstallRemoteCheckBranch:
                 },
             ),
             patch.object(junos_upgrade, "get_pending_version", return_value=None),
-            # Remote package check returns False = missing.
-            patch.object(junos_upgrade, "check_remote_package", return_value=False),
+            # Remote package check returns a "missing" dict.
+            patch.object(
+                junos_upgrade, "check_remote_package",
+                return_value={
+                    "hostname": "test-host",
+                    "file": "junos-arm-32-22.4R3-S6.5.tgz",
+                    "remote_path": "/var/tmp",
+                    "algo": "md5",
+                    "expected_hash": "abc",
+                    "actual_hash": None,
+                    "status": "missing",
+                    "cached": False,
+                    "message": "  - remote package: junos-arm-32-22.4R3-S6.5.tgz is not found.",
+                    "error": None,
+                },
+            ),
         ):
             result = junos_upgrade.install("test-host", dev)
 

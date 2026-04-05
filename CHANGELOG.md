@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.14.1] - 2026-04-05
+
+### Changed
+- **Eliminated the last remaining `print()` calls in the core ([#40](https://github.com/shigechika/junos-ops/issues/40)).** Migrated `check_local_package()`, `check_remote_package()`, and `clear_reboot()` to dict returns matching the 0.14.0 refactor convention. With this change, every `junos_ops.upgrade` and `junos_ops.rsi` core function is guaranteed print-free, fully closing the MCP STDIO corruption motivation behind #40.
+  - `check_local_package()` returns `{hostname, file, local_file, algo, expected_hash, actual_hash, status, cached, message, error}` where `status` is one of `"ok"` / `"bad"` / `"missing"` / `"error"` / `"unchecked"`.
+  - `check_remote_package()` returns the same shape with `remote_path` in place of `local_file`.
+  - `clear_reboot()` returns `{ok, dry_run, message, error}` (same shape as `delete_snapshots()`).
+- **`show_version()` / `dry_run()` schemas upgraded.** The `local_package` and `remote_package` fields are now nested dicts (previously bools); display layer reads their `message` field to render the legacy one-liner output.
+- **`junos_ops.display` adds a `format_*(result) -> str` API.** Every `print_*` function now delegates to a `format_*` counterpart that returns the rendered text without touching stdout. Non-CLI callers (e.g. `junos-mcp`) can build response strings directly from the dict + `format_*` without needing `contextlib.redirect_stdout`.
+- `get_pending_version()` error-path `print()` calls replaced with `logger.error()` (non-breaking; return value unchanged).
+
+### Fixed
+- `install()` correctly appends `clear_reboot` / `remote_check` steps to its result dict instead of relying on the now-gone direct prints from the helpers.
+
 ## [0.14.0] - 2026-04-05
 
 ### Changed

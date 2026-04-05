@@ -147,7 +147,14 @@ def copy(hostname, dev) -> dict:
                 "message": "Already Running, COPY Skip.",
             })
             return result
-        if check_remote_package(hostname, dev):
+        remote_check = check_remote_package(hostname, dev)
+        steps.append({
+            "action": "remote_check",
+            "ok": remote_check["status"] == "ok",
+            "status": remote_check["status"],
+            "message": remote_check["message"],
+        })
+        if remote_check["status"] == "ok":
             result["ok"] = True
             result["skipped"] = True
             result["skip_reason"] = "already_copied"
@@ -338,35 +345,55 @@ def rollback(hostname, dev) -> dict:
     return result
 
 
-def clear_reboot(dev) -> bool:
-    """Clear scheduled reboot."""
+def clear_reboot(dev) -> dict:
+    """Clear any scheduled reboot on the device.
+
+    :return: dict with keys:
+
+        - ``ok`` (bool): True on success (including dry-run).
+        - ``dry_run`` (bool)
+        - ``message`` (str): legacy human-readable summary line.
+        - ``error`` (str | None): exception class name on failure.
+
+    Does not print.
+    """
+    result = {
+        "ok": False,
+        "dry_run": common.args.dry_run,
+        "message": "",
+        "error": None,
+    }
     if common.args.dry_run:
-        print("\tdry-run: clear system reboot")
-    else:
-        try:
-            rpc = dev.rpc.clear_reboot({"format": "text"})
-            xml_str = etree.tostring(rpc, encoding="unicode")
-            logger.debug(f"{rpc=} {xml_str=}")
-            if (
-                xml_str.find("No shutdown/reboot scheduled.") >= 0
-                or xml_str.find("Terminating...") >= 0
-            ):
-                logger.debug("clear reboot schedule successful")
-                print("\tclear reboot schedule successful")
-            else:
-                logger.debug("clear reboot schedule failed")
-                print("\tclear reboot schedule failed")
-                return True
-        except RpcError as e:
-            logger.error(f"Clear reboot failure caused by RpcError: {e}")
-            return True
-        except RpcTimeoutError as e:
-            logger.error(f"Clear reboot failure caused by RpcTimeoutError: {e}")
-            return True
-        except Exception as e:
-            logger.error(e)
-            return True
-    return False
+        result["ok"] = True
+        result["message"] = "\tdry-run: clear system reboot"
+        return result
+    try:
+        rpc = dev.rpc.clear_reboot({"format": "text"})
+        xml_str = etree.tostring(rpc, encoding="unicode")
+        logger.debug(f"{rpc=} {xml_str=}")
+        if (
+            xml_str.find("No shutdown/reboot scheduled.") >= 0
+            or xml_str.find("Terminating...") >= 0
+        ):
+            logger.debug("clear reboot schedule successful")
+            result["ok"] = True
+            result["message"] = "\tclear reboot schedule successful"
+        else:
+            logger.debug("clear reboot schedule failed")
+            result["message"] = "\tclear reboot schedule failed"
+    except RpcTimeoutError as e:
+        result["error"] = "RpcTimeoutError"
+        result["message"] = f"\tclear reboot failure: RpcTimeoutError: {e}"
+        logger.error(f"Clear reboot failure caused by RpcTimeoutError: {e}")
+    except RpcError as e:
+        result["error"] = "RpcError"
+        result["message"] = f"\tclear reboot failure: RpcError: {e}"
+        logger.error(f"Clear reboot failure caused by RpcError: {e}")
+    except Exception as e:
+        result["error"] = type(e).__name__
+        result["message"] = f"\tclear reboot failure: {type(e).__name__}: {e}"
+        logger.error(e)
+    return result
 
 
 def install(hostname, dev) -> dict:
@@ -476,19 +503,27 @@ def install(hostname, dev) -> dict:
             "action": "remote_check",
             "message": "dry-run: skip remote package check",
         })
-    elif check_remote_package(hostname, dev) is not True and subcmd == "install":
-        # install-only mode: fail fast when the remote package is missing.
-        logger.info(
-            "remote package file not found. Please consider --copy before --install"
-        )
-        result["skip_reason"] = "remote_missing"
-        result["error"] = "remote_missing"
+    else:
+        remote_check = check_remote_package(hostname, dev)
         steps.append({
             "action": "remote_check",
-            "message": "remote package file not found. "
-                       "Please consider --copy before --install",
+            "ok": remote_check["status"] == "ok",
+            "status": remote_check["status"],
+            "message": remote_check["message"],
         })
-        return result
+        if remote_check["status"] != "ok" and subcmd == "install":
+            # install-only mode: fail fast when the remote package is missing.
+            logger.info(
+                "remote package file not found. Please consider --copy before --install"
+            )
+            result["skip_reason"] = "remote_missing"
+            result["error"] = "remote_missing"
+            steps.append({
+                "action": "remote_missing",
+                "message": "remote package file not found. "
+                           "Please consider --copy before --install",
+            })
+            return result
 
     copy_result = copy(hostname, dev)
     result["copy_result"] = copy_result
@@ -496,7 +531,9 @@ def install(hostname, dev) -> dict:
         result["error"] = "copy_failed"
         return result
 
-    if clear_reboot(dev):
+    clear_result = clear_reboot(dev)
+    steps.append({"action": "clear_reboot", **clear_result})
+    if not clear_result["ok"]:
         result["error"] = "clear_reboot_failed"
         return result
 
@@ -631,86 +668,175 @@ def set_hashcache(hostname, file, value):
         common.config.set(hostname, file + "hashcache", value)
 
 
-def check_local_package(hostname, dev):
-    """Check local package checksum.
+def check_local_package(hostname, dev) -> dict:
+    """Check the local package file's checksum against the expected value.
 
-    :returns:
-       * ``True`` file found, checksum correct.
-       * ``False`` file found, checksum incorrect.
-       * ``None`` file not found.
+    :return: dict with keys:
+
+        - ``hostname`` (str)
+        - ``file`` (str): package filename from config (without path).
+        - ``local_file`` (str): full local path resolved via ``lpath``.
+        - ``algo`` (str): checksum algorithm name.
+        - ``expected_hash`` (str): expected checksum from config.
+        - ``actual_hash`` (str | None): checksum actually computed (or
+          cached). None when the file could not be hashed.
+        - ``status`` (str): one of
+
+          * ``"ok"``      — file present, checksum matches.
+          * ``"bad"``     — file present, checksum does not match.
+          * ``"missing"`` — file not found on the local filesystem.
+          * ``"error"``   — ``sw.local_checksum`` raised an unexpected
+            exception (see ``error``).
+          * ``"unchecked"`` — the model has no configured package
+            mapping (empty file name or hash); no check attempted.
+
+        - ``cached`` (bool): True iff the result was served from the
+          in-process hash cache and no disk I/O was performed.
+        - ``message`` (str): a human-readable summary line suitable
+          for the display layer (legacy single-line format).
+        - ``error`` (str | None): exception class name when ``status``
+          is ``"error"``.
+
+    Does not print.
     """
-    # local package check
-    # model, file, hash, algo
+    logger.debug("check_local_package: start")
     model = dev.facts["model"]
     file = get_model_file(hostname, model)
     local_file = get_local_path(hostname, file)
     pkg_hash = get_model_hash(hostname, model)
-    if len(file) == 0 or len(pkg_hash) == 0:
-        return None
     algo = common.config.get(hostname, "hashalgo")
-    sw = SW(dev)
+    result = {
+        "hostname": hostname,
+        "file": file,
+        "local_file": local_file,
+        "algo": algo,
+        "expected_hash": pkg_hash,
+        "actual_hash": None,
+        "status": "unchecked",
+        "cached": False,
+        "message": "",
+        "error": None,
+    }
+    if len(file) == 0 or len(pkg_hash) == 0:
+        return result
+
+    # Hash cache hit: short-circuit the I/O.
     if get_hashcache("localhost", file) == pkg_hash:
-        print(f"  - local package: {local_file} is found. checksum(cache) is OK.")
-        return True
-    ret = None
+        result["status"] = "ok"
+        result["cached"] = True
+        result["actual_hash"] = pkg_hash
+        result["message"] = (
+            f"  - local package: {local_file} is found. checksum(cache) is OK."
+        )
+        return result
+
+    sw = SW(dev)
     try:
         val = sw.local_checksum(local_file, algorithm=algo)
+        result["actual_hash"] = val
         if val == pkg_hash:
-            print(f"  - local package: {local_file} is found. checksum is OK.")
             set_hashcache("localhost", file, val)
-            ret = True
+            result["status"] = "ok"
+            result["message"] = (
+                f"  - local package: {local_file} is found. checksum is OK."
+            )
         else:
-            print(f"  - local package: {local_file} is found. checksum is BAD. COPY AGAIN!")
-            ret = False
+            result["status"] = "bad"
+            result["message"] = (
+                f"  - local package: {local_file} is found. "
+                f"checksum is BAD. COPY AGAIN!"
+            )
     except FileNotFoundError as e:
-        print(f"  - local package: {local_file} is not found.")
+        result["status"] = "missing"
+        result["message"] = f"  - local package: {local_file} is not found."
         logger.debug(e)
     except Exception as e:
+        result["status"] = "error"
+        result["error"] = type(e).__name__
+        result["message"] = (
+            f"  - local package: {local_file} checksum error: {e}"
+        )
         logger.error(e)
-    del sw
-    return ret
+    finally:
+        del sw
+    return result
 
 
-def check_remote_package(hostname, dev):
-    """Check remote package checksum.
+def check_remote_package(hostname, dev) -> dict:
+    """Check the remote package file's checksum against the expected value.
 
-    :returns:
-       * ``True`` file found, checksum correct.
-       * ``False`` file found, checksum incorrect.
-       * ``None`` file not found.
+    Same schema as :func:`check_local_package`, but targets the device's
+    ``rpath`` directory via ``sw.remote_checksum``.
+
+    :return: dict with the same keys as :func:`check_local_package`,
+        minus ``local_file`` and plus ``remote_path``. ``status``
+        values are identical (``"ok"`` / ``"bad"`` / ``"missing"`` /
+        ``"error"`` / ``"unchecked"``).
+
+    Does not print.
     """
-    # remote package check
-    # model, file, hash, algo
+    logger.debug("check_remote_package: start")
     model = dev.facts["model"]
     file = get_model_file(hostname, model)
     pkg_hash = get_model_hash(hostname, model)
-    if len(file) == 0 or len(pkg_hash) == 0:
-        return None
     algo = common.config.get(hostname, "hashalgo")
-    sw = SW(dev)
-    ret = None
+    rpath = common.config.get(hostname, "rpath")
+    result = {
+        "hostname": hostname,
+        "file": file,
+        "remote_path": rpath,
+        "algo": algo,
+        "expected_hash": pkg_hash,
+        "actual_hash": None,
+        "status": "unchecked",
+        "cached": False,
+        "message": "",
+        "error": None,
+    }
+    if len(file) == 0 or len(pkg_hash) == 0:
+        return result
+
     if get_hashcache(hostname, file) == pkg_hash:
-        print(f"  - remote package: {file} is found. checksum(cache) is OK.")
-        return True
-    try:
-        val = sw.remote_checksum(
-            common.config.get(hostname, "rpath") + "/" + file, algorithm=algo
+        result["status"] = "ok"
+        result["cached"] = True
+        result["actual_hash"] = pkg_hash
+        result["message"] = (
+            f"  - remote package: {file} is found. checksum(cache) is OK."
         )
+        return result
+
+    sw = SW(dev)
+    try:
+        val = sw.remote_checksum(f"{rpath}/{file}", algorithm=algo)
+        result["actual_hash"] = val
         if val is None:
-            print(f"  - remote package: {file} is not found.")
+            result["status"] = "missing"
+            result["message"] = f"  - remote package: {file} is not found."
         elif val == pkg_hash:
-            print(f"  - remote package: {file} is found. checksum is OK.")
             set_hashcache(hostname, file, val)
-            ret = True
+            result["status"] = "ok"
+            result["message"] = (
+                f"  - remote package: {file} is found. checksum is OK."
+            )
         else:
-            print(f"  - remote package: {file} is found. checksum is BAD. COPY AGAIN!")
-            ret = False
+            result["status"] = "bad"
+            result["message"] = (
+                f"  - remote package: {file} is found. "
+                f"checksum is BAD. COPY AGAIN!"
+            )
     except RpcError as e:
-        logger.error("Unable to remote checksum: {0}".format(e))
+        result["status"] = "error"
+        result["error"] = "RpcError"
+        result["message"] = f"  - remote package: unable to checksum: {e}"
+        logger.error(f"Unable to remote checksum: {e}")
     except Exception as e:
+        result["status"] = "error"
+        result["error"] = type(e).__name__
+        result["message"] = f"  - remote package: checksum error: {e}"
         logger.error(e)
-    del sw
-    return ret
+    finally:
+        del sw
+    return result
 
 
 def list_remote_path(hostname, dev) -> dict:
@@ -765,15 +891,14 @@ def dry_run(hostname, dev) -> dict:
         - ``local_file`` (str): full local path of the expected package.
         - ``planning_hash`` (str): expected checksum from config.
         - ``algo`` (str): checksum algorithm name.
-        - ``local_package`` (bool | None): result of
-          :func:`check_local_package` (True=ok, False=bad, None=missing).
-        - ``remote_package`` (bool | None): result of
-          :func:`check_remote_package`.
-        - ``ok`` (bool): True iff both ``local_package`` and
-          ``remote_package`` are True.
+        - ``local_package`` (dict): nested :func:`check_local_package`
+          result. Inspect ``local_package["status"]`` (``"ok"`` | ...).
+        - ``remote_package`` (dict): nested :func:`check_remote_package`
+          result.
+        - ``ok`` (bool): True iff both nested checks report
+          ``status == "ok"``.
 
-    Note: the nested ``check_local_package`` / ``check_remote_package``
-    helpers still print to stdout in the current refactor step.
+    Does not print.
     """
     logger.debug("dry-run: start")
     model = dev.facts["model"]
@@ -797,7 +922,9 @@ def dry_run(hostname, dev) -> dict:
         "algo": algo,
         "local_package": local,
         "remote_package": remote,
-        "ok": bool(local and remote),
+        "ok": (
+            local["status"] == "ok" and remote["status"] == "ok"
+        ),
     }
 
 
@@ -941,19 +1068,19 @@ def get_pending_version(hostname, dev) -> str:
                         else:
                             pending = None
             except Exception as e:
-                print(e)
+                logger.error(f"get_pending_version: {e}")
                 return None
         else:
-            print("Unknown personality:", dev.facts)
+            logger.error(f"get_pending_version: unknown personality: {dev.facts}")
             return None
-    except RpcError as e:
-        print("Show version failure caused by RpcError:", e)
-        return None
     except RpcTimeoutError as e:
-        print("Show version failure caused by RpcTimeoutError:", e)
+        logger.error(f"get_pending_version: RpcTimeoutError: {e}")
+        return None
+    except RpcError as e:
+        logger.error(f"get_pending_version: RpcError: {e}")
         return None
     except Exception as e:
-        print(e)
+        logger.error(f"get_pending_version: {e}")
         return None
     return pending
 
@@ -1392,7 +1519,9 @@ def reboot(hostname: str, dev, reboot_dt: datetime.datetime) -> dict:
             if common.args.force:
                 logger.debug("force clear reboot")
                 steps.append({"action": "force_clear", "message": "\tforce: clear reboot"})
-                if clear_reboot(dev):
+                clear_result = clear_reboot(dev)
+                steps.append({"action": "clear_reboot", **clear_result})
+                if not clear_result["ok"]:
                     result["code"] = 3
                     result["error"] = "clear_reboot_failed"
                     return result

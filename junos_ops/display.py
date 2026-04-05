@@ -17,15 +17,23 @@
 
 Core functions in :mod:`junos_ops.upgrade`, :mod:`junos_ops.common`, and
 :mod:`junos_ops.rsi` return plain ``dict`` values without printing to
-stdout. This module consumes those dicts and prints human-friendly
-terminal output. It is intentionally separate so that non-CLI callers
-(e.g. junos-mcp) can opt out of all stdout writes simply by not
-importing it.
+stdout. This module consumes those dicts and renders human-friendly
+terminal output.
+
+Two parallel APIs:
+
+- ``format_*(result) -> str`` — return the rendered text as a string
+  without touching stdout. Non-CLI callers (e.g. ``junos-mcp``) use
+  these to build MCP responses without needing ``contextlib.redirect_stdout``.
+
+- ``print_*(result) -> None`` — thin wrappers that print the result of
+  the corresponding ``format_*`` under :data:`_print_lock` so parallel
+  execution (``--workers N``) produces readable, host-atomic output.
+  These are what the CLI (``cmd_*``) uses.
 
 Conventions:
-    - Every function takes a dict and prints to stdout.
-    - Functions acquire :data:`_print_lock` around multi-line writes so
-      parallel execution (``--workers N``) produces readable output.
+    - ``format_*`` is the single source of truth for rendering; every
+      ``print_*`` delegates to its ``format_*`` counterpart.
     - Some result dicts carry live PyEZ / lxml objects (``dev``, ``rpc``)
       that are not JSON-serializable. Display functions ignore those
       keys; programmatic consumers should strip them before serializing.
@@ -38,10 +46,43 @@ from pprint import pformat
 _print_lock = threading.Lock()
 
 
+# -------------------------------------------------------------------
+# Infrastructure helpers
+# -------------------------------------------------------------------
+
+
+def _emit(text: str) -> None:
+    """Acquire the print lock and write ``text`` to stdout.
+
+    ``text`` may span multiple lines; the entire block is emitted
+    atomically so parallel workers do not interleave each other's
+    output. An empty string is skipped so callers do not need to
+    guard against it.
+    """
+    if not text:
+        return
+    with _print_lock:
+        print(text)
+
+
+# -------------------------------------------------------------------
+# Host header / footer / facts
+# -------------------------------------------------------------------
+
+
+def format_host_header(hostname: str) -> str:
+    """Return the ``# hostname`` header line (no trailing newline)."""
+    return f"# {hostname}"
+
+
 def print_host_header(hostname: str) -> None:
     """Print the ``# hostname`` header used by every subcommand."""
-    with _print_lock:
-        print(f"# {hostname}")
+    _emit(format_host_header(hostname))
+
+
+def format_host_footer() -> str:
+    """Return an empty line (the separator used between hosts)."""
+    return ""
 
 
 def print_host_footer() -> None:
@@ -50,46 +91,69 @@ def print_host_footer() -> None:
         print("")
 
 
-def print_connect_error(result: dict) -> None:
-    """Print a NETCONF connection error from ``common.connect`` result.
-
-    Expects ``result["ok"] is False``. Prints ``error_message`` verbatim,
-    preserving the legacy single-line format from the pre-dict implementation.
-    """
-    msg = result.get("error_message")
-    if msg is None:
-        msg = f"connect failed: {result.get('error', 'unknown error')}"
-    with _print_lock:
-        print(msg)
-
-
-def print_read_config_error(result: dict) -> None:
-    """Print a config file read error from ``common.read_config`` result.
-
-    Expects ``result["ok"] is False``.
-    """
-    msg = result.get("error") or "config read failed"
-    with _print_lock:
-        print(msg)
-        print(f"{result.get('path', '')} is not ready")
+def format_facts(hostname: str, facts: dict) -> str:
+    """Return the ``# host`` + pprint(facts) block as a string."""
+    return f"# {hostname}\n{pformat(facts)}\n"
 
 
 def print_facts(hostname: str, facts: dict) -> None:
     """Print device facts (used by ``cmd_facts``)."""
-    with _print_lock:
-        print(f"# {hostname}")
-        pprint_facts(facts)
-        print("")
+    _emit(format_facts(hostname, facts))
 
 
 def pprint_facts(facts: dict) -> None:
-    """Pretty-print ``dev.facts`` — split out so tests can call it directly."""
+    """Pretty-print ``dev.facts`` — kept for backwards compat with tests."""
     print(pformat(facts))
 
 
-def print_version(result: dict) -> None:
-    """Print ``upgrade.show_version`` result in the legacy text format."""
-    lines = []
+# -------------------------------------------------------------------
+# Connection / config errors
+# -------------------------------------------------------------------
+
+
+def format_connect_error(result: dict) -> str:
+    """Return the human-readable message for a failed connect dict."""
+    msg = result.get("error_message")
+    if msg is None:
+        msg = f"connect failed: {result.get('error', 'unknown error')}"
+    return msg
+
+
+def print_connect_error(result: dict) -> None:
+    """Print a NETCONF connection error from ``common.connect`` result."""
+    _emit(format_connect_error(result))
+
+
+def format_read_config_error(result: dict) -> str:
+    """Return the human-readable message for a failed read_config dict."""
+    msg = result.get("error") or "config read failed"
+    path = result.get("path", "")
+    return f"{msg}\n{path} is not ready"
+
+
+def print_read_config_error(result: dict) -> None:
+    """Print a config file read error from ``common.read_config`` result."""
+    _emit(format_read_config_error(result))
+
+
+# -------------------------------------------------------------------
+# show_version
+# -------------------------------------------------------------------
+
+
+def format_version(result: dict) -> str:
+    """Return ``upgrade.show_version`` result in the legacy text format."""
+    lines: list[str] = []
+    # Local/remote package check messages (previously printed directly
+    # from check_local_package / check_remote_package; as of
+    # junos-ops 0.14.1 they are carried in the dict's local_package /
+    # remote_package fields and rendered here instead).
+    local_pkg = result.get("local_package")
+    if isinstance(local_pkg, dict) and local_pkg.get("message"):
+        lines.append(local_pkg["message"])
+    remote_pkg = result.get("remote_package")
+    if isinstance(remote_pkg, dict) and remote_pkg.get("message"):
+        lines.append(remote_pkg["message"])
     lines.append(f"  - hostname: {result['hostname']}")
     lines.append(f"  - model: {result['model']}")
     running = result["running"]
@@ -126,149 +190,193 @@ def print_version(result: dict) -> None:
     rebooting = result.get("reboot_scheduled")
     if rebooting is not None:
         lines.append(f"  - {rebooting}")
-    with _print_lock:
-        for line in lines:
-            print(line)
+    return "\n".join(lines)
 
 
-def print_copy(result: dict) -> None:
-    """Print ``upgrade.copy`` result by walking its ``steps`` list.
+def print_version(result: dict) -> None:
+    """Print ``upgrade.show_version`` result in the legacy text format."""
+    _emit(format_version(result))
 
-    Each step carries a ``message`` field that mirrors the legacy
-    single-line output. Messages with no content are silently skipped.
+
+# -------------------------------------------------------------------
+# copy / rollback / reinstall / load_config
+# -------------------------------------------------------------------
+
+
+def _steps_text(result: dict, actions: set[str] | None = None) -> str:
+    """Join the ``message`` field of each step into one multi-line string.
+
+    :param actions: if given, only include steps whose ``action`` is in
+        this set. If None, include all steps with a message.
     """
-    lines = []
+    lines: list[str] = []
     for step in result.get("steps", []):
+        if actions is not None and step.get("action") not in actions:
+            continue
         msg = step.get("message")
         if msg:
             lines.append(msg)
-    if not lines:
-        return
-    with _print_lock:
-        for line in lines:
-            print(line)
+    return "\n".join(lines)
 
 
-def print_install(result: dict) -> None:
-    """Print ``upgrade.install`` result including nested copy/rollback.
+def format_copy(result: dict) -> str:
+    """Return ``upgrade.copy`` result rendered as multi-line text.
 
-    Walks, in order:
-
-    1. Steps before the rollback (e.g. ``skip`` / ``compare``).
-    2. Nested rollback result, if any.
-    3. Nested copy result, if any (via :func:`print_copy`).
-    4. Remaining steps (rescue_save, sw_install, ...).
+    Walks the ``steps`` list in chronological order and emits each
+    step's ``message``.
     """
-    steps = result.get("steps", [])
-    lines: list[str] = []
+    return _steps_text(result)
 
-    # Pre-rollback steps
-    for step in steps:
-        if step.get("action") in ("skip", "compare", "remote_check"):
-            msg = step.get("message")
-            if msg:
-                lines.append(msg)
-    if lines:
-        with _print_lock:
-            for line in lines:
-                print(line)
 
-    # Nested rollback
-    rollback_result = result.get("rollback_result")
-    if rollback_result:
-        print_rollback(rollback_result)
+def print_copy(result: dict) -> None:
+    """Print ``upgrade.copy`` result by walking its ``steps`` list."""
+    _emit(format_copy(result))
 
-    # Nested copy
-    copy_result = result.get("copy_result")
-    if copy_result:
-        print_copy(copy_result)
 
-    # Post-copy steps (rescue_save, sw_install, ...)
-    post_lines: list[str] = []
-    for step in steps:
-        if step.get("action") in ("rescue_save", "sw_install"):
-            msg = step.get("message")
-            if msg:
-                post_lines.append(msg)
-    if post_lines:
-        with _print_lock:
-            for line in post_lines:
-                print(line)
+def format_rollback(result: dict) -> str:
+    """Return ``upgrade.rollback`` result as a single message block."""
+    return result.get("message") or ""
 
 
 def print_rollback(result: dict) -> None:
-    """Print ``upgrade.rollback`` result.
-
-    Mirrors the legacy single-message behaviour: prints ``message`` as-is
-    (it already contains the XML body on success and the exception text
-    on failure).
-    """
-    msg = result.get("message")
-    if not msg:
-        return
-    with _print_lock:
-        print(msg)
+    """Print ``upgrade.rollback`` result."""
+    _emit(format_rollback(result))
 
 
-def print_reboot(result: dict) -> None:
-    """Print ``upgrade.reboot`` result including nested reinstall output.
-
-    Walks steps up to the ``reinstall_result`` boundary, prints the
-    nested :func:`print_reinstall` output if present, then emits the
-    remaining steps (the actual reboot schedule message).
-    """
-    steps = result.get("steps", [])
-    # Pre-reinstall: existing schedule / force clear / warnings
-    pre_actions = {"existing_schedule", "force_clear"}
-    pre = [s["message"] for s in steps if s.get("action") in pre_actions and s.get("message")]
-    if pre:
-        with _print_lock:
-            for line in pre:
-                print(line)
-
-    reinstall = result.get("reinstall_result")
-    if reinstall:
-        print_reinstall(reinstall)
-
-    post = [
-        s["message"] for s in steps
-        if s.get("action") == "reboot" and s.get("message")
-    ]
-    if post:
-        with _print_lock:
-            for line in post:
-                print(line)
+def format_reinstall(result: dict) -> str:
+    """Return ``upgrade.check_and_reinstall`` result by walking steps."""
+    return _steps_text(result)
 
 
 def print_reinstall(result: dict) -> None:
     """Print ``upgrade.check_and_reinstall`` result by walking steps."""
-    lines = [s["message"] for s in result.get("steps", []) if s.get("message")]
-    if not lines:
-        return
-    with _print_lock:
-        for line in lines:
-            print(line)
+    _emit(format_reinstall(result))
 
 
-def print_dry_run(result: dict) -> None:
-    """Print ``upgrade.dry_run`` result (debug-style summary)."""
+def format_load_config(result: dict) -> str:
+    """Return ``upgrade.load_config`` result by walking its steps list."""
+    return _steps_text(result)
+
+
+def print_load_config(result: dict) -> None:
+    """Print ``upgrade.load_config`` result by walking its steps list."""
+    _emit(format_load_config(result))
+
+
+# -------------------------------------------------------------------
+# install (nested copy/rollback)
+# -------------------------------------------------------------------
+
+
+_INSTALL_PRE_ACTIONS = {"skip", "compare", "remote_check", "remote_missing"}
+_INSTALL_POST_ACTIONS = {"clear_reboot", "rescue_save", "sw_install"}
+
+
+def format_install(result: dict) -> str:
+    """Return ``upgrade.install`` result including nested copy/rollback.
+
+    Walks, in order:
+
+    1. Steps before the rollback (``skip`` / ``compare`` / ``remote_check``).
+    2. Nested ``rollback_result``, if any.
+    3. Nested ``copy_result``, if any.
+    4. Remaining steps (``clear_reboot`` / ``rescue_save`` / ``sw_install``).
+    """
+    parts: list[str] = []
+    pre = _steps_text(result, _INSTALL_PRE_ACTIONS)
+    if pre:
+        parts.append(pre)
+    rollback_result = result.get("rollback_result")
+    if rollback_result:
+        rb = format_rollback(rollback_result)
+        if rb:
+            parts.append(rb)
+    copy_result = result.get("copy_result")
+    if copy_result:
+        cp = format_copy(copy_result)
+        if cp:
+            parts.append(cp)
+    post = _steps_text(result, _INSTALL_POST_ACTIONS)
+    if post:
+        parts.append(post)
+    return "\n".join(parts)
+
+
+def print_install(result: dict) -> None:
+    """Print ``upgrade.install`` result including nested copy/rollback."""
+    _emit(format_install(result))
+
+
+# -------------------------------------------------------------------
+# reboot (nested reinstall)
+# -------------------------------------------------------------------
+
+
+_REBOOT_PRE_ACTIONS = {"existing_schedule", "force_clear", "clear_reboot"}
+
+
+def format_reboot(result: dict) -> str:
+    """Return ``upgrade.reboot`` result including nested reinstall output.
+
+    Walks the pre-reinstall steps (existing schedule, force clear,
+    clear_reboot), then the nested ``reinstall_result`` if any, then
+    the final ``reboot`` step message.
+    """
+    parts: list[str] = []
+    pre = _steps_text(result, _REBOOT_PRE_ACTIONS)
+    if pre:
+        parts.append(pre)
+    reinstall = result.get("reinstall_result")
+    if reinstall:
+        ri = format_reinstall(reinstall)
+        if ri:
+            parts.append(ri)
+    post = _steps_text(result, {"reboot"})
+    if post:
+        parts.append(post)
+    return "\n".join(parts)
+
+
+def print_reboot(result: dict) -> None:
+    """Print ``upgrade.reboot`` result including nested reinstall output."""
+    _emit(format_reboot(result))
+
+
+# -------------------------------------------------------------------
+# dry_run / list_remote / rsi
+# -------------------------------------------------------------------
+
+
+def format_dry_run(result: dict) -> str:
+    """Return ``upgrade.dry_run`` result (debug-style summary)."""
     lines = [
         f"  - hostname: {result['hostname']}",
         f"  - model: {result['model']}",
         f"  - local file: {result['local_file']}",
         f"  - planning hash: {result['planning_hash']}",
         f"  - algo: {result['algo']}",
-        f"  - local_package: {result['local_package']}",
-        f"  - remote_package: {result['remote_package']}",
-        f"  - ok: {result['ok']}",
     ]
-    with _print_lock:
-        for line in lines:
-            print(line)
+    local_pkg = result.get("local_package")
+    if isinstance(local_pkg, dict) and local_pkg.get("message"):
+        lines.append(local_pkg["message"])
+    else:
+        lines.append(f"  - local_package: {local_pkg}")
+    remote_pkg = result.get("remote_package")
+    if isinstance(remote_pkg, dict) and remote_pkg.get("message"):
+        lines.append(remote_pkg["message"])
+    else:
+        lines.append(f"  - remote_package: {remote_pkg}")
+    lines.append(f"  - ok: {result['ok']}")
+    return "\n".join(lines)
 
 
-def print_list_remote(result: dict) -> None:
-    """Print ``upgrade.list_remote_path`` result.
+def print_dry_run(result: dict) -> None:
+    """Print ``upgrade.dry_run`` result (debug-style summary)."""
+    _emit(format_dry_run(result))
+
+
+def format_list_remote(result: dict) -> str:
+    """Return ``upgrade.list_remote_path`` result in ``ls`` / ``ls -l`` format.
 
     Honours the ``format`` field ("short" or "long"). ``long`` mirrors
     ``ls -l`` style and appends a ``total files`` footer; ``short`` lists
@@ -295,29 +403,17 @@ def print_list_remote(result: dict) -> None:
                 )
             )
         lines.append("total files: %d" % (result.get("file_count") or 0))
-    with _print_lock:
-        for line in lines:
-            print(line)
+    return "\n".join(lines)
 
 
-def print_load_config(result: dict) -> None:
-    """Print ``upgrade.load_config`` result by walking its steps list.
-
-    Each step's ``message`` was already shaped to match the legacy
-    single-line output (indentation included), so we just print them
-    in order under the shared lock.
-    """
-    lines = [s["message"] for s in result.get("steps", []) if s.get("message")]
-    if not lines:
-        return
-    with _print_lock:
-        for line in lines:
-            print(line)
+def print_list_remote(result: dict) -> None:
+    """Print ``upgrade.list_remote_path`` result."""
+    _emit(format_list_remote(result))
 
 
-def print_rsi(result: dict) -> None:
-    """Print ``rsi.collect_rsi`` result (one line per file written)."""
-    lines = []
+def format_rsi(result: dict) -> str:
+    """Return ``rsi.collect_rsi`` result (one line per artifact written)."""
+    lines: list[str] = []
     hostname = result.get("hostname", "")
     if result.get("scf"):
         lines.append(f"  {hostname}.SCF done")
@@ -325,11 +421,17 @@ def print_rsi(result: dict) -> None:
         lines.append(f"  {hostname}.RSI done")
     if not result.get("ok") and result.get("error_message"):
         lines.append(f"  {hostname}: {result['error']}: {result['error_message']}")
-    if not lines:
-        return
-    with _print_lock:
-        for line in lines:
-            print(line)
+    return "\n".join(lines)
+
+
+def print_rsi(result: dict) -> None:
+    """Print ``rsi.collect_rsi`` result (one line per file written)."""
+    _emit(format_rsi(result))
+
+
+# -------------------------------------------------------------------
+# show (not yet migrated)
+# -------------------------------------------------------------------
 
 
 def print_show(result: dict) -> None:
