@@ -6,21 +6,26 @@
 
 [English](https://github.com/shigechika/junos-ops/blob/main/README.md)
 
-Juniperデバイスのモデルを自動検出し、JUNOSパッケージを自動更新するツールです。
+Juniper/JUNOS デバイスの運用を NETCONF 経由で自動化する Python CLI です。モデル自動検出付きの upgrade、rollback、reboot、config push、RSI/SCF 収集をサポートします。
+
+> **RSI/SCF とは？** RSI = `request support information`（JTAC 向けサポート情報スナップショット）、SCF = `show configuration | display set`。収集したファイルはそれぞれ `.rsi` / `.scf` 拡張子で保存されるため、本ツールでも略号でそのまま扱っています。
 
 ## 特徴
 
 - デバイスモデルの自動検出とパッケージの自動マッピング
-- SCP転送＋チェックサム検証による安全なパッケージコピー
+- SCP 転送＋チェックサム検証による安全なパッケージコピー
 - インストール前のパッケージ検証（validate）
-- ロールバック対応（MX/EX/SRXモデル別処理）
-- スケジュールリブート
+- ロールバック対応（MX/EX/SRX モデル別処理）
+- スケジュールリブート（ファームウェアインストール後の config 変更を自動検出し、必要なら再インストール）
 - RSI（request support information）/ SCF（show configuration | display set）の並列収集
-- ドライランモード（`--dry-run`）で事前確認
-- ThreadPoolExecutor による並列実行
-- config サブコマンドの並列実行対応（`--workers` で並列数指定）
+- 任意の CLI コマンドを複数ホストで実行（`show` サブコマンド、`RpcTimeoutError` 自動リトライ対応）
+- `config` での設定投入（commit confirmed + コミット後ヘルスチェック: ping / `uptime` NETCONF プローブ / 任意の CLI コマンド）
 - Jinja2 テンプレートによるホスト別設定生成（[詳細](docs/template.md#日本語版)）
-- 設定ファイル（INI形式）によるホスト・パッケージ管理
+- `--tags` によるタグベースのホストフィルタ（AND マッチ）
+- ローカルファームウェア置き場（`lpath`、`~` 展開対応）
+- ドライランモード（`--dry-run`）で事前確認
+- ThreadPoolExecutor による並列実行（`--workers N`）
+- 設定ファイル（INI 形式）によるホスト・パッケージ管理
 
 ## 目次
 
@@ -180,7 +185,8 @@ junos-ops <subcommand> [options] [hostname ...]
 | `version` | running/planning/pendingバージョンとリブート予定を表示 |
 | `reboot --at YYMMDDHHMM` | 指定日時にリブートをスケジュール |
 | `ls [-l]` | リモートパスのファイル一覧 |
-| `config -f FILE [--confirm N] [--no-confirm] [--timeout N]` | set コマンドファイルを適用 |
+| `show COMMAND [--retry N]` / `show -f FILE` | 任意の CLI コマンド（またはコマンドファイル）を複数ホストで実行 |
+| `config -f FILE` | set コマンドファイルを適用（`--confirm` / `--timeout` / `--no-confirm` / `--health-check` / `--no-health-check` の詳細は [docs/config.md](docs/config.md) を参照） |
 | `rsi` | RSI/SCF を並列収集 |
 | （なし） | デバイスファクト（device facts）を表示 |
 

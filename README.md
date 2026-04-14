@@ -6,7 +6,9 @@
 
 [日本語版 / Japanese](https://github.com/shigechika/junos-ops/blob/main/README.ja.md)
 
-A tool for automatic detection of Juniper device models and automated JUNOS package updates.
+A Python CLI to automate Juniper/JUNOS operations over NETCONF: model-aware upgrade, rollback, reboot, config push, and RSI/SCF collection.
+
+> **RSI/SCF?** RSI = `request support information` (the JTAC-style support snapshot), SCF = `show configuration | display set`. Collected files are saved with `.rsi` / `.scf` extensions — hence the shorthand used throughout this tool.
 
 ## Features
 
@@ -14,12 +16,15 @@ A tool for automatic detection of Juniper device models and automated JUNOS pack
 - Safe package copy via SCP with checksum verification
 - Pre-install package validation
 - Rollback support (model-specific handling for MX/EX/SRX)
-- Scheduled reboot
+- Scheduled reboot with automatic config-drift detection and re-install
 - Parallel RSI (request support information) / SCF (show configuration | display set) collection
-- Dry-run mode (`--dry-run`) for pre-flight verification
-- Parallel execution via ThreadPoolExecutor
-- Configuration push with commit confirmed safety (parallel execution supported)
+- Arbitrary CLI command execution across hosts (`show`) with `RpcTimeoutError` retry
+- Configuration push with `commit confirmed` safety and post-commit health checks (ping, `uptime` NETCONF probe, or any CLI command)
 - Jinja2 template support for per-host configuration generation ([details](docs/template.md))
+- Tag-based host filtering (`--tags`) for AND-matched multi-site workflows
+- Local firmware directory (`lpath`) with `~` expansion
+- Dry-run mode (`--dry-run`) for pre-flight verification
+- Parallel execution via ThreadPoolExecutor (`--workers N`)
 - INI-based host and package management
 
 ## Table of Contents
@@ -180,7 +185,8 @@ junos-ops <subcommand> [options] [hostname ...]
 | `version` | Show running/planning/pending versions and reboot schedule |
 | `reboot --at YYMMDDHHMM` | Schedule a reboot at the specified time |
 | `ls [-l]` | List files on the remote path |
-| `config -f FILE [--confirm N] [--no-confirm] [--timeout N]` | Push a set command file to devices |
+| `show COMMAND [--retry N]` / `show -f FILE` | Run an arbitrary CLI command (or file of commands) across devices |
+| `config -f FILE` | Push a set command file (see [docs/config.md](docs/config.md) for `--confirm`, `--timeout`, `--no-confirm`, `--health-check`, `--no-health-check`) |
 | `rsi` | Collect RSI/SCF in parallel |
 | (none) | Show device facts |
 
