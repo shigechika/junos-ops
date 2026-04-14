@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.16.0] - 2026-04-15
+
+### Changed
+- `upgrade._run_health_check()` now returns a structured `dict` (`ok`, `passed_command`, `commands`, `steps`, `message`) and no longer calls `print()`. Missed by the "final print-free pass" in 0.14 (refs [#40](https://github.com/shigechika/junos-ops/issues/40)); junos-mcp's `push_config` tool relies on the new shape, so this is a coordinated bump with [junos-mcp](https://github.com/shigechika/junos-mcp).
+- `upgrade.load_config()` result `["health_check"]` dict now also carries `passed_command` (the command that passed, if any) and `commands` (per-command detail). `ran` / `commands_tried` / `passed` keys unchanged.
+
 ## [0.15.0] - 2026-04-14
 
 ### Added
