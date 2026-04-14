@@ -44,6 +44,11 @@ else:
         format='%(asctime)s [%(levelname)s] %(message)s',
         handlers=[logging.StreamHandler(sys.stdout)]
     )
+    # ncclient / paramiko / junos-eznc emit every NETCONF and SSH frame
+    # at INFO. Without an explicit logging.ini, our INFO root would drown
+    # the user in protocol traffic, so raise these to WARNING by default.
+    for noisy in ("ncclient", "paramiko", "jnpr.junos"):
+        logging.getLogger(noisy).setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 
 from junos_ops import __version__ as version  # noqa: E402
@@ -339,7 +344,11 @@ def _check_host(hostname) -> dict:
         # いる、または --remote が指定されていない場合は facts は不要なので
         # gather_facts=False で開いて handshake のみにする。
         need_facts = do_remote and model is None
-        conn = common.connect(hostname, gather_facts=need_facts)
+        # auto_probe=5: 不通ホストを TCP-level の 5 秒で fail させ、OS
+        # デフォルトの ~60-120 秒 SYN タイムアウトで全体が引きずられないように。
+        conn = common.connect(
+            hostname, gather_facts=need_facts, auto_probe=5
+        )
         if conn["ok"]:
             dev = conn["dev"]
             result["connect"] = {

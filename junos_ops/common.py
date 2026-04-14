@@ -82,7 +82,9 @@ def read_config() -> dict:
     }
 
 
-def connect(hostname: str, *, gather_facts: bool = True) -> dict:
+def connect(
+    hostname: str, *, gather_facts: bool = True, auto_probe: int = 0
+) -> dict:
     """Open a NETCONF connection to a device.
 
     :param hostname: config section name (host identifier).
@@ -92,6 +94,11 @@ def connect(hostname: str, *, gather_facts: bool = True) -> dict:
         for fast reachability-only probes such as ``check --connect``;
         callers that genuinely need ``dev.facts`` (most subcommands)
         should leave the default True.
+    :param auto_probe: when > 0, do a TCP-level reachability probe
+        with this timeout (seconds) before attempting NETCONF/SSH
+        negotiation. Lets unreachable hosts fail fast instead of
+        hanging on the OS-default TCP connect timeout (60–120 s).
+        Default 0 keeps the existing PyEZ behaviour.
     :return: dict with keys:
 
         - ``hostname`` (str): the config section name passed in.
