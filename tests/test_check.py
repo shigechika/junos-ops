@@ -227,7 +227,8 @@ class TestCheckLocalInventory:
         mock_chk.assert_called_once_with("DEFAULT", "EX2300-24T")
         assert len(rows) == 1
 
-    def test_format_inventory(self):
+    def test_format_inventory_with_lpath_header(self):
+        """Shared lpath is shown once above the table, not repeated per row."""
         rows = [
             {
                 "model": "ex2300-24t",
@@ -246,12 +247,29 @@ class TestCheckLocalInventory:
             },
         ]
         out = display.format_check_local_inventory(rows)
-        assert "model" in out.splitlines()[0]
+        lines = out.splitlines()
+        assert lines[0] == "lpath: /opt/fw"
+        assert lines[1].startswith("model")
+        # local_file column is dropped.
+        assert "local_file" not in out
         assert "ok(cached)" in out
         assert "missing" in out
-        # Detail line for missing entry surfaces the filename.
-        assert "mx5-t:" in out
-        assert "is not found" in out
+        assert "mx5-t:" in out  # detail line
+
+    def test_format_inventory_without_lpath(self):
+        """When lpath is unset (local_file == file), no lpath header is emitted."""
+        rows = [
+            {
+                "model": "ex2300-24t",
+                "file": "junos-arm.tgz",
+                "local_file": "junos-arm.tgz",
+                "status": "ok",
+                "cached": False,
+            },
+        ]
+        out = display.format_check_local_inventory(rows)
+        assert not out.startswith("lpath:")
+        assert out.splitlines()[0].startswith("model")
 
 
 class TestFormatCheckTable:

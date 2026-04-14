@@ -556,10 +556,13 @@ def format_check_local_inventory(rows: list[dict]) -> str:
     """Render ``check --local`` inventory results (one row per model).
 
     ``rows`` come from :func:`cli._check_local_inventory`. Columns:
-    ``model`` / ``file`` / ``status`` / ``local_file``. Failure detail
-    messages (bad / missing / error) are appended below the table.
+    ``model`` / ``file`` / ``status``. When any row resolves its
+    firmware under a non-empty ``lpath`` directory, that prefix is
+    shown once above the table (``lpath: /path``) instead of being
+    duplicated into every row. Failure detail messages (bad / missing
+    / error) are appended below.
     """
-    headers = ["model", "file", "status", "local_file"]
+    headers = ["model", "file", "status"]
     body: list[list[str]] = []
     for r in rows:
         status = r.get("status", "-")
@@ -569,7 +572,6 @@ def format_check_local_inventory(rows: list[dict]) -> str:
             r.get("model") or "-",
             r.get("file") or "-",
             status,
-            r.get("local_file") or "-",
         ])
 
     widths = [
@@ -580,7 +582,22 @@ def format_check_local_inventory(rows: list[dict]) -> str:
     def _fmt_row(cells: list[str]) -> str:
         return "  ".join(c.ljust(widths[i]) for i, c in enumerate(cells)).rstrip()
 
-    lines = [_fmt_row(headers), _fmt_row(["-" * w for w in widths])]
+    lines: list[str] = []
+    # Surface a single lpath header instead of repeating it per row.
+    lpaths = {
+        r.get("local_file", "").rsplit("/", 1)[0]
+        for r in rows
+        if r.get("local_file") and "/" in r.get("local_file", "")
+        and r.get("local_file") != r.get("file")
+    }
+    if len(lpaths) == 1:
+        lines.append(f"lpath: {lpaths.pop()}")
+    elif len(lpaths) > 1:
+        # Rare: host-section overrides mix lpaths — fall back to per-row.
+        lines.extend(f"lpath[{r.get('model')}]: {r.get('local_file')}" for r in rows)
+
+    lines.append(_fmt_row(headers))
+    lines.append(_fmt_row(["-" * w for w in widths]))
     lines.extend(_fmt_row(r) for r in body)
 
     detail_lines: list[str] = []
