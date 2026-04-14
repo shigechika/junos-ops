@@ -334,7 +334,12 @@ def _check_host(hostname) -> dict:
 
     dev = None
     if do_connect or do_remote:
-        conn = common.connect(hostname)
+        # PyEZ の Device.open() は gather_facts=True がデフォルトで、開いた
+        # 瞬間に chassis inventory 等 ~10 RPC を流す。model がもう確定して
+        # いる、または --remote が指定されていない場合は facts は不要なので
+        # gather_facts=False で開いて handshake のみにする。
+        need_facts = do_remote and model is None
+        conn = common.connect(hostname, gather_facts=need_facts)
         if conn["ok"]:
             dev = conn["dev"]
             result["connect"] = {
@@ -342,9 +347,7 @@ def _check_host(hostname) -> dict:
                 "message": "connected",
                 "error": None,
             }
-            # facts 取得は ~10 RPC と重い。--remote でモデル解決が必要な
-            # 場合だけ実行する（--connect 単独ではスキップして高速化）。
-            if model is None and do_remote:
+            if need_facts:
                 try:
                     model = dev.facts.get("model")
                     if model:
