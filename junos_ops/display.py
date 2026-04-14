@@ -515,7 +515,10 @@ def format_check_table(
     lines = [_fmt_row(headers), _fmt_row(["-" * w for w in widths])]
     lines.extend(_fmt_row(r) for r in body)
 
-    # Surface detailed failure messages below the table.
+    # Surface detailed failure messages below the table. ``missing`` is
+    # already obvious from the status + file columns above, so only
+    # ``bad`` (checksum mismatch) and ``error`` (recipe lookup, RPC,
+    # etc.) earn a detail line; connect failures always do.
     detail_lines: list[str] = []
     for row in rows:
         host = row.get("hostname") or "?"
@@ -525,7 +528,7 @@ def format_check_table(
             detail_lines.append(f"  {host}: connect: {msg}")
         for key in ("local", "remote"):
             sub = row.get(key)
-            if sub and sub.get("status") in ("bad", "missing", "error"):
+            if sub and sub.get("status") in ("bad", "error"):
                 detail_lines.append(
                     f"  {host}: {key}: {sub.get('message', '').lstrip()}"
                 )
@@ -600,9 +603,12 @@ def format_check_local_inventory(rows: list[dict]) -> str:
     lines.append(_fmt_row(["-" * w for w in widths]))
     lines.extend(_fmt_row(r) for r in body)
 
+    # ``missing`` rows are already self-explanatory from the file +
+    # status columns; only ``bad`` / ``error`` carry information not
+    # already in the table, so reserve detail lines for those.
     detail_lines: list[str] = []
     for r in rows:
-        if r.get("status") in ("bad", "missing", "error"):
+        if r.get("status") in ("bad", "error"):
             msg = (r.get("message") or "").lstrip()
             detail_lines.append(f"  {r.get('model')}: {msg}")
     if detail_lines:

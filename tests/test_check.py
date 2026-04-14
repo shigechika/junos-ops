@@ -306,8 +306,9 @@ class TestCheckLocalInventory:
         # local_file column is dropped.
         assert "local_file" not in out
         assert "ok(cached)" in out
-        assert "missing" in out
-        assert "mx5-t:" in out  # detail line
+        assert "missing" in out  # status column shows it
+        # 'missing' has no detail line (status + file column already convey it).
+        assert "mx5-t:" not in out
 
     def test_format_inventory_without_lpath(self):
         """When lpath is unset (local_file == file), no lpath header is emitted."""
@@ -397,9 +398,10 @@ class TestFormatCheckTable:
             rows, show_connect=True, show_local=True, show_remote=True
         )
         assert "ok(cached)" in out
-        assert "missing" in out
+        assert "missing" in out  # status column shows it
         assert "jinstall-ppc.tgz" in out
-        assert "rt2: remote:" in out  # detail line
+        # 'missing' alone no longer triggers a detail line (redundant).
+        assert "rt2: remote:" not in out
 
     def test_empty_rows_renders_header(self):
         out = display.format_check_table(

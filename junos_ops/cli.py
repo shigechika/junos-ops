@@ -455,9 +455,20 @@ def _check_host(hostname) -> dict:
     try:
         if do_remote:
             if dev is not None and model:
-                result["remote"] = upgrade.check_remote_package_by_model(
-                    hostname, dev, model
-                )
+                try:
+                    result["remote"] = upgrade.check_remote_package_by_model(
+                        hostname, dev, model
+                    )
+                except Exception as e:
+                    # config に <model>.file / .hash が無い等の lookup 失敗を
+                    # 接続失敗扱いにすると誤解を招くので、unchecked で記録。
+                    result["remote"] = {
+                        "status": "unchecked",
+                        "message": f"recipe lookup failed: {e}",
+                        "file": None,
+                        "cached": False,
+                        "error": type(e).__name__,
+                    }
             else:
                 reason = "not connected" if dev is None else "model unknown"
                 result["remote"] = {
