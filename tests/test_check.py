@@ -135,7 +135,6 @@ class TestCheckHostWorker:
         ):
             result = cli._check_host("test-host")
         assert result["connect"]["ok"] is True
-        assert result["local"] is None
         assert result["remote"] is None
         assert result["model"] == "EX2300-24T"
         assert result["model_source"] == "device"
@@ -158,44 +157,6 @@ class TestCheckHostWorker:
         assert result["connect"]["ok"] is False
         assert result["connect"]["error"] == "ConnectTimeoutError"
         assert result["model"] is None
-
-    def test_local_only_uses_explicit_model(self, mock_config):
-        """--local --model MODEL skips NETCONF entirely."""
-        common.args = _make_check_args(
-            check_local=True, check_model="EX2300-24T"
-        )
-        with patch.object(common, "connect") as mock_conn, patch.object(
-            junos_upgrade_mod,
-            "check_local_package_by_model",
-            return_value={"status": "ok", "file": "pkg", "cached": False},
-        ) as mock_chk:
-            result = cli._check_host("test-host")
-        mock_conn.assert_not_called()
-        mock_chk.assert_called_once_with("test-host", "EX2300-24T")
-        assert result["local"]["status"] == "ok"
-        assert result["model_source"] == "cli"
-
-    def test_local_only_from_config_model(self, mock_config):
-        """--local reads model from config.ini [host].model when --model absent."""
-        common.config.set("test-host", "model", "EX2300-24T")
-        common.args = _make_check_args(check_local=True)
-        with patch.object(common, "connect") as mock_conn, patch.object(
-            junos_upgrade_mod,
-            "check_local_package_by_model",
-            return_value={"status": "ok", "file": "pkg", "cached": False},
-        ):
-            result = cli._check_host("test-host")
-        mock_conn.assert_not_called()
-        assert result["model_source"] == "config"
-        assert result["model"] == "EX2300-24T"
-
-    def test_local_unchecked_when_model_unknown(self, mock_config):
-        common.args = _make_check_args(check_local=True)
-        with patch.object(common, "connect") as mock_conn:
-            result = cli._check_host("test-host")
-        mock_conn.assert_not_called()
-        assert result["local"]["status"] == "unchecked"
-        assert "model unknown" in result["local"]["message"]
 
     def test_remote_unchecked_when_connect_fails(self, mock_config):
         common.args = _make_check_args(
@@ -221,6 +182,76 @@ class TestCheckHostWorker:
 # -------------------------------------------------------------------
 # display.format_check_table
 # -------------------------------------------------------------------
+
+
+class TestCheckLocalInventory:
+    def test_iterates_default_models(self, mock_config, tmp_path):
+        """All `<model>.file` pairs in DEFAULT are checked, regardless of host list."""
+        common.config.set("DEFAULT", "lpath", str(tmp_path))
+        common.config.set("DEFAULT", "ex4300-32f.file", "pkg-ex4300.tgz")
+        common.config.set("DEFAULT", "ex4300-32f.hash", "deadbeef")
+        common.args = _make_check_args(check_local=True)
+
+        with patch.object(
+            junos_upgrade_mod,
+            "check_local_package_by_model",
+            side_effect=lambda h, m: {
+                "file": f"pkg-{m}.tgz",
+                "local_file": f"{tmp_path}/pkg-{m}.tgz",
+                "status": "missing",
+                "cached": False,
+                "actual_hash": None,
+                "expected_hash": "deadbeef",
+                "message": f"  - local package: {tmp_path}/pkg-{m}.tgz is not found.",
+                "error": None,
+            },
+        ) as mock_chk:
+            rows = cli._check_local_inventory()
+
+        models_checked = [call.args[1] for call in mock_chk.call_args_list]
+        assert "ex2300-24t" in models_checked
+        assert "ex4300-32f" in models_checked
+        assert all(r["status"] == "missing" for r in rows)
+        # Section passed to the core is always "DEFAULT" in inventory mode.
+        assert all(call.args[0] == "DEFAULT" for call in mock_chk.call_args_list)
+
+    def test_model_filter(self, mock_config):
+        """--model X restricts inventory to the requested model only."""
+        common.args = _make_check_args(check_local=True, check_model="EX2300-24T")
+        with patch.object(
+            junos_upgrade_mod,
+            "check_local_package_by_model",
+            return_value={"status": "ok", "file": "pkg", "cached": False},
+        ) as mock_chk:
+            rows = cli._check_local_inventory()
+        mock_chk.assert_called_once_with("DEFAULT", "EX2300-24T")
+        assert len(rows) == 1
+
+    def test_format_inventory(self):
+        rows = [
+            {
+                "model": "ex2300-24t",
+                "file": "junos-arm.tgz",
+                "local_file": "/opt/fw/junos-arm.tgz",
+                "status": "ok",
+                "cached": True,
+            },
+            {
+                "model": "mx5-t",
+                "file": "jinstall-ppc.tgz",
+                "local_file": "/opt/fw/jinstall-ppc.tgz",
+                "status": "missing",
+                "cached": False,
+                "message": "  - local package: /opt/fw/jinstall-ppc.tgz is not found.",
+            },
+        ]
+        out = display.format_check_local_inventory(rows)
+        assert "model" in out.splitlines()[0]
+        assert "ok(cached)" in out
+        assert "missing" in out
+        # Detail line for missing entry surfaces the filename.
+        assert "mx5-t:" in out
+        assert "is not found" in out
 
 
 class TestFormatCheckTable:

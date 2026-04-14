@@ -550,3 +550,51 @@ def print_check_table(
         show_local=show_local,
         show_remote=show_remote,
     ))
+
+
+def format_check_local_inventory(rows: list[dict]) -> str:
+    """Render ``check --local`` inventory results (one row per model).
+
+    ``rows`` come from :func:`cli._check_local_inventory`. Columns:
+    ``model`` / ``file`` / ``status`` / ``local_file``. Failure detail
+    messages (bad / missing / error) are appended below the table.
+    """
+    headers = ["model", "file", "status", "local_file"]
+    body: list[list[str]] = []
+    for r in rows:
+        status = r.get("status", "-")
+        if status == "ok" and r.get("cached"):
+            status = "ok(cached)"
+        body.append([
+            r.get("model") or "-",
+            r.get("file") or "-",
+            status,
+            r.get("local_file") or "-",
+        ])
+
+    widths = [
+        max(len(headers[i]), *(len(b[i]) for b in body)) if body else len(headers[i])
+        for i in range(len(headers))
+    ]
+
+    def _fmt_row(cells: list[str]) -> str:
+        return "  ".join(c.ljust(widths[i]) for i, c in enumerate(cells)).rstrip()
+
+    lines = [_fmt_row(headers), _fmt_row(["-" * w for w in widths])]
+    lines.extend(_fmt_row(r) for r in body)
+
+    detail_lines: list[str] = []
+    for r in rows:
+        if r.get("status") in ("bad", "missing", "error"):
+            msg = (r.get("message") or "").lstrip()
+            detail_lines.append(f"  {r.get('model')}: {msg}")
+    if detail_lines:
+        lines.append("")
+        lines.extend(detail_lines)
+
+    return "\n".join(lines)
+
+
+def print_check_local_inventory(rows: list[dict]) -> None:
+    """Print ``check --local`` inventory table."""
+    _emit(format_check_local_inventory(rows))

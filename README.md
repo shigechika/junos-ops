@@ -380,19 +380,39 @@ rt1.example.jp: software validate package-result: 0
 
 ### check (pre-flight verification)
 
-Unified pre-flight checks across NETCONF reachability and firmware hashes. Output is an aligned table; exit code is non-zero if any host fails. Default (no flag) runs `--connect` only.
+Unified pre-flight checks across NETCONF reachability and firmware hashes. Exit code is non-zero if any check fails. Default (no flag) runs `--connect` only.
+
+`--local` is **inventory-mode** and ignores hostnames — it iterates every `<model>.file` / `<model>.hash` pair in `config.ini` and verifies the files on the staging server. No NETCONF required:
 
 ```
-% junos-ops check --all rt1.example.jp rt2.example.jp
-hostname         connect  local       remote      model     file
----------------  -------  ----------  ----------  --------  -----------------------------------
-rt1.example.jp   ok       ok(cached)  ok          MX5-T     jinstall-ppc-18.4R3-S10-signed.tgz
-rt2.example.jp   ok       ok          missing     MX5-T     jinstall-ppc-18.4R3-S10-signed.tgz
+% junos-ops check --local
+model            file                                                        status      local_file
+---------------  ----------------------------------------------------------  ----------  ----------------------------------------------------------------------
+ex2300-24t       junos-arm-32-23.4R2-S7.4.tgz                                ok          /opt/firmware/junos-arm-32-23.4R2-S7.4.tgz
+ex3400-24t       junos-arm-32-23.4R2-S7.4.tgz                                ok(cached)  /opt/firmware/junos-arm-32-23.4R2-S7.4.tgz
+ex4300-32f       jinstall-ex-4300-21.4R3-S12.2-signed.tgz                    ok          /opt/firmware/jinstall-ex-4300-21.4R3-S12.2-signed.tgz
+mx5-t            jinstall-ppc-21.2R3-S8.5-signed.tgz                         missing     /opt/firmware/jinstall-ppc-21.2R3-S8.5-signed.tgz
+
+  mx5-t: - local package: /opt/firmware/jinstall-ppc-21.2R3-S8.5-signed.tgz is not found.
+```
+
+Use `--model M` to restrict the inventory to a single model.
+
+`--connect` / `--remote` (and `--all`) are **per-host** and use the specified hostnames (or every host in `config.ini`, optionally filtered by `--tags`). `--remote` doubles as a "did the SCP copy fully land" check between `copy` and `install`:
+
+```
+% junos-ops check --connect --remote rt1.example.jp rt2.example.jp
+hostname         connect  remote      model     file
+---------------  -------  ----------  --------  -----------------------------------
+rt1.example.jp   ok       ok          MX5-T     jinstall-ppc-18.4R3-S10-signed.tgz
+rt2.example.jp   ok       missing     MX5-T     jinstall-ppc-18.4R3-S10-signed.tgz
 
   rt2.example.jp: remote: - remote package: jinstall-ppc-18.4R3-S10-signed.tgz is not found.
 ```
 
-`--local` works offline (no NETCONF) — useful for verifying a staging server holds every firmware file before you start a large rollout. Provide the model via `--model MX5-T` or add `model = MX5-T` to each host section in `config.ini`. `--remote` doubles as a "did the SCP copy fully land" check between `copy` and `install`.
+When `--connect` / `--remote` need to resolve a model and it was not supplied via `--model`, they fall back to `dev.facts["model"]` from the live device, or to an optional `model = MX5-T` key added to the host section in `config.ini`.
+
+`--all` runs both: the inventory table is printed first, then the per-host table.
 
 ### rsi (parallel RSI/SCF collection)
 

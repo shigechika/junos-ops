@@ -302,15 +302,13 @@ def cmd_config(hostname) -> int:
 
 
 def _check_host(hostname) -> dict:
-    """Worker for the ``check`` subcommand.
+    """Worker for the ``check`` subcommand (per-host checks).
 
-    Runs the requested subset of pre-flight checks (connect / local /
-    remote) against a single host and returns a result dict for the
-    display layer to render as a table row. Never raises — unexpected
-    exceptions are captured as ``connect`` errors.
+    Handles ``--connect`` and ``--remote`` against a single host.
+    ``--local`` is inventory-based and is processed separately by
+    :func:`_check_local_inventory`; this worker ignores it.
     """
     do_connect = common.args.check_connect
-    do_local = common.args.check_local
     do_remote = common.args.check_remote
     explicit_model = getattr(common.args, "check_model", None)
 
@@ -319,7 +317,6 @@ def _check_host(hostname) -> dict:
         "model": None,
         "model_source": None,
         "connect": None,
-        "local": None,
         "remote": None,
     }
 
@@ -335,7 +332,6 @@ def _check_host(hostname) -> dict:
         except Exception:
             pass
 
-    # Connect is required for --remote; always run when --connect is set.
     dev = None
     if do_connect or do_remote:
         conn = common.connect(hostname)
@@ -364,18 +360,6 @@ def _check_host(hostname) -> dict:
     result["model_source"] = source
 
     try:
-        if do_local:
-            if model:
-                result["local"] = upgrade.check_local_package_by_model(
-                    hostname, model
-                )
-            else:
-                result["local"] = {
-                    "status": "unchecked",
-                    "message": "model unknown (pass --model or add `model =` to config.ini)",
-                    "file": None,
-                    "cached": False,
-                }
         if do_remote:
             if dev is not None and model:
                 result["remote"] = upgrade.check_remote_package_by_model(
@@ -397,6 +381,52 @@ def _check_host(hostname) -> dict:
                 pass
 
     return result
+
+
+def _check_local_inventory() -> list[dict]:
+    """Inventory-mode ``check --local``: iterate model→file map in ``config.ini``.
+
+    Ignores hostnames entirely — the local firmware map is an attribute
+    of the staging server, not the devices. Verifies each model's
+    ``<model>.file`` against its ``<model>.hash``, filtered by
+    ``--model`` if supplied. Uses ``"DEFAULT"`` as the config section
+    so DEFAULT-level ``lpath`` / ``hashalgo`` apply.
+    """
+    filter_model = getattr(common.args, "check_model", None)
+    if filter_model:
+        models = [filter_model]
+    else:
+        models = upgrade.iter_configured_models()
+
+    rows: list[dict] = []
+    for model in models:
+        try:
+            result = upgrade.check_local_package_by_model("DEFAULT", model)
+        except Exception as e:
+            rows.append({
+                "model": model,
+                "file": None,
+                "local_file": None,
+                "status": "error",
+                "cached": False,
+                "actual_hash": None,
+                "expected_hash": None,
+                "message": f"config lookup failed: {e}",
+                "error": type(e).__name__,
+            })
+            continue
+        rows.append({
+            "model": model,
+            "file": result.get("file"),
+            "local_file": result.get("local_file"),
+            "status": result.get("status"),
+            "cached": result.get("cached"),
+            "actual_hash": result.get("actual_hash"),
+            "expected_hash": result.get("expected_hash"),
+            "message": result.get("message"),
+            "error": result.get("error"),
+        })
+    return rows
 
 
 def cmd_ls(hostname) -> int:
@@ -739,30 +769,44 @@ def main():
         else:
             common.args.workers = 1
 
-    # check サブコマンドは table 出力＋exit code 集計を専用処理
+    # check サブコマンドは専用処理（local はインベントリ、connect/remote は per-host）
     if args.subcommand == "check":
-        results = common.run_parallel(
-            _check_host, targets, max_workers=common.args.workers
-        )
-        rows = [results[t] for t in targets if t in results]
-        display.print_check_table(
-            rows,
-            show_connect=common.args.check_connect,
-            show_local=common.args.check_local,
-            show_remote=common.args.check_remote,
-        )
         rc = 0
-        for row in rows:
-            if not isinstance(row, dict):
-                rc = 1
-                continue
-            conn = row.get("connect")
-            if conn is not None and not conn.get("ok"):
-                rc = 1
-            for key in ("local", "remote"):
-                sub = row.get(key)
+
+        # --local: staging server 側のファームウェア棚卸し（ホスト非依存）
+        if common.args.check_local:
+            inventory = _check_local_inventory()
+            display.print_check_local_inventory(inventory)
+            for row in inventory:
+                if row.get("status") in ("bad", "missing", "error"):
+                    rc = 1
+
+        # --connect / --remote: ホスト単位でチェック
+        if common.args.check_connect or common.args.check_remote:
+            if common.args.check_local:
+                # 2 つ目のテーブルの前にブランク行
+                print("")
+            results = common.run_parallel(
+                _check_host, targets, max_workers=common.args.workers
+            )
+            rows = [results[t] for t in targets if t in results]
+            display.print_check_table(
+                rows,
+                show_connect=common.args.check_connect,
+                show_local=False,
+                show_remote=common.args.check_remote,
+            )
+            for row in rows:
+                if not isinstance(row, dict):
+                    rc = 1
+                    continue
+                conn = row.get("connect")
+                if conn is not None and not conn.get("ok"):
+                    rc = 1
+                sub = row.get("remote")
                 if sub and sub.get("status") in ("bad", "missing", "error"):
                     rc = 1
+
         logger.debug("end")
         return rc
 

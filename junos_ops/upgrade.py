@@ -669,6 +669,20 @@ def set_hashcache(hostname, file, value):
         common.config.set(hostname, file + "hashcache", value)
 
 
+def iter_configured_models() -> list[str]:
+    """Enumerate unique model names with ``<model>.file`` in the DEFAULT section.
+
+    Used by ``check --local`` inventory mode to walk the firmware map
+    without needing a host list. Returns lowercase names (configparser
+    lowercases keys); display rendering preserves this.
+    """
+    models: set[str] = set()
+    for key in common.config.defaults():
+        if key.endswith(".file"):
+            models.add(key[: -len(".file")])
+    return sorted(models)
+
+
 def _compute_local_checksum(path: str, algo: str) -> str:
     """Compute a file checksum using hashlib (no PyEZ/device required).
 

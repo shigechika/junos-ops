@@ -10,9 +10,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 ## [0.15.0] - 2026-04-14
 
 ### Added
-- **`check` subcommand ([#41](https://github.com/shigechika/junos-ops/issues/41)): unified pre-flight verification across NETCONF reachability and firmware hash.** Sub-flags: `--connect` (NETCONF + facts probe), `--local` (local firmware checksum, no NETCONF required), `--remote` (device-side checksum, confirms SCP copy completed), `--all` (shorthand for all three). Output is an aligned table with one row per host; exit code is non-zero if any host has `fail` / `bad` / `missing` / `error`. Default (no flag) is `--connect` — fills the previously-awkward "just verify reachability" gap.
-  - `--model MODEL` override, or optional `model = MX5-T` key per host in `config.ini`, so `--local` works entirely offline against a staging server.
-  - Model resolution order: `--model` > `config.ini` `[host].model` > `dev.facts["model"]` (only when connected).
+- **`check` subcommand ([#41](https://github.com/shigechika/junos-ops/issues/41)): unified pre-flight verification across NETCONF reachability and firmware hash.**
+  - `--local` is **inventory-based** and ignores hostnames — it iterates every `<model>.file` / `<model>.hash` pair in `config.ini` and verifies the files on the staging server. No NETCONF connection required. `--model M` restricts the inventory to a single model.
+  - `--connect` (NETCONF + facts probe) and `--remote` (device-side checksum, doubles as SCP copy verification) are **per-host** and use the supplied hostnames or `--tags` filter.
+  - `--all` runs both modes: the inventory table is printed first, then the per-host table.
+  - Default (no flag) is `--connect` — fills the previously-awkward "just verify reachability" gap.
+  - Exit code is non-zero if any row has `fail` / `bad` / `missing` / `error`.
+  - Model resolution for per-host checks: `--model` > `config.ini` `[host].model` (new optional key) > `dev.facts["model"]` (only when connected).
 - `upgrade.check_local_package_by_model(hostname, model)` — device-less local checksum helper. Uses `hashlib` directly (no PyEZ `SW` dependency). The existing `check_local_package(hostname, dev)` is now a thin wrapper that resolves the model from `dev.facts` and delegates to this new core.
 - `upgrade.check_remote_package_by_model(hostname, dev, model)` — companion by-model variant for remote checks (same semantics, model supplied by caller).
 - `display.format_check_table(rows, *, show_connect, show_local, show_remote)` / `print_check_table(...)` — table renderer shared by the CLI and any non-CLI caller (e.g. future junos-mcp tool).
