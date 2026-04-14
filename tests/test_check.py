@@ -118,10 +118,12 @@ def _make_check_args(**overrides):
 
 
 class TestCheckHostWorker:
-    def test_connect_only_ok(self, mock_config):
+    def test_connect_only_ok_skips_facts(self, mock_config):
+        """--connect alone does NOT access dev.facts (facts collection ~10 RPCs)."""
         common.args = _make_check_args(check_connect=True)
         mock_dev = MagicMock()
-        mock_dev.facts = {"model": "EX2300-24T"}
+        # If facts were accessed, returning a dict via MagicMock would still
+        # succeed; the assertion is on the attribute access count instead.
         with patch.object(
             common, "connect",
             return_value={
@@ -136,9 +138,35 @@ class TestCheckHostWorker:
             result = cli._check_host("test-host")
         assert result["connect"]["ok"] is True
         assert result["remote"] is None
+        # --connect only: model is NOT fetched from facts.
+        assert result["model"] is None
+        assert result["model_source"] is None
+        mock_dev.facts.get.assert_not_called()
+        mock_dev.close.assert_called_once()
+
+    def test_connect_plus_remote_fetches_model_from_facts(self, mock_config):
+        """--remote needs the model → facts access is allowed."""
+        common.args = _make_check_args(check_connect=True, check_remote=True)
+        mock_dev = MagicMock()
+        mock_dev.facts = {"model": "EX2300-24T"}
+        with patch.object(
+            common, "connect",
+            return_value={
+                "hostname": "test-host",
+                "host": "192.0.2.1",
+                "ok": True,
+                "dev": mock_dev,
+                "error": None,
+                "error_message": None,
+            },
+        ), patch.object(
+            junos_upgrade_mod,
+            "check_remote_package_by_model",
+            return_value={"status": "ok", "file": "pkg", "cached": False},
+        ):
+            result = cli._check_host("test-host")
         assert result["model"] == "EX2300-24T"
         assert result["model_source"] == "device"
-        mock_dev.close.assert_called_once()
 
     def test_connect_fail(self, mock_config):
         common.args = _make_check_args(check_connect=True)

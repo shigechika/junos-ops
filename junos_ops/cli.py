@@ -342,7 +342,9 @@ def _check_host(hostname) -> dict:
                 "message": "connected",
                 "error": None,
             }
-            if model is None:
+            # facts 取得は ~10 RPC と重い。--remote でモデル解決が必要な
+            # 場合だけ実行する（--connect 単独ではスキップして高速化）。
+            if model is None and do_remote:
                 try:
                     model = dev.facts.get("model")
                     if model:
@@ -470,7 +472,7 @@ def main():
     )
     parent.add_argument(
         "--workers", type=int, default=None,
-        help="parallel workers (default: 1 for upgrade, 20 for rsi)",
+        help="parallel workers (default: 1 for upgrade, 20 for rsi/check)",
     )
     parent.add_argument(
         "--tags", type=str, default=None,
@@ -764,7 +766,8 @@ def main():
 
     # workers のデフォルト値設定
     if common.args.workers is None:
-        if args.subcommand == "rsi":
+        if args.subcommand in ("rsi", "check"):
+            # I/O バウンドかつ副作用なしなので並列化しても安全
             common.args.workers = 20
         else:
             common.args.workers = 1
