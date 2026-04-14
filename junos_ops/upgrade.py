@@ -1636,58 +1636,134 @@ def yymmddhhmm_type(dt_str: str) -> datetime.datetime:
         )
 
 
-def _run_health_check(hostname, dev, health_cmds) -> bool:
+def _run_health_check(hostname, dev, health_cmds) -> dict:
     """Run health check commands after commit confirmed.
 
-    Try each command in order. Pass if any succeeds.
+    Try each command in order. Overall passes if any command succeeds.
+    An "uptime" command string is treated as a special keyword and
+    runs a NETCONF ``get-system-uptime-information`` RPC instead of
+    issuing ``dev.cli("uptime")``.
 
-    :param health_cmds: list of CLI commands or "rpc" keyword to try.
-    :return: True on failure (all commands failed), False on success.
+    :param health_cmds: list of CLI commands or the ``uptime`` keyword
+        to try.
+    :return: dict with keys:
+
+        - ``ok`` (bool): True iff at least one command passed.
+        - ``passed_command`` (str | None): the command that succeeded,
+          or None when every attempt failed.
+        - ``commands`` (list[dict]): chronological per-command entries,
+          each with ``command`` / ``kind`` (``"rpc"`` or ``"cli"``) /
+          ``passed`` / ``message``.
+        - ``steps`` (list[dict]): per-line step entries suitable for
+          the display layer — each has ``action`` and ``message``,
+          preserving the legacy ``\\thealth check: ...`` formatting
+          line by line.
+        - ``message`` (str): the concatenated multi-line text, equal
+          to ``"\\n".join(step["message"] for step in steps)``.
+
+    Does not print.
     """
+    steps: list[dict] = []
+    commands: list[dict] = []
+    result = {
+        "ok": False,
+        "passed_command": None,
+        "commands": commands,
+        "steps": steps,
+        "message": "",
+    }
+
+    def _step(action: str, msg: str) -> None:
+        steps.append({"action": action, "message": msg})
+
     for health_cmd in health_cmds:
-        # NETCONF RPC probe
+        entry: dict = {
+            "command": health_cmd,
+            "kind": None,
+            "passed": False,
+            "message": None,
+        }
+
+        # NETCONF RPC probe ("uptime" keyword).
         if health_cmd.strip() == "uptime":
-            print("\thealth check: uptime (NETCONF RPC)")
+            entry["kind"] = "rpc"
+            _step("health_check", "\thealth check: uptime (NETCONF RPC)")
             try:
                 reply = dev.rpc.get_system_uptime_information()
                 current_time = reply.find(".//current-time/date-time")
                 if current_time is not None and current_time.text:
-                    print(f"\thealth check passed "
-                          f"(uptime: {current_time.text.strip()})")
-                    return False
+                    entry["passed"] = True
+                    entry["message"] = (
+                        f"uptime: {current_time.text.strip()}"
+                    )
+                    _step(
+                        "health_check_pass",
+                        f"\thealth check passed "
+                        f"(uptime: {current_time.text.strip()})",
+                    )
+                    commands.append(entry)
+                    result["ok"] = True
+                    result["passed_command"] = health_cmd
+                    result["message"] = "\n".join(s["message"] for s in steps)
+                    return result
                 else:
-                    print("\thealth check: no valid uptime data")
+                    entry["message"] = "no valid uptime data"
+                    _step("health_check_warn", "\thealth check: no valid uptime data")
+                    commands.append(entry)
                     continue
             except Exception as e:
+                entry["message"] = f"RPC error: {e}"
                 logger.error(f"{hostname}: health check RPC failed: {e}")
-                print(f"\thealth check error: {e}")
+                _step("health_check_error", f"\thealth check error: {e}")
+                commands.append(entry)
                 continue
 
-        print(f"\thealth check: {health_cmd}")
+        # CLI command
+        entry["kind"] = "cli"
+        _step("health_check", f"\thealth check: {health_cmd}")
         try:
             output = dev.cli(health_cmd)
         except Exception as e:
+            entry["message"] = f"CLI error: {e}"
             logger.error(f"{hostname}: health check command failed: {e}")
-            print(f"\thealth check error: {e}")
+            _step("health_check_error", f"\thealth check error: {e}")
+            commands.append(entry)
             continue
 
-        # ping コマンドの場合: "N packets received" を解析
         if health_cmd.strip().startswith("ping"):
             match = re.search(r"(\d+) packets received", output)
             if match and int(match.group(1)) > 0:
-                print(f"\thealth check passed "
-                      f"({match.group(1)} packets received)")
-                return False
+                entry["passed"] = True
+                entry["message"] = f"{match.group(1)} packets received"
+                _step(
+                    "health_check_pass",
+                    f"\thealth check passed "
+                    f"({match.group(1)} packets received)",
+                )
+                commands.append(entry)
+                result["ok"] = True
+                result["passed_command"] = health_cmd
+                result["message"] = "\n".join(s["message"] for s in steps)
+                return result
             else:
-                print(f"\thealth check: no packets received")
+                entry["message"] = "no packets received"
+                _step("health_check_warn", "\thealth check: no packets received")
+                commands.append(entry)
                 continue
         else:
-            # ping 以外: 例外なく実行できれば成功
-            print(f"\thealth check passed")
-            return False
+            # Non-ping CLI: success if no exception raised.
+            entry["passed"] = True
+            entry["message"] = "ok"
+            _step("health_check_pass", "\thealth check passed")
+            commands.append(entry)
+            result["ok"] = True
+            result["passed_command"] = health_cmd
+            result["message"] = "\n".join(s["message"] for s in steps)
+            return result
 
-    # 全コマンド失敗
-    return True
+    # Every attempted command failed.
+    result["message"] = "\n".join(s["message"] for s in steps)
+    return result
 
 
 def load_config(hostname, dev, configfile) -> dict:
@@ -1719,8 +1795,19 @@ def load_config(hostname, dev, configfile) -> dict:
           failed or no_changes).
         - ``confirm_timeout`` (int | None): confirm timeout in minutes
           for ``commit_mode == "confirmed"``, else None.
-        - ``health_check`` (dict): ``{"ran": bool, "commands_tried":
-          list[str], "passed": bool}``.
+        - ``health_check`` (dict): health-check outcome, with keys:
+
+          * ``ran`` (bool): True iff the health-check phase executed
+            (``--no-health-check`` skips it).
+          * ``commands_tried`` (list[str]): commands in the order they
+            were attempted (the ``uptime`` keyword counts as one).
+          * ``passed`` (bool): True iff at least one command passed
+            and the final commit confirm was issued.
+          * ``passed_command`` (str | None): the command that passed,
+            or None if none did / the phase was skipped.
+          * ``commands`` (list[dict]): per-command detail from
+            :func:`_run_health_check` — each entry has ``command`` /
+            ``kind`` (``"rpc"`` or ``"cli"``) / ``passed`` / ``message``.
         - ``steps`` (list[dict]): chronological progress entries, each
           with an ``action`` key and a ``message`` for display.
         - ``error`` (str | None): short identifier of the first fatal
@@ -1830,7 +1917,15 @@ def load_config(hostname, dev, configfile) -> dict:
                     health_cmds = ["ping count 3 255.255.255.255 rapid"]
                 result["health_check"]["ran"] = True
                 result["health_check"]["commands_tried"] = list(health_cmds)
-                if _run_health_check(hostname, dev, health_cmds):
+                hc_result = _run_health_check(hostname, dev, health_cmds)
+                # Propagate each health check step into load_config's
+                # own step list (and logger.info) so the display layer
+                # sees the same per-line feedback as pre-0.14.1.
+                for hc_step in hc_result["steps"]:
+                    _step(hc_step["action"], hc_step["message"])
+                result["health_check"]["passed_command"] = hc_result.get("passed_command")
+                result["health_check"]["commands"] = hc_result.get("commands", [])
+                if not hc_result["ok"]:
                     # Failed — do not confirm; timer will auto-rollback.
                     _step(
                         "health_check_failed",
