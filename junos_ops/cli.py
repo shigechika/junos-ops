@@ -358,7 +358,7 @@ def _run_check_with_progress(targets, max_workers: int) -> dict:
                 conn = row.get("connect") or {}
                 conn_status = "ok" if conn.get("ok") else "fail"
                 model = row.get("model") or "-"
-                tqdm.write(f"  {host}: {conn_status}  {model}", file=sys.stderr)
+                bar.set_postfix_str(f"{host} {conn_status} {model}")
                 bar.update(1)
     return results
 
