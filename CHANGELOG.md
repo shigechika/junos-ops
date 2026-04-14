@@ -20,6 +20,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - `upgrade.check_local_package_by_model(hostname, model)` — device-less local checksum helper. Uses `hashlib` directly (no PyEZ `SW` dependency). The existing `check_local_package(hostname, dev)` is now a thin wrapper that resolves the model from `dev.facts` and delegates to this new core.
 - `upgrade.check_remote_package_by_model(hostname, dev, model)` — companion by-model variant for remote checks (same semantics, model supplied by caller).
 - `display.format_check_table(rows, *, show_connect, show_local, show_remote)` / `print_check_table(...)` — table renderer shared by the CLI and any non-CLI caller (e.g. future junos-mcp tool).
+- `display.format_check_local_inventory(rows)` / `print_check_local_inventory(rows)` — table renderer for inventory mode (collapses shared `lpath` into a single header line).
+- Optional `[progress]` extra (`pip install junos-ops[progress]`) installs `tqdm` so per-host check runs show a live progress bar plus per-host status lines as workers complete. Falls back silently to plain output when tqdm is missing or stderr is not a TTY.
+
+### Performance
+- `check --connect` no longer pays for PyEZ's full facts collection (~10 RPCs per host: `show version`, `get-chassis-cluster-status`, `file-show /etc/hosts.junos`, `get-interface-information __juniper_private1__`, …). The connect path now opens with `gather_facts=False` and fetches only the model field via a single `get-software-information` RPC (~100 ms vs ~5–10 s per host).
+- `common.connect()` learned a `gather_facts` kwarg (default True for backward compatibility) and an `auto_probe` kwarg (default 0; check passes 5 to fail unreachable hosts at the TCP layer in ~5 s instead of waiting the OS-default 60–120 s SYN timeout).
+- Default `--workers` for `check` is 20 (was 1), matching `rsi`. ~90-host runs go from ~20 minutes serial to ~30 seconds.
+
+### Fixed
+- Without a `logging.ini` the fallback `basicConfig(level=INFO)` was flooding stdout with every NETCONF/SSH frame from `ncclient` / `paramiko` / `junos-eznc`. Those three loggers are now pinned to WARNING in the fallback path; users with a custom `logging.ini` are unaffected.
 
 ## [0.14.1] - 2026-04-05
 

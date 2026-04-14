@@ -306,6 +306,79 @@ def cmd_config(hostname) -> int:
             pass
 
 
+def _run_check_with_progress(targets, max_workers: int) -> dict:
+    """Run ``_check_host`` over targets with a tqdm progress bar.
+
+    Falls back to plain :func:`common.run_parallel` when tqdm is not
+    installed or stderr is not a TTY (CI / piped output). Each
+    completion writes a one-line summary above the bar via
+    ``tqdm.write`` so users see parallel progress, not just a counter.
+    """
+    use_tqdm = sys.stderr.isatty()
+    if use_tqdm:
+        try:
+            from tqdm import tqdm
+        except ImportError:
+            use_tqdm = False
+
+    if not use_tqdm:
+        return common.run_parallel(
+            _check_host, targets, max_workers=max_workers
+        )
+
+    from concurrent import futures as _futures
+    results: dict = {}
+    with _futures.ThreadPoolExecutor(max_workers=max_workers) as ex:
+        future_to_host = {ex.submit(_check_host, t): t for t in targets}
+        with tqdm(
+            total=len(targets),
+            desc="check",
+            unit="host",
+            file=sys.stderr,
+            dynamic_ncols=True,
+        ) as bar:
+            for fut in _futures.as_completed(future_to_host):
+                host = future_to_host[fut]
+                try:
+                    row = fut.result()
+                except Exception as e:
+                    logger.error(f"{host}: {e}")
+                    row = {
+                        "hostname": host,
+                        "model": None,
+                        "model_source": None,
+                        "connect": {
+                            "ok": False,
+                            "message": str(e),
+                            "error": type(e).__name__,
+                        },
+                        "remote": None,
+                    }
+                results[host] = row
+                conn = row.get("connect") or {}
+                conn_status = "ok" if conn.get("ok") else "fail"
+                model = row.get("model") or "-"
+                tqdm.write(f"  {host}: {conn_status}  {model}", file=sys.stderr)
+                bar.update(1)
+    return results
+
+
+def _fetch_model_cheap(dev) -> str | None:
+    """Fetch only the device model via a single ``get-software-information``
+    RPC (~100 ms) instead of paying the full PyEZ facts cost (~10 RPCs).
+
+    Returns the ``product-model`` text, or None if the RPC fails or
+    the field is absent.
+    """
+    try:
+        rpc = dev.rpc.get_software_information()
+        elem = rpc.find(".//product-model")
+        return elem.text if elem is not None else None
+    except Exception as e:
+        logger.debug(f"get-software-information failed: {e}")
+        return None
+
+
 def _check_host(hostname) -> dict:
     """Worker for the ``check`` subcommand (per-host checks).
 
@@ -363,6 +436,12 @@ def _check_host(hostname) -> dict:
                         source = "device"
                 except Exception as e:
                     logger.debug(f"{hostname}: facts access failed: {e}")
+            elif model is None:
+                # gather_facts=False のままで model だけ欲しい: 単発 RPC で取得。
+                cheap = _fetch_model_cheap(dev)
+                if cheap:
+                    model = cheap
+                    source = "device"
         else:
             result["connect"] = {
                 "ok": False,
@@ -801,8 +880,8 @@ def main():
             if common.args.check_local:
                 # 2 つ目のテーブルの前にブランク行
                 print("")
-            results = common.run_parallel(
-                _check_host, targets, max_workers=common.args.workers
+            results = _run_check_with_progress(
+                targets, max_workers=common.args.workers
             )
             rows = [results[t] for t in targets if t in results]
             display.print_check_table(

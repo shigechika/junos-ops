@@ -117,13 +117,35 @@ def _make_check_args(**overrides):
     return base
 
 
+class TestFetchModelCheap:
+    def test_parses_product_model(self):
+        from lxml import etree
+        dev = MagicMock()
+        dev.rpc.get_software_information.return_value = etree.fromstring(
+            "<software-information><product-model>MX5-T</product-model>"
+            "<host-name>rt1</host-name></software-information>"
+        )
+        assert cli._fetch_model_cheap(dev) == "MX5-T"
+
+    def test_returns_none_on_rpc_error(self):
+        dev = MagicMock()
+        dev.rpc.get_software_information.side_effect = RuntimeError("boom")
+        assert cli._fetch_model_cheap(dev) is None
+
+    def test_returns_none_when_field_missing(self):
+        from lxml import etree
+        dev = MagicMock()
+        dev.rpc.get_software_information.return_value = etree.fromstring(
+            "<software-information><host-name>rt1</host-name></software-information>"
+        )
+        assert cli._fetch_model_cheap(dev) is None
+
+
 class TestCheckHostWorker:
-    def test_connect_only_ok_skips_facts(self, mock_config):
-        """--connect alone does NOT access dev.facts (facts collection ~10 RPCs)."""
+    def test_connect_only_uses_cheap_model_rpc(self, mock_config):
+        """--connect uses the single get-software-information RPC, not full facts."""
         common.args = _make_check_args(check_connect=True)
         mock_dev = MagicMock()
-        # If facts were accessed, returning a dict via MagicMock would still
-        # succeed; the assertion is on the attribute access count instead.
         with patch.object(
             common, "connect",
             return_value={
@@ -134,13 +156,16 @@ class TestCheckHostWorker:
                 "error": None,
                 "error_message": None,
             },
-        ):
+        ), patch.object(
+            cli, "_fetch_model_cheap", return_value="MX5-T"
+        ) as mock_cheap:
             result = cli._check_host("test-host")
         assert result["connect"]["ok"] is True
         assert result["remote"] is None
-        # --connect only: model is NOT fetched from facts.
-        assert result["model"] is None
-        assert result["model_source"] is None
+        assert result["model"] == "MX5-T"
+        assert result["model_source"] == "device"
+        mock_cheap.assert_called_once_with(mock_dev)
+        # Full facts collection must NOT be triggered.
         mock_dev.facts.get.assert_not_called()
         mock_dev.close.assert_called_once()
 
