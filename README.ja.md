@@ -18,6 +18,7 @@ Juniper/JUNOS デバイスの運用を NETCONF 経由で自動化する Python C
 - ロールバック対応（MX/EX/SRX モデル別処理）
 - スケジュールリブート（ファームウェアインストール後の config 変更を自動検出し、必要なら再インストール）
 - RSI（request support information）/ SCF（show configuration | display set）の並列収集
+- Pre-flight `check` サブコマンド: NETCONF 疎通・ローカル firmware ハッシュ（デバイス接続不要）・リモート firmware ハッシュを 1 コマンドで統合表示
 - 任意の CLI コマンドを複数ホストで実行（`show` サブコマンド、`RpcTimeoutError` 自動リトライ対応）
 - `config` での設定投入（commit confirmed + コミット後ヘルスチェック: ping / `uptime` NETCONF プローブ / 任意の CLI コマンド）
 - Jinja2 テンプレートによるホスト別設定生成（[詳細](docs/template.md#日本語版)）
@@ -186,6 +187,7 @@ junos-ops <subcommand> [options] [hostname ...]
 | `reboot --at YYMMDDHHMM` | 指定日時にリブートをスケジュール |
 | `ls [-l]` | リモートパスのファイル一覧 |
 | `show COMMAND [--retry N]` / `show -f FILE` | 任意の CLI コマンド（またはコマンドファイル）を複数ホストで実行 |
+| `check [--connect\|--local\|--remote\|--all] [--model M]` | Pre-flight チェック: NETCONF 疎通・ローカル/リモート firmware ハッシュ |
 | `config -f FILE` | set コマンドファイルを適用（`--confirm` / `--timeout` / `--no-confirm` / `--health-check` / `--no-health-check` の詳細は [docs/config.md](docs/config.md) を参照） |
 | `rsi` | RSI/SCF を並列収集 |
 | （なし） | デバイスファクト（device facts）を表示 |
@@ -375,6 +377,42 @@ rt1.example.jp: software validate package-result: 0
     - running='18.4R3-S7.2' < pending='18.4R3-S10' : Please plan to reboot.
   - reboot requested by exadmin at Sat Dec  4 05:00:00 2021
 ```
+
+### check（Pre-flight 検証）
+
+NETCONF 疎通、ローカル/リモートの firmware ハッシュを 1 コマンドで一括検証します。1 件でも失敗すると終了コードが非ゼロになります。フラグ未指定時のデフォルトは `--connect` のみ。
+
+`--local` は **インベントリモード** で、ホスト名は無視されます。`config.ini` に記載された `<model>.file` / `<model>.hash` のペアを列挙してステージングサーバー上のファイルを検証するので、NETCONF 接続は一切不要です:
+
+```
+% junos-ops check --local
+model            file                                                        status      local_file
+---------------  ----------------------------------------------------------  ----------  ----------------------------------------------------------------------
+ex2300-24t       junos-arm-32-23.4R2-S7.4.tgz                                ok          /opt/firmware/junos-arm-32-23.4R2-S7.4.tgz
+ex3400-24t       junos-arm-32-23.4R2-S7.4.tgz                                ok(cached)  /opt/firmware/junos-arm-32-23.4R2-S7.4.tgz
+ex4300-32f       jinstall-ex-4300-21.4R3-S12.2-signed.tgz                    ok          /opt/firmware/jinstall-ex-4300-21.4R3-S12.2-signed.tgz
+mx5-t            jinstall-ppc-21.2R3-S8.5-signed.tgz                         missing     /opt/firmware/jinstall-ppc-21.2R3-S8.5-signed.tgz
+
+  mx5-t: - local package: /opt/firmware/jinstall-ppc-21.2R3-S8.5-signed.tgz is not found.
+```
+
+`--model M` で特定モデルだけに絞り込むことも可能です。
+
+`--connect` / `--remote`（および `--all`）は **ホスト単位** で、指定されたホスト（または `config.ini` 内の全ホスト、`--tags` でフィルタ可能）に対して動作します。`--remote` は `copy` 完了後・`install` 前の「SCP が最後まで落ちたか」確認としても使えます:
+
+```
+% junos-ops check --connect --remote rt1.example.jp rt2.example.jp
+hostname         connect  remote      model     file
+---------------  -------  ----------  --------  -----------------------------------
+rt1.example.jp   ok       ok          MX5-T     jinstall-ppc-18.4R3-S10-signed.tgz
+rt2.example.jp   ok       missing     MX5-T     jinstall-ppc-18.4R3-S10-signed.tgz
+
+  rt2.example.jp: remote: - remote package: jinstall-ppc-18.4R3-S10-signed.tgz is not found.
+```
+
+`--connect` / `--remote` でモデルが必要な場面では、`--model` 引数、`config.ini` の host セクションの `model = MX5-T` キー、デバイスから取得した `facts["model"]` の順にフォールバックします。
+
+`--all` は両方のテーブルを順に出力します（先にインベントリ、次にホスト別）。
 
 ### rsi（RSI/SCF並列収集）
 

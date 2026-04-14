@@ -82,10 +82,23 @@ def read_config() -> dict:
     }
 
 
-def connect(hostname: str) -> dict:
+def connect(
+    hostname: str, *, gather_facts: bool = True, auto_probe: int = 0
+) -> dict:
     """Open a NETCONF connection to a device.
 
     :param hostname: config section name (host identifier).
+    :param gather_facts: when False, ``Device.open()`` skips PyEZ's
+        automatic facts collection (~10 RPCs covering chassis
+        inventory, routing-engine info, hosts.junos, etc.). Use this
+        for fast reachability-only probes such as ``check --connect``;
+        callers that genuinely need ``dev.facts`` (most subcommands)
+        should leave the default True.
+    :param auto_probe: when > 0, do a TCP-level reachability probe
+        with this timeout (seconds) before attempting NETCONF/SSH
+        negotiation. Lets unreachable hosts fail fast instead of
+        hanging on the OS-default TCP connect timeout (60–120 s).
+        Default 0 keeps the existing PyEZ behaviour.
     :return: dict with keys:
 
         - ``hostname`` (str): the config section name passed in.
@@ -110,6 +123,7 @@ def connect(hostname: str) -> dict:
         passwd=config.get(hostname, "pw"),
         ssh_private_key_file=os.path.expanduser(config.get(hostname, "sshkey")),
         huge_tree=config.getboolean(hostname, "huge_tree", fallback=False),
+        gather_facts=gather_facts,
     )
     _ERROR_PREFIX = {
         ConnectAuthError: "Authentication credentials fail to login",

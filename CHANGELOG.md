@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.15.0] - 2026-04-14
+
+### Added
+- **`check` subcommand ([#41](https://github.com/shigechika/junos-ops/issues/41)): unified pre-flight verification across NETCONF reachability and firmware hash.**
+  - `--local` is **inventory-based** and ignores hostnames — it iterates every `<model>.file` / `<model>.hash` pair in `config.ini` and verifies the files on the staging server. No NETCONF connection required. `--model M` restricts the inventory to a single model.
+  - `--connect` (NETCONF + facts probe) and `--remote` (device-side checksum, doubles as SCP copy verification) are **per-host** and use the supplied hostnames or `--tags` filter.
+  - `--all` runs both modes: the inventory table is printed first, then the per-host table.
+  - Default (no flag) is `--connect` — fills the previously-awkward "just verify reachability" gap.
+  - Exit code is non-zero if any row has `fail` / `bad` / `missing` / `error`.
+  - Model resolution for per-host checks: `--model` > `config.ini` `[host].model` (new optional key) > `dev.facts["model"]` (only when connected).
+- `upgrade.check_local_package_by_model(hostname, model)` — device-less local checksum helper. Uses `hashlib` directly (no PyEZ `SW` dependency). The existing `check_local_package(hostname, dev)` is now a thin wrapper that resolves the model from `dev.facts` and delegates to this new core.
+- `upgrade.check_remote_package_by_model(hostname, dev, model)` — companion by-model variant for remote checks (same semantics, model supplied by caller).
+- `display.format_check_table(rows, *, show_connect, show_local, show_remote)` / `print_check_table(...)` — table renderer shared by the CLI and any non-CLI caller (e.g. future junos-mcp tool).
+- `display.format_check_local_inventory(rows)` / `print_check_local_inventory(rows)` — table renderer for inventory mode (collapses shared `lpath` into a single header line).
+- Optional `[progress]` extra (`pip install junos-ops[progress]`) installs `tqdm` so per-host check runs show a live progress bar plus per-host status lines as workers complete. Falls back silently to plain output when tqdm is missing or stderr is not a TTY.
+
+### Performance
+- `check --connect` no longer pays for PyEZ's full facts collection (~10 RPCs per host: `show version`, `get-chassis-cluster-status`, `file-show /etc/hosts.junos`, `get-interface-information __juniper_private1__`, …). The connect path now opens with `gather_facts=False` and fetches only the model field via a single `get-software-information` RPC (~100 ms vs ~5–10 s per host).
+- `common.connect()` learned a `gather_facts` kwarg (default True for backward compatibility) and an `auto_probe` kwarg (default 0; check passes 5 to fail unreachable hosts at the TCP layer in ~5 s instead of waiting the OS-default 60–120 s SYN timeout).
+- Default `--workers` for `check` is 20 (was 1), matching `rsi`. ~90-host runs go from ~20 minutes serial to ~30 seconds.
+
+### Fixed
+- Without a `logging.ini` the fallback `basicConfig(level=INFO)` was flooding stdout with every NETCONF/SSH frame from `ncclient` / `paramiko` / `junos-eznc`. Those three loggers are now pinned to WARNING in the fallback path; users with a custom `logging.ini` are unaffected.
+
 ## [0.14.1] - 2026-04-05
 
 ### Changed

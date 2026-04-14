@@ -38,6 +38,7 @@ Changelog = "https://github.com/shigechika/junos-ops/blob/main/CHANGELOG.md"
 test = ["pytest", "pytest-cov"]
 completion = ["argcomplete"]
 template = ["Jinja2>=3.1"]
+progress = ["tqdm>=4"]
 
 [project.scripts]
 junos-ops = "junos_ops.cli:main"

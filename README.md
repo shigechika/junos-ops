@@ -18,6 +18,7 @@ A Python CLI to automate Juniper/JUNOS operations over NETCONF: model-aware upgr
 - Rollback support (model-specific handling for MX/EX/SRX)
 - Scheduled reboot with automatic config-drift detection and re-install
 - Parallel RSI (request support information) / SCF (show configuration | display set) collection
+- Pre-flight `check` subcommand: NETCONF reachability, local firmware hash (device-less), and remote firmware hash in one unified table
 - Arbitrary CLI command execution across hosts (`show`) with `RpcTimeoutError` retry
 - Configuration push with `commit confirmed` safety and post-commit health checks (ping, `uptime` NETCONF probe, or any CLI command)
 - Jinja2 template support for per-host configuration generation ([details](docs/template.md))
@@ -186,6 +187,7 @@ junos-ops <subcommand> [options] [hostname ...]
 | `reboot --at YYMMDDHHMM` | Schedule a reboot at the specified time |
 | `ls [-l]` | List files on the remote path |
 | `show COMMAND [--retry N]` / `show -f FILE` | Run an arbitrary CLI command (or file of commands) across devices |
+| `check [--connect\|--local\|--remote\|--all] [--model M]` | Pre-flight checks: NETCONF reachability, local/remote firmware hash |
 | `config -f FILE` | Push a set command file (see [docs/config.md](docs/config.md) for `--confirm`, `--timeout`, `--no-confirm`, `--health-check`, `--no-health-check`) |
 | `rsi` | Collect RSI/SCF in parallel |
 | (none) | Show device facts |
@@ -375,6 +377,42 @@ rt1.example.jp: software validate package-result: 0
     - running='18.4R3-S7.2' < pending='18.4R3-S10' : Please plan to reboot.
   - reboot requested by exadmin at Sat Dec  4 05:00:00 2021
 ```
+
+### check (pre-flight verification)
+
+Unified pre-flight checks across NETCONF reachability and firmware hashes. Exit code is non-zero if any check fails. Default (no flag) runs `--connect` only.
+
+`--local` is **inventory-mode** and ignores hostnames — it iterates every `<model>.file` / `<model>.hash` pair in `config.ini` and verifies the files on the staging server. No NETCONF required:
+
+```
+% junos-ops check --local
+model            file                                                        status      local_file
+---------------  ----------------------------------------------------------  ----------  ----------------------------------------------------------------------
+ex2300-24t       junos-arm-32-23.4R2-S7.4.tgz                                ok          /opt/firmware/junos-arm-32-23.4R2-S7.4.tgz
+ex3400-24t       junos-arm-32-23.4R2-S7.4.tgz                                ok(cached)  /opt/firmware/junos-arm-32-23.4R2-S7.4.tgz
+ex4300-32f       jinstall-ex-4300-21.4R3-S12.2-signed.tgz                    ok          /opt/firmware/jinstall-ex-4300-21.4R3-S12.2-signed.tgz
+mx5-t            jinstall-ppc-21.2R3-S8.5-signed.tgz                         missing     /opt/firmware/jinstall-ppc-21.2R3-S8.5-signed.tgz
+
+  mx5-t: - local package: /opt/firmware/jinstall-ppc-21.2R3-S8.5-signed.tgz is not found.
+```
+
+Use `--model M` to restrict the inventory to a single model.
+
+`--connect` / `--remote` (and `--all`) are **per-host** and use the specified hostnames (or every host in `config.ini`, optionally filtered by `--tags`). `--remote` doubles as a "did the SCP copy fully land" check between `copy` and `install`:
+
+```
+% junos-ops check --connect --remote rt1.example.jp rt2.example.jp
+hostname         connect  remote      model     file
+---------------  -------  ----------  --------  -----------------------------------
+rt1.example.jp   ok       ok          MX5-T     jinstall-ppc-18.4R3-S10-signed.tgz
+rt2.example.jp   ok       missing     MX5-T     jinstall-ppc-18.4R3-S10-signed.tgz
+
+  rt2.example.jp: remote: - remote package: jinstall-ppc-18.4R3-S10-signed.tgz is not found.
+```
+
+When `--connect` / `--remote` need to resolve a model and it was not supplied via `--model`, they fall back to `dev.facts["model"]` from the live device, or to an optional `model = MX5-T` key added to the host section in `config.ini`.
+
+`--all` runs both: the inventory table is printed first, then the per-host table.
 
 ### rsi (parallel RSI/SCF collection)
 
