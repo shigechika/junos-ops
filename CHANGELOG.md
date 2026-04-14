@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.15.0] - 2026-04-14
+
+### Added
+- **`check` subcommand ([#41](https://github.com/shigechika/junos-ops/issues/41)): unified pre-flight verification across NETCONF reachability and firmware hash.** Sub-flags: `--connect` (NETCONF + facts probe), `--local` (local firmware checksum, no NETCONF required), `--remote` (device-side checksum, confirms SCP copy completed), `--all` (shorthand for all three). Output is an aligned table with one row per host; exit code is non-zero if any host has `fail` / `bad` / `missing` / `error`. Default (no flag) is `--connect` — fills the previously-awkward "just verify reachability" gap.
+  - `--model MODEL` override, or optional `model = MX5-T` key per host in `config.ini`, so `--local` works entirely offline against a staging server.
+  - Model resolution order: `--model` > `config.ini` `[host].model` > `dev.facts["model"]` (only when connected).
+- `upgrade.check_local_package_by_model(hostname, model)` — device-less local checksum helper. Uses `hashlib` directly (no PyEZ `SW` dependency). The existing `check_local_package(hostname, dev)` is now a thin wrapper that resolves the model from `dev.facts` and delegates to this new core.
+- `upgrade.check_remote_package_by_model(hostname, dev, model)` — companion by-model variant for remote checks (same semantics, model supplied by caller).
+- `display.format_check_table(rows, *, show_connect, show_local, show_remote)` / `print_check_table(...)` — table renderer shared by the CLI and any non-CLI caller (e.g. future junos-mcp tool).
+
 ## [0.14.1] - 2026-04-05
 
 ### Changed

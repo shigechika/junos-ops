@@ -18,6 +18,7 @@ A Python CLI to automate Juniper/JUNOS operations over NETCONF: model-aware upgr
 - Rollback support (model-specific handling for MX/EX/SRX)
 - Scheduled reboot with automatic config-drift detection and re-install
 - Parallel RSI (request support information) / SCF (show configuration | display set) collection
+- Pre-flight `check` subcommand: NETCONF reachability, local firmware hash (device-less), and remote firmware hash in one unified table
 - Arbitrary CLI command execution across hosts (`show`) with `RpcTimeoutError` retry
 - Configuration push with `commit confirmed` safety and post-commit health checks (ping, `uptime` NETCONF probe, or any CLI command)
 - Jinja2 template support for per-host configuration generation ([details](docs/template.md))
@@ -186,6 +187,7 @@ junos-ops <subcommand> [options] [hostname ...]
 | `reboot --at YYMMDDHHMM` | Schedule a reboot at the specified time |
 | `ls [-l]` | List files on the remote path |
 | `show COMMAND [--retry N]` / `show -f FILE` | Run an arbitrary CLI command (or file of commands) across devices |
+| `check [--connect\|--local\|--remote\|--all] [--model M]` | Pre-flight checks: NETCONF reachability, local/remote firmware hash |
 | `config -f FILE` | Push a set command file (see [docs/config.md](docs/config.md) for `--confirm`, `--timeout`, `--no-confirm`, `--health-check`, `--no-health-check`) |
 | `rsi` | Collect RSI/SCF in parallel |
 | (none) | Show device facts |
@@ -375,6 +377,22 @@ rt1.example.jp: software validate package-result: 0
     - running='18.4R3-S7.2' < pending='18.4R3-S10' : Please plan to reboot.
   - reboot requested by exadmin at Sat Dec  4 05:00:00 2021
 ```
+
+### check (pre-flight verification)
+
+Unified pre-flight checks across NETCONF reachability and firmware hashes. Output is an aligned table; exit code is non-zero if any host fails. Default (no flag) runs `--connect` only.
+
+```
+% junos-ops check --all rt1.example.jp rt2.example.jp
+hostname         connect  local       remote      model     file
+---------------  -------  ----------  ----------  --------  -----------------------------------
+rt1.example.jp   ok       ok(cached)  ok          MX5-T     jinstall-ppc-18.4R3-S10-signed.tgz
+rt2.example.jp   ok       ok          missing     MX5-T     jinstall-ppc-18.4R3-S10-signed.tgz
+
+  rt2.example.jp: remote: - remote package: jinstall-ppc-18.4R3-S10-signed.tgz is not found.
+```
+
+`--local` works offline (no NETCONF) — useful for verifying a staging server holds every firmware file before you start a large rollout. Provide the model via `--model MX5-T` or add `model = MX5-T` to each host section in `config.ini`. `--remote` doubles as a "did the SCP copy fully land" check between `copy` and `install`.
 
 ### rsi (parallel RSI/SCF collection)
 

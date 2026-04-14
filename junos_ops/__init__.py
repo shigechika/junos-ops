@@ -12,9 +12,10 @@ Subcommands::
     junos-ops rsi [hostname ...]       # collect RSI/SCF
     junos-ops show "show bgp summary"  # run CLI command
     junos-ops config -f FILE           # push set commands
+    junos-ops check [--connect|--local|--remote|--all]  # pre-flight checks
 
 See Also:
     https://github.com/shigechika/junos-ops
 """
 
-__version__ = "0.14.1"
+__version__ = "0.15.0"

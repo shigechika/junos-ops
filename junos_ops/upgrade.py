@@ -13,6 +13,7 @@ from lxml import etree
 from ncclient.operations.errors import TimeoutExpiredError
 import argparse
 import datetime
+import hashlib
 import os
 import re
 from logging import getLogger
@@ -668,39 +669,36 @@ def set_hashcache(hostname, file, value):
         common.config.set(hostname, file + "hashcache", value)
 
 
-def check_local_package(hostname, dev) -> dict:
-    """Check the local package file's checksum against the expected value.
+def _compute_local_checksum(path: str, algo: str) -> str:
+    """Compute a file checksum using hashlib (no PyEZ/device required).
 
-    :return: dict with keys:
+    :param path: absolute or expanded local path.
+    :param algo: algorithm name accepted by :func:`hashlib.new`
+        (e.g. ``"md5"``, ``"sha1"``, ``"sha256"``, ``"sha512"``).
+    :raises FileNotFoundError: the file does not exist.
+    :raises ValueError: algorithm name not recognized by hashlib.
+    """
+    h = hashlib.new(algo)
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            h.update(chunk)
+    return h.hexdigest()
 
-        - ``hostname`` (str)
-        - ``file`` (str): package filename from config (without path).
-        - ``local_file`` (str): full local path resolved via ``lpath``.
-        - ``algo`` (str): checksum algorithm name.
-        - ``expected_hash`` (str): expected checksum from config.
-        - ``actual_hash`` (str | None): checksum actually computed (or
-          cached). None when the file could not be hashed.
-        - ``status`` (str): one of
 
-          * ``"ok"``      — file present, checksum matches.
-          * ``"bad"``     — file present, checksum does not match.
-          * ``"missing"`` — file not found on the local filesystem.
-          * ``"error"``   — ``sw.local_checksum`` raised an unexpected
-            exception (see ``error``).
-          * ``"unchecked"`` — the model has no configured package
-            mapping (empty file name or hash); no check attempted.
+def check_local_package_by_model(hostname: str, model: str) -> dict:
+    """Device-less local package checksum verification.
 
-        - ``cached`` (bool): True iff the result was served from the
-          in-process hash cache and no disk I/O was performed.
-        - ``message`` (str): a human-readable summary line suitable
-          for the display layer (legacy single-line format).
-        - ``error`` (str | None): exception class name when ``status``
-          is ``"error"``.
+    Resolves the expected filename / hash from ``config.ini`` using the
+    explicit ``model`` argument, then verifies the file on the staging
+    server's filesystem via :mod:`hashlib`. No NETCONF / PyEZ device
+    connection is required, so this is suitable for bulk pre-flight
+    checks on many hosts from a staging server.
+
+    :return: same dict schema as :func:`check_local_package`.
 
     Does not print.
     """
-    logger.debug("check_local_package: start")
-    model = dev.facts["model"]
+    logger.debug("check_local_package_by_model: start")
     file = get_model_file(hostname, model)
     local_file = get_local_path(hostname, file)
     pkg_hash = get_model_hash(hostname, model)
@@ -730,9 +728,8 @@ def check_local_package(hostname, dev) -> dict:
         )
         return result
 
-    sw = SW(dev)
     try:
-        val = sw.local_checksum(local_file, algorithm=algo)
+        val = _compute_local_checksum(local_file, algo)
         result["actual_hash"] = val
         if val == pkg_hash:
             set_hashcache("localhost", file, val)
@@ -757,26 +754,61 @@ def check_local_package(hostname, dev) -> dict:
             f"  - local package: {local_file} checksum error: {e}"
         )
         logger.error(e)
-    finally:
-        del sw
     return result
 
 
-def check_remote_package(hostname, dev) -> dict:
-    """Check the remote package file's checksum against the expected value.
+def check_local_package(hostname, dev) -> dict:
+    """Check the local package file's checksum against the expected value.
 
-    Same schema as :func:`check_local_package`, but targets the device's
-    ``rpath`` directory via ``sw.remote_checksum``.
+    Thin wrapper that resolves the device model from ``dev.facts`` then
+    delegates to :func:`check_local_package_by_model`. Retained for
+    backward compatibility with callers that have a live device.
 
-    :return: dict with the same keys as :func:`check_local_package`,
-        minus ``local_file`` and plus ``remote_path``. ``status``
-        values are identical (``"ok"`` / ``"bad"`` / ``"missing"`` /
-        ``"error"`` / ``"unchecked"``).
+    :return: dict with keys:
+
+        - ``hostname`` (str)
+        - ``file`` (str): package filename from config (without path).
+        - ``local_file`` (str): full local path resolved via ``lpath``.
+        - ``algo`` (str): checksum algorithm name.
+        - ``expected_hash`` (str): expected checksum from config.
+        - ``actual_hash`` (str | None): checksum actually computed (or
+          cached). None when the file could not be hashed.
+        - ``status`` (str): one of
+
+          * ``"ok"``      — file present, checksum matches.
+          * ``"bad"``     — file present, checksum does not match.
+          * ``"missing"`` — file not found on the local filesystem.
+          * ``"error"``   — hashing raised an unexpected exception
+            (see ``error``).
+          * ``"unchecked"`` — the model has no configured package
+            mapping (empty file name or hash); no check attempted.
+
+        - ``cached`` (bool): True iff the result was served from the
+          in-process hash cache and no disk I/O was performed.
+        - ``message`` (str): a human-readable summary line suitable
+          for the display layer (legacy single-line format).
+        - ``error`` (str | None): exception class name when ``status``
+          is ``"error"``.
 
     Does not print.
     """
-    logger.debug("check_remote_package: start")
-    model = dev.facts["model"]
+    return check_local_package_by_model(hostname, dev.facts["model"])
+
+
+def check_remote_package_by_model(hostname: str, dev, model: str) -> dict:
+    """Verify the remote package checksum using an explicit model.
+
+    Device connection is still required (remote checksum is computed
+    by the device itself via NETCONF), but the model is supplied by
+    the caller instead of being derived from ``dev.facts["model"]``.
+    Useful when the caller has already resolved the model from
+    ``config.ini`` or a CLI flag.
+
+    :return: same dict schema as :func:`check_remote_package`.
+
+    Does not print.
+    """
+    logger.debug("check_remote_package_by_model: start")
     file = get_model_file(hostname, model)
     pkg_hash = get_model_hash(hostname, model)
     algo = common.config.get(hostname, "hashalgo")
@@ -837,6 +869,22 @@ def check_remote_package(hostname, dev) -> dict:
     finally:
         del sw
     return result
+
+
+def check_remote_package(hostname, dev) -> dict:
+    """Check the remote package file's checksum against the expected value.
+
+    Thin wrapper that resolves the device model from ``dev.facts`` then
+    delegates to :func:`check_remote_package_by_model`.
+
+    :return: dict with the same keys as :func:`check_local_package`,
+        minus ``local_file`` and plus ``remote_path``. ``status`` values
+        are identical (``"ok"`` / ``"bad"`` / ``"missing"`` / ``"error"``
+        / ``"unchecked"``).
+
+    Does not print.
+    """
+    return check_remote_package_by_model(hostname, dev, dev.facts["model"])
 
 
 def list_remote_path(hostname, dev) -> dict:

@@ -301,6 +301,104 @@ def cmd_config(hostname) -> int:
             pass
 
 
+def _check_host(hostname) -> dict:
+    """Worker for the ``check`` subcommand.
+
+    Runs the requested subset of pre-flight checks (connect / local /
+    remote) against a single host and returns a result dict for the
+    display layer to render as a table row. Never raises — unexpected
+    exceptions are captured as ``connect`` errors.
+    """
+    do_connect = common.args.check_connect
+    do_local = common.args.check_local
+    do_remote = common.args.check_remote
+    explicit_model = getattr(common.args, "check_model", None)
+
+    result = {
+        "hostname": hostname,
+        "model": None,
+        "model_source": None,
+        "connect": None,
+        "local": None,
+        "remote": None,
+    }
+
+    # Model resolution order: --model > config.ini [host].model > device facts.
+    model = explicit_model
+    source = "cli" if model else None
+    if model is None:
+        try:
+            cfg_model = common.config.get(hostname, "model")
+            if cfg_model:
+                model = cfg_model
+                source = "config"
+        except Exception:
+            pass
+
+    # Connect is required for --remote; always run when --connect is set.
+    dev = None
+    if do_connect or do_remote:
+        conn = common.connect(hostname)
+        if conn["ok"]:
+            dev = conn["dev"]
+            result["connect"] = {
+                "ok": True,
+                "message": "connected",
+                "error": None,
+            }
+            if model is None:
+                try:
+                    model = dev.facts.get("model")
+                    if model:
+                        source = "device"
+                except Exception as e:
+                    logger.debug(f"{hostname}: facts access failed: {e}")
+        else:
+            result["connect"] = {
+                "ok": False,
+                "message": conn.get("error_message") or "connect failed",
+                "error": conn.get("error"),
+            }
+
+    result["model"] = model
+    result["model_source"] = source
+
+    try:
+        if do_local:
+            if model:
+                result["local"] = upgrade.check_local_package_by_model(
+                    hostname, model
+                )
+            else:
+                result["local"] = {
+                    "status": "unchecked",
+                    "message": "model unknown (pass --model or add `model =` to config.ini)",
+                    "file": None,
+                    "cached": False,
+                }
+        if do_remote:
+            if dev is not None and model:
+                result["remote"] = upgrade.check_remote_package_by_model(
+                    hostname, dev, model
+                )
+            else:
+                reason = "not connected" if dev is None else "model unknown"
+                result["remote"] = {
+                    "status": "unchecked",
+                    "message": reason,
+                    "file": None,
+                    "cached": False,
+                }
+    finally:
+        if dev is not None:
+            try:
+                dev.close()
+            except (ConnectClosedError, Exception):
+                pass
+
+    return result
+
+
 def cmd_ls(hostname) -> int:
     """List remote files."""
     dev = _open_connection(hostname)
@@ -460,6 +558,34 @@ def main():
     )
     p_config.add_argument("specialhosts", metavar="hostname", nargs="*")
 
+    # check
+    p_check = subparsers.add_parser(
+        "check",
+        parents=[parent],
+        help="pre-flight checks (NETCONF reachability, local/remote firmware hash)",
+    )
+    p_check.add_argument(
+        "--connect", dest="check_connect", action="store_true",
+        help="verify NETCONF reachability (default when no flag is given)",
+    )
+    p_check.add_argument(
+        "--local", dest="check_local", action="store_true",
+        help="verify local firmware checksum (no NETCONF required)",
+    )
+    p_check.add_argument(
+        "--remote", dest="check_remote", action="store_true",
+        help="verify remote firmware checksum on the device (requires NETCONF)",
+    )
+    p_check.add_argument(
+        "--all", dest="check_all", action="store_true",
+        help="shorthand for --connect --local --remote",
+    )
+    p_check.add_argument(
+        "--model", dest="check_model", default=None,
+        help="override model lookup (otherwise from config.ini 'model' or device facts)",
+    )
+    p_check.add_argument("specialhosts", metavar="hostname", nargs="*")
+
     # rsi
     p_rsi = subparsers.add_parser(
         "rsi", parents=[parent], help="collect RSI/SCF",
@@ -558,6 +684,26 @@ def main():
         args.rpc_timeout = None
     if not hasattr(args, "no_confirm"):
         args.no_confirm = False
+    if not hasattr(args, "check_connect"):
+        args.check_connect = False
+    if not hasattr(args, "check_local"):
+        args.check_local = False
+    if not hasattr(args, "check_remote"):
+        args.check_remote = False
+    if not hasattr(args, "check_all"):
+        args.check_all = False
+    if not hasattr(args, "check_model"):
+        args.check_model = None
+
+    # check サブコマンドのフラグ解決
+    if args.subcommand == "check":
+        if args.check_all:
+            args.check_connect = True
+            args.check_local = True
+            args.check_remote = True
+        # フラグ未指定なら --connect をデフォルト
+        if not (args.check_connect or args.check_local or args.check_remote):
+            args.check_connect = True
 
     # show サブコマンド: show_args を show_command + specialhosts に分離
     if args.subcommand == "show":
@@ -592,6 +738,33 @@ def main():
             common.args.workers = 20
         else:
             common.args.workers = 1
+
+    # check サブコマンドは table 出力＋exit code 集計を専用処理
+    if args.subcommand == "check":
+        results = common.run_parallel(
+            _check_host, targets, max_workers=common.args.workers
+        )
+        rows = [results[t] for t in targets if t in results]
+        display.print_check_table(
+            rows,
+            show_connect=common.args.check_connect,
+            show_local=common.args.check_local,
+            show_remote=common.args.check_remote,
+        )
+        rc = 0
+        for row in rows:
+            if not isinstance(row, dict):
+                rc = 1
+                continue
+            conn = row.get("connect")
+            if conn is not None and not conn.get("ok"):
+                rc = 1
+            for key in ("local", "remote"):
+                sub = row.get(key)
+                if sub and sub.get("status") in ("bad", "missing", "error"):
+                    rc = 1
+        logger.debug("end")
+        return rc
 
     # サブコマンドのディスパッチ
     dispatch = {

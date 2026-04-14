@@ -18,6 +18,7 @@ Juniper/JUNOS デバイスの運用を NETCONF 経由で自動化する Python C
 - ロールバック対応（MX/EX/SRX モデル別処理）
 - スケジュールリブート（ファームウェアインストール後の config 変更を自動検出し、必要なら再インストール）
 - RSI（request support information）/ SCF（show configuration | display set）の並列収集
+- Pre-flight `check` サブコマンド: NETCONF 疎通・ローカル firmware ハッシュ（デバイス接続不要）・リモート firmware ハッシュを 1 コマンドで統合表示
 - 任意の CLI コマンドを複数ホストで実行（`show` サブコマンド、`RpcTimeoutError` 自動リトライ対応）
 - `config` での設定投入（commit confirmed + コミット後ヘルスチェック: ping / `uptime` NETCONF プローブ / 任意の CLI コマンド）
 - Jinja2 テンプレートによるホスト別設定生成（[詳細](docs/template.md#日本語版)）
@@ -186,6 +187,7 @@ junos-ops <subcommand> [options] [hostname ...]
 | `reboot --at YYMMDDHHMM` | 指定日時にリブートをスケジュール |
 | `ls [-l]` | リモートパスのファイル一覧 |
 | `show COMMAND [--retry N]` / `show -f FILE` | 任意の CLI コマンド（またはコマンドファイル）を複数ホストで実行 |
+| `check [--connect\|--local\|--remote\|--all] [--model M]` | Pre-flight チェック: NETCONF 疎通・ローカル/リモート firmware ハッシュ |
 | `config -f FILE` | set コマンドファイルを適用（`--confirm` / `--timeout` / `--no-confirm` / `--health-check` / `--no-health-check` の詳細は [docs/config.md](docs/config.md) を参照） |
 | `rsi` | RSI/SCF を並列収集 |
 | （なし） | デバイスファクト（device facts）を表示 |
@@ -375,6 +377,22 @@ rt1.example.jp: software validate package-result: 0
     - running='18.4R3-S7.2' < pending='18.4R3-S10' : Please plan to reboot.
   - reboot requested by exadmin at Sat Dec  4 05:00:00 2021
 ```
+
+### check（Pre-flight 検証）
+
+NETCONF 疎通、ローカル/リモートの firmware ハッシュを 1 コマンドで一括検証し、整形テーブルで出力します。1 件でも失敗すると終了コードが非ゼロになります。フラグ未指定時のデフォルトは `--connect` のみ。
+
+```
+% junos-ops check --all rt1.example.jp rt2.example.jp
+hostname         connect  local       remote      model     file
+---------------  -------  ----------  ----------  --------  -----------------------------------
+rt1.example.jp   ok       ok(cached)  ok          MX5-T     jinstall-ppc-18.4R3-S10-signed.tgz
+rt2.example.jp   ok       ok          missing     MX5-T     jinstall-ppc-18.4R3-S10-signed.tgz
+
+  rt2.example.jp: remote: - remote package: jinstall-ppc-18.4R3-S10-signed.tgz is not found.
+```
+
+`--local` は NETCONF 接続なしで動作するため、大量展開前のステージングサーバー上での firmware 棚卸しに使えます。モデルは `--model MX5-T` で指定するか、`config.ini` の各ホストセクションに `model = MX5-T` を追記します。`--remote` は `copy` 完了後・`install` 前の SCP 完走チェックとしても機能します。
 
 ### rsi（RSI/SCF並列収集）
 

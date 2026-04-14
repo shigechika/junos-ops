@@ -437,3 +437,116 @@ def print_rsi(result: dict) -> None:
 def print_show(result: dict) -> None:
     """Print ``cmd_show`` result (a list of command/output pairs)."""
     raise NotImplementedError
+
+
+# -------------------------------------------------------------------
+# check
+# -------------------------------------------------------------------
+
+
+def _short_check_status(sub: dict | None) -> str:
+    """Render a local/remote check sub-result as a short column label."""
+    if sub is None:
+        return "-"
+    status = sub.get("status", "-")
+    if status == "ok" and sub.get("cached"):
+        return "ok(cached)"
+    return status
+
+
+def _short_connect_status(sub: dict | None) -> str:
+    """Render a connect sub-result as ``ok`` / ``fail`` / ``-``."""
+    if sub is None:
+        return "-"
+    return "ok" if sub.get("ok") else "fail"
+
+
+def format_check_table(
+    rows: list[dict],
+    *,
+    show_connect: bool = True,
+    show_local: bool = False,
+    show_remote: bool = False,
+) -> str:
+    """Render ``check`` subcommand results as an aligned table.
+
+    Each row is the dict returned by the ``check`` worker with keys
+    ``hostname``, ``model``, ``model_source``, ``connect``, ``local``,
+    ``remote``. Columns are included based on the ``show_*`` flags so
+    a single-aspect run (e.g. ``check --connect``) does not emit empty
+    columns.
+    """
+    headers: list[str] = ["hostname"]
+    if show_connect:
+        headers.append("connect")
+    if show_local:
+        headers.append("local")
+    if show_remote:
+        headers.append("remote")
+    headers.extend(["model", "file"])
+
+    body: list[list[str]] = []
+    for row in rows:
+        line = [row.get("hostname") or "-"]
+        if show_connect:
+            line.append(_short_connect_status(row.get("connect")))
+        if show_local:
+            line.append(_short_check_status(row.get("local")))
+        if show_remote:
+            line.append(_short_check_status(row.get("remote")))
+        line.append(row.get("model") or "-")
+        file_val = None
+        for key in ("local", "remote"):
+            sub = row.get(key)
+            if sub and sub.get("file"):
+                file_val = sub["file"]
+                break
+        line.append(file_val or "-")
+        body.append(line)
+
+    widths = [
+        max(len(headers[i]), *(len(r[i]) for r in body)) if body else len(headers[i])
+        for i in range(len(headers))
+    ]
+
+    def _fmt_row(cells: list[str]) -> str:
+        return "  ".join(c.ljust(widths[i]) for i, c in enumerate(cells)).rstrip()
+
+    lines = [_fmt_row(headers), _fmt_row(["-" * w for w in widths])]
+    lines.extend(_fmt_row(r) for r in body)
+
+    # Surface detailed failure messages below the table.
+    detail_lines: list[str] = []
+    for row in rows:
+        host = row.get("hostname") or "?"
+        conn = row.get("connect")
+        if conn and not conn.get("ok"):
+            msg = conn.get("message") or conn.get("error") or "connect failed"
+            detail_lines.append(f"  {host}: connect: {msg}")
+        for key in ("local", "remote"):
+            sub = row.get(key)
+            if sub and sub.get("status") in ("bad", "missing", "error"):
+                detail_lines.append(
+                    f"  {host}: {key}: {sub.get('message', '').lstrip()}"
+                )
+    if detail_lines:
+        lines.append("")
+        lines.extend(detail_lines)
+
+    return "\n".join(lines)
+
+
+def print_check_table(
+    rows: list[dict],
+    *,
+    show_connect: bool = True,
+    show_local: bool = False,
+    show_remote: bool = False,
+) -> None:
+    """Print ``check`` subcommand results as an aligned table."""
+    _emit(format_check_table(
+        rows,
+        show_connect=show_connect,
+        show_local=show_local,
+        show_remote=show_remote,
+    ))

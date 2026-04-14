@@ -70,6 +70,9 @@ LICENSE
 - `get_rescue_config_time()` — rescue config ファイルの更新時刻取得
 - `check_and_reinstall()` — config変更検出＋validation付き自動再インストール（dict）
 - `check_running_package()` — running とパッケージ名を突き合わせ（dict: running/expected_file/match）
+- `check_local_package(hostname, dev)` / `check_local_package_by_model(hostname, model)` — ローカル firmware checksum 検証（後者は hashlib 直接、NETCONF 不要）
+- `check_remote_package(hostname, dev)` / `check_remote_package_by_model(hostname, dev, model)` — リモート firmware checksum 検証（by_model 版はモデルを明示指定）
+- `_compute_local_checksum(path, algo)` — hashlib ベースの純粋関数（PyEZ SW 非依存）
 - `get_hashcache()` / `set_hashcache()` — チェックサムキャッシュ（スレッド安全）
 - `load_config()` — set コマンドファイルのロード＋コミット（dict: steps + logger.info でリアルタイム進捗）
 - `list_remote_path()` — リモートファイル一覧（dict: files/file_count/format）
@@ -91,6 +94,7 @@ LICENSE
 ### cli.py — サブコマンドルーティング
 - `main()` — argparse サブコマンド定義、ディスパッチ
 - `cmd_upgrade()`, `cmd_copy()`, `cmd_install()`, `cmd_rollback()`, `cmd_version()`, `cmd_reboot()`, `cmd_ls()`, `cmd_show()`, `cmd_config()`, `cmd_facts()` — サブコマンド用エントリ関数（connect → header → core(dict) → display）
+- `_check_host(hostname)` — `check` サブコマンド用ワーカー。int ではなく dict を返し、`main()` で結果を集約して `display.print_check_table` にテーブル出力。モデル解決順: `--model` > `config.ini [host].model` > `dev.facts["model"]`
 - `_open_connection()` — NETCONF 接続＋エラー時の display 出力ヘルパー
 
 ## CLI設計
@@ -105,6 +109,7 @@ junos-ops reboot --at YYMMDDHHMM [hostname ...]  # リブート
 junos-ops ls [-l] [hostname ...]           # リモートファイル一覧
 junos-ops show COMMAND [hostname ...]           # 任意の CLI コマンドを実行
 junos-ops config -f FILE [--confirm N] [hostname ...]  # set コマンドファイル適用
+junos-ops check [--connect|--local|--remote|--all] [--model M] [hostname ...]  # pre-flight チェック
 junos-ops rsi [hostname ...]               # RSI/SCF収集
 junos-ops [hostname ...]                   # サブコマンド省略 → device facts 表示
 junos-ops --version                        # プログラムバージョン

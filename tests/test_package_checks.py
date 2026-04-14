@@ -45,24 +45,22 @@ class TestCheckLocalPackage:
 
     def test_checksum_ok(self, junos_upgrade, mock_args, mock_config, capsys):
         """Fresh checksum matches: status=ok, cached=False."""
-        # Ensure no cache hit
-        junos_upgrade.common.config.set("localhost" if junos_upgrade.common.config.has_section("localhost") else "test-host", "dummy", "dummy") if False else None
-        mock_sw = MagicMock()
-        mock_sw.local_checksum.return_value = "abc123def456"
-        with patch.object(junos_upgrade, "SW", return_value=mock_sw):
+        with patch.object(
+            junos_upgrade, "_compute_local_checksum", return_value="abc123def456"
+        ) as mock_chk:
             result = junos_upgrade.check_local_package("test-host", self._dev())
         assert result["status"] == "ok"
         assert result["cached"] is False
         assert result["actual_hash"] == "abc123def456"
         assert "checksum is OK" in result["message"]
-        mock_sw.local_checksum.assert_called_once()
+        mock_chk.assert_called_once()
         assert capsys.readouterr().out == ""
 
     def test_checksum_bad(self, junos_upgrade, mock_args, mock_config, capsys):
         """Fresh checksum mismatches: status=bad."""
-        mock_sw = MagicMock()
-        mock_sw.local_checksum.return_value = "WRONG_HASH"
-        with patch.object(junos_upgrade, "SW", return_value=mock_sw):
+        with patch.object(
+            junos_upgrade, "_compute_local_checksum", return_value="WRONG_HASH"
+        ):
             result = junos_upgrade.check_local_package("test-host", self._dev())
         assert result["status"] == "bad"
         assert result["actual_hash"] == "WRONG_HASH"
@@ -72,9 +70,11 @@ class TestCheckLocalPackage:
 
     def test_file_missing(self, junos_upgrade, mock_args, mock_config, capsys):
         """FileNotFoundError: status=missing, actual_hash=None."""
-        mock_sw = MagicMock()
-        mock_sw.local_checksum.side_effect = FileNotFoundError("no such file")
-        with patch.object(junos_upgrade, "SW", return_value=mock_sw):
+        with patch.object(
+            junos_upgrade,
+            "_compute_local_checksum",
+            side_effect=FileNotFoundError("no such file"),
+        ):
             result = junos_upgrade.check_local_package("test-host", self._dev())
         assert result["status"] == "missing"
         assert result["actual_hash"] is None
@@ -83,9 +83,11 @@ class TestCheckLocalPackage:
 
     def test_generic_error(self, junos_upgrade, mock_args, mock_config, capsys):
         """Unexpected exception: status=error, error=ClassName."""
-        mock_sw = MagicMock()
-        mock_sw.local_checksum.side_effect = OSError("IO broken")
-        with patch.object(junos_upgrade, "SW", return_value=mock_sw):
+        with patch.object(
+            junos_upgrade,
+            "_compute_local_checksum",
+            side_effect=OSError("IO broken"),
+        ):
             result = junos_upgrade.check_local_package("test-host", self._dev())
         assert result["status"] == "error"
         assert result["error"] == "OSError"
