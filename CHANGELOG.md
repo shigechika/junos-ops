@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.16.7] - 2026-04-15
+
+### Fixed
+- `install` no longer prints the "remote package file not found. Please consider --copy before --install" line twice. The step message already reaches stdout through the display layer; a parallel `logger.info` emitted the same text with a timestamp prefix, which became a visible duplicate once the display layer was switched to host-atomic output in 0.16.2.
+
 ## [0.16.6] - 2026-04-15
 
 ### Added

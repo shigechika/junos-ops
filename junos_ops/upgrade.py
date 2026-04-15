@@ -530,9 +530,8 @@ def install(hostname, dev) -> dict:
         })
         if remote_check["status"] != "ok" and subcmd == "install":
             # install-only mode: fail fast when the remote package is missing.
-            logger.info(
-                "remote package file not found. Please consider --copy before --install"
-            )
+            # The step message below carries this to the display layer; a
+            # parallel logger.info would double-print on stdout.
             result["skip_reason"] = "remote_missing"
             result["error"] = "remote_missing"
             steps.append({
