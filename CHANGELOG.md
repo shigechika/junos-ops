@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.16.5] - 2026-04-15
+
+### Fixed
+- `copy` subcommand no longer prints the misleading "checksum is BAD. COPY AGAIN!" line above the successful copy output. When the pre-copy remote check finds a stale (bad) or missing package and `copy` proceeds to overwrite it, the step message now reads "exists but checksum mismatch; overwriting" / "not present; copying" — action-oriented instead of quoting the state that's about to change.
+
 ## [0.16.4] - 2026-04-15
 
 ### Changed

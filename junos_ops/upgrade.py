@@ -150,13 +150,28 @@ def copy(hostname, dev) -> dict:
             })
             return result
         remote_check = check_remote_package(hostname, dev)
+        # When the remote copy is stale (bad) or missing we are about to
+        # re-copy, so the "BAD. COPY AGAIN!" / "is not found." wording is
+        # rewritten to a forward-looking message instead of quoting the
+        # pre-copy state (which reads as a failure once the copy succeeds).
+        rc_status = remote_check["status"]
+        file = remote_check.get("file") or ""
+        if rc_status == "bad":
+            step_msg = (
+                f"  - remote package: {file} exists but checksum mismatch; "
+                "overwriting"
+            )
+        elif rc_status == "missing":
+            step_msg = f"  - remote package: {file} not present; copying"
+        else:
+            step_msg = remote_check["message"]
         steps.append({
             "action": "remote_check",
-            "ok": remote_check["status"] == "ok",
-            "status": remote_check["status"],
-            "message": remote_check["message"],
+            "ok": rc_status == "ok",
+            "status": rc_status,
+            "message": step_msg,
         })
-        if remote_check["status"] == "ok":
+        if rc_status == "ok":
             result["ok"] = True
             result["skipped"] = True
             result["skip_reason"] = "already_copied"
