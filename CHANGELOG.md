@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.16.1] - 2026-04-15
+
 ### Fixed
 - `upgrade.get_pending_version()` on SRX_BRANCH (SRX300/SRX345) no longer leaks the raw `<snapshot-information>` XML to stderr between hosts. The offending `logger.debug(f"... {etree.dump(xml)}")` evaluated `etree.dump` eagerly regardless of log level; replaced with a guarded `logger.isEnabledFor(DEBUG)` + `etree.tostring`.
 
