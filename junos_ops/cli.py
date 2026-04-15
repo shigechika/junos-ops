@@ -550,7 +550,16 @@ def cmd_ls(hostname) -> int:
 
 
 def main():
-    """CLI entry point."""
+    """CLI entry point. Wraps :func:`_run` with graceful Ctrl-C handling."""
+    try:
+        return _run()
+    except KeyboardInterrupt:
+        sys.stderr.write("\naborted\n")
+        return 130
+
+
+def _run():
+    """CLI dispatcher body."""
     # 共通オプション用の親パーサー
     parent = argparse.ArgumentParser(add_help=False)
     parent.add_argument(

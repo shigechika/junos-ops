@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.16.3] - 2026-04-15
+
+### Added
+- Graceful Ctrl-C handling: `main()` now catches `KeyboardInterrupt`, prints `aborted` to stderr, and exits 130 instead of dumping a traceback.
+
+### Fixed
+- 0.16.2 accidentally committed unrelated scratch files (`safe_copy.py`, `sw.py`, `thread.py`, `ver.py`, `junos-rsi.py`, `test_safe_copy.py`, `.srx-nat-usage.ini`) via an errant `git add -A`. 0.16.3 removes them. **Please skip 0.16.2 and install 0.16.3.** (The 0.16.2 sdist/wheel contents are unaffected — `tool.setuptools.packages = ["junos_ops"]` restricts the distribution to the package — but the repo tarball / git tree was polluted.)
+
 ## [0.16.2] - 2026-04-15
 
 ### Fixed
