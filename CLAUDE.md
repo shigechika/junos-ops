@@ -53,8 +53,9 @@ LICENSE
 - `read_config()` — INIファイル読込
 - `connect()` — NETCONF接続（huge_tree対応、個別例外処理）
 - `_get_host_tags()` — ホストセクションのタグを set で返す
-- `_filter_by_tags()` — タグの AND フィルタでセクションを絞り込む
-- `get_targets()` — ターゲットホストリスト決定（`--tags` 対応）
+- `_parse_tag_groups()` — `--tags` CLI 値（list / str / None）を set のリストに正規化
+- `_filter_by_tag_groups()` — タグのグループで絞り込み（グループ内 AND、グループ間 OR）
+- `get_targets()` — ターゲットホストリスト決定（`--tags` は `action="append"`。ホスト名併記時はタグフィルタ ∩ 名前リスト）
 - `run_parallel()` — ThreadPoolExecutorラッパー（max_workers=1でシリアル実行）
 
 ### upgrade.py — パッケージ操作（すべて dict を返す）
