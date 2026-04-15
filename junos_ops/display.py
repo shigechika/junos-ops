@@ -80,6 +80,17 @@ def print_host_header(hostname: str) -> None:
     _emit(format_host_header(hostname))
 
 
+def print_host_block(hostname: str, body: str) -> None:
+    """Print ``# hostname`` header + ``body`` as one atomic block.
+
+    Prevents parallel workers (``--workers N``) from interleaving another
+    host's header between this host's header and its body.
+    """
+    header = format_host_header(hostname)
+    text = header if not body else f"{header}\n{body}"
+    _emit(text)
+
+
 def format_host_footer() -> str:
     """Return an empty line (the separator used between hosts)."""
     return ""

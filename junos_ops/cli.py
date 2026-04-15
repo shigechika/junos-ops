@@ -69,8 +69,7 @@ def _open_connection(hostname: str):
     """
     conn = common.connect(hostname)
     if not conn["ok"]:
-        display.print_host_header(hostname)
-        display.print_connect_error(conn)
+        display.print_host_block(hostname, display.format_connect_error(conn))
         return None
     return conn["dev"]
 
@@ -100,9 +99,8 @@ def cmd_upgrade(hostname) -> int:
     if dev is None:
         return 1
     try:
-        display.print_host_header(hostname)
         result = upgrade.install(hostname, dev)
-        display.print_install(result)
+        display.print_host_block(hostname, display.format_install(result))
         return 0 if result.get("ok") else 1
     except Exception as e:
         logger.error(f"{hostname}: {e}")
@@ -120,9 +118,8 @@ def cmd_copy(hostname) -> int:
     if dev is None:
         return 1
     try:
-        display.print_host_header(hostname)
         result = upgrade.copy(hostname, dev)
-        display.print_copy(result)
+        display.print_host_block(hostname, display.format_copy(result))
         return 0 if result.get("ok") else 1
     except Exception as e:
         logger.error(f"{hostname}: {e}")
@@ -140,9 +137,8 @@ def cmd_install(hostname) -> int:
     if dev is None:
         return 1
     try:
-        display.print_host_header(hostname)
         result = upgrade.install(hostname, dev)
-        display.print_install(result)
+        display.print_host_block(hostname, display.format_install(result))
         return 0 if result.get("ok") else 1
     except Exception as e:
         logger.error(f"{hostname}: {e}")
@@ -160,19 +156,20 @@ def cmd_rollback(hostname) -> int:
     if dev is None:
         return 1
     try:
-        display.print_host_header(hostname)
         pending = upgrade.get_pending_version(hostname, dev)
-        print(f"rollback: pending version is {pending}")
+        lines = [f"rollback: pending version is {pending}"]
         if pending is None:
-            print("rollback: skip")
+            lines.append("rollback: skip")
+            display.print_host_block(hostname, "\n".join(lines))
             return 0
         result = upgrade.rollback(hostname, dev)
-        display.print_rollback(result)
-        if not result.get("ok"):
-            return 1
-        if not common.args.dry_run:
-            print("rollback: successful")
-        return 0
+        rb = display.format_rollback(result)
+        if rb:
+            lines.append(rb)
+        if result.get("ok") and not common.args.dry_run:
+            lines.append("rollback: successful")
+        display.print_host_block(hostname, "\n".join(lines))
+        return 0 if result.get("ok") else 1
     except Exception as e:
         logger.error(f"{hostname}: {e}")
         return 1
@@ -189,9 +186,8 @@ def cmd_version(hostname) -> int:
     if dev is None:
         return 1
     try:
-        display.print_host_header(hostname)
         result = upgrade.show_version(hostname, dev)
-        display.print_version(result)
+        display.print_host_block(hostname, display.format_version(result))
         return 0
     except Exception as e:
         logger.error(f"{hostname}: {e}")
@@ -209,9 +205,8 @@ def cmd_reboot(hostname) -> int:
     if dev is None:
         return 1
     try:
-        display.print_host_header(hostname)
         result = upgrade.reboot(hostname, dev, common.args.rebootat)
-        display.print_reboot(result)
+        display.print_host_block(hostname, display.format_reboot(result))
         return result.get("code", 1)
     except Exception as e:
         logger.error(f"{hostname}: {e}")
@@ -292,9 +287,8 @@ def cmd_config(hostname) -> int:
         if timeout is None:
             timeout = 120
         dev.timeout = timeout
-        display.print_host_header(hostname)
         result = upgrade.load_config(hostname, dev, common.args.configfile)
-        display.print_load_config(result)
+        display.print_host_block(hostname, display.format_load_config(result))
         return 0 if result.get("ok") else 1
     except Exception as e:
         logger.error(f"{hostname}: {e}")
@@ -539,9 +533,8 @@ def cmd_ls(hostname) -> int:
     if dev is None:
         return 1
     try:
-        display.print_host_header(hostname)
         result = upgrade.list_remote_path(hostname, dev)
-        display.print_list_remote(result)
+        display.print_host_block(hostname, display.format_list_remote(result))
         return 0
     except Exception as e:
         logger.error(f"{hostname}: {e}")

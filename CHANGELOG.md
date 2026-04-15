@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.16.2] - 2026-04-15
+
+### Fixed
+- Per-host output under `--workers N` no longer interleaves. `# hostname` headers and bodies were emitted as separate locked prints, so parallel workers could slot another host's header between this host's header and body. Added `display.print_host_block(hostname, body)` that emits header + body as one atomic block, and switched every subcommand (`upgrade` / `copy` / `install` / `rollback` / `version` / `reboot` / `config` / `ls`, plus the `_open_connection` error path) to use it.
+
 ## [0.16.1] - 2026-04-15
 
 ### Fixed
