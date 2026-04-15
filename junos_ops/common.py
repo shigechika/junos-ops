@@ -227,9 +227,9 @@ def get_targets():
             sys.exit(1)
         return targets
 
-    # パターン4: --tags あり & hosts あり → タグフィルタ結果 ∩ hosts（積集合）
-    # v0.16.4 以前は和集合（∪）だったが、「タグ条件を満たすホストの中から、
-    # さらに名前で絞り込む」方が直感的なので積集合に変更。
+    # Pattern 4: --tags + hosts -> intersection (tag filter AND name list).
+    # Pre-0.16.4 was union; intersection is more intuitive ("narrow the
+    # tag selection further by name") and keeps --tags as a safety rail.
     tag_matched = set(_filter_by_tags(required_tags))
     targets = []
     for i in args.specialhosts:
