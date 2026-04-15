@@ -345,7 +345,7 @@ junos-ops version --tags tokyo
 junos-ops version --tags tokyo,core
 
 # backup タグを持つホストのうち、指定した 2 台だけを対象にする
-junos-ops copy --tags backup oumon-rt.example.jp tea-rt.example.jp
+junos-ops copy --tags backup rt1.example.jp rt2.example.jp
 ```
 
 ## 実行例

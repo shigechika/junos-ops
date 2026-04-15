@@ -345,7 +345,7 @@ junos-ops version --tags tokyo
 junos-ops version --tags tokyo,core
 
 # Among "backup"-tagged hosts, target only these two
-junos-ops copy --tags backup oumon-rt.example.jp tea-rt.example.jp
+junos-ops copy --tags backup rt1.example.jp rt2.example.jp
 ```
 
 ## Examples
