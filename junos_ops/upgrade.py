@@ -16,6 +16,7 @@ import datetime
 import hashlib
 import os
 import re
+import logging
 from logging import getLogger
 
 from junos_ops import common
@@ -1073,27 +1074,18 @@ def get_pending_version(hostname, dev) -> str:
             # Dual Partition - SRX300, SRX345
             logger.debug("get_pending_version: SRX_BRANCH series")
             xml = dev.rpc.get_snapshot_information(media="internal")
-            logger.debug(f"get_snapshot_information: xml={etree.dump(xml)}")
-            primary = False
-            for i in range(len(xml)):
+            if logger.isEnabledFor(logging.DEBUG):
                 logger.debug(
-                    f"get_snapshot_information: i={i}, tag={xml[i].tag}, text={xml[i].text}"
+                    "get_snapshot_information: xml=%s",
+                    etree.tostring(xml, pretty_print=True).decode(),
                 )
-                if (
-                    xml[i].tag == "snapshot-medium"
-                    and re.match(".*primary", xml[i].text, re.MULTILINE | re.DOTALL)
-                    is not None
-                ):
-                    logger.debug("primary find")
-                    primary = True
-                if (
-                    primary
-                    and xml[i].tag == "software-version"
-                    and xml[i][0].tag == "package"
-                    and xml[i][0][1].tag == "package-version"
-                ):
-                    pending = xml[i][0][1].text.strip()
-                    break
+            pv = xml.xpath(
+                ".//snapshot-medium[contains(., 'primary')]"
+                "/following-sibling::software-version[1]"
+                "/package/package-version"
+            )
+            if pv and pv[0].text:
+                pending = pv[0].text.strip()
         elif (
             dev.facts["personality"] == "SRX_MIDRANGE"
             or dev.facts["personality"] == "SRX_HIGHEND"

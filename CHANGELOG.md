@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+- `upgrade.get_pending_version()` on SRX_BRANCH (SRX300/SRX345) no longer leaks the raw `<snapshot-information>` XML to stderr between hosts. The offending `logger.debug(f"... {etree.dump(xml)}")` evaluated `etree.dump` eagerly regardless of log level; replaced with a guarded `logger.isEnabledFor(DEBUG)` + `etree.tostring`.
+
+### Changed
+- `upgrade.get_pending_version()` SRX_BRANCH branch rewritten to use an XPath (`snapshot-medium[contains(., 'primary')]/following-sibling::software-version[1]/package/package-version`) instead of positional indexing (`xml[i][0][1]`), making it resilient to child-order changes.
+
 ## [0.16.0] - 2026-04-15
 
 ### Changed
