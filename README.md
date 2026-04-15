@@ -333,7 +333,9 @@ See [docs/config.md](docs/config.md) for full details including health check opt
 
 ### Tag-based Host Filtering
 
-Use `--tags` to target hosts by tags defined in config.ini. Multiple tags are AND-matched (hosts must have all specified tags). When combined with explicit hostnames, the results are merged (union).
+Use `--tags` to target hosts by tags defined in config.ini. Multiple tags are AND-matched (hosts must have all specified tags). When combined with explicit hostnames, the two filters are **AND-combined** (intersection): only hosts that both match the tag filter and appear in the hostname list are targeted. This lets you say "among hosts tagged `backup`, just these two" — useful after `check` flags a few failures and you want to re-copy only those without losing the tag safety rail.
+
+> **Note:** v0.16.3 and earlier used union (tagged hosts OR named hosts). v0.16.4 changed this to intersection, which is more intuitive and lines up with how `--tags` is meant to be a safety filter. If you relied on the old union semantics, drop `--tags` and list hostnames explicitly, or run each set separately.
 
 ```
 # All hosts tagged "tokyo"
@@ -342,8 +344,8 @@ junos-ops version --tags tokyo
 # Hosts tagged both "tokyo" AND "core"
 junos-ops version --tags tokyo,core
 
-# Tags union with explicit hosts
-junos-ops version --tags core rt3.example.jp
+# Among "backup"-tagged hosts, target only these two
+junos-ops copy --tags backup oumon-rt.example.jp tea-rt.example.jp
 ```
 
 ## Examples

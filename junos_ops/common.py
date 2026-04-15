@@ -227,23 +227,20 @@ def get_targets():
             sys.exit(1)
         return targets
 
-    # パターン4: --tags あり & hosts あり → タグフィルタ結果 ∪ hosts（重複排除）
-    tag_matched = _filter_by_tags(required_tags)
-    seen = set()
+    # パターン4: --tags あり & hosts あり → タグフィルタ結果 ∩ hosts（積集合）
+    # v0.16.4 以前は和集合（∪）だったが、「タグ条件を満たすホストの中から、
+    # さらに名前で絞り込む」方が直感的なので積集合に変更。
+    tag_matched = set(_filter_by_tags(required_tags))
     targets = []
-    # タグマッチ分を先に追加
-    for i in tag_matched:
-        if i not in seen:
-            seen.add(i)
-            targets.append(i)
-    # 明示指定ホストを追加（存在チェック付き）
     for i in args.specialhosts:
         if not config.has_section(i):
             print(i, "is not found in", args.config)
             sys.exit(1)
-        if i not in seen:
-            seen.add(i)
+        if i in tag_matched:
             targets.append(i)
+    if not targets:
+        print("no hosts matched both tags and names:", tags, args.specialhosts)
+        sys.exit(1)
     return targets
 
 

@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.16.4] - 2026-04-15
+
+### Changed
+- **Breaking (minor):** `--tags` combined with explicit hostnames now uses **intersection** (AND), not union (OR). Previously `junos-ops copy --tags backup oumon-rt tea-rt` targeted every backup-tagged host *and* the two named hosts; now it targets only the named hosts that also carry the `backup` tag. This matches the more intuitive "narrow tag selection further by name" mental model — e.g. after `check` flags a few hosts, re-copy only those without losing the tag safety rail. An empty intersection exits 1 with a diagnostic.
+
+### Docs
+- README / README.ja updated with the new `--tags` + hostname semantics and a migration note for users who relied on the old union behaviour.
+
 ## [0.16.3] - 2026-04-15
 
 ### Added

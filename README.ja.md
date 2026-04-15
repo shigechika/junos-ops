@@ -333,7 +333,9 @@ flowchart TD
 
 ### タグベースのホストフィルタリング
 
-`--tags` で config.ini に定義したタグでホストを絞り込めます。複数タグは AND マッチ（すべてのタグを持つホストのみ）。明示的なホスト名と組み合わせた場合は union（和集合）になります。
+`--tags` で config.ini に定義したタグでホストを絞り込めます。複数タグは AND マッチ（すべてのタグを持つホストのみ）。明示的なホスト名と組み合わせた場合は **AND（積集合）** になります。「タグ条件を満たすホストのうち、さらに名前で絞り込む」動作です。`check` で bad だった数台だけを `--tags backup` の安全柵を残したまま再 copy したい、といった使い方に向いています。
+
+> **注意:** v0.16.3 以前は union（和集合: タグ OR 名前）でした。v0.16.4 で intersection（積集合: タグ AND 名前）に変更しています。旧来の union 挙動に依存していた場合は、`--tags` を外してホスト名だけで指定するか、タグ指定と名前指定を別コマンドに分けてください。
 
 ```
 # tokyo タグを持つ全ホスト
@@ -342,8 +344,8 @@ junos-ops version --tags tokyo
 # tokyo AND core の両方のタグを持つホスト
 junos-ops version --tags tokyo,core
 
-# タグフィルタと明示ホストの union
-junos-ops version --tags core rt3.example.jp
+# backup タグを持つホストのうち、指定した 2 台だけを対象にする
+junos-ops copy --tags backup oumon-rt.example.jp tea-rt.example.jp
 ```
 
 ## 実行例
