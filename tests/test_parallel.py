@@ -110,22 +110,34 @@ class TestGetHostTags:
         assert tags == {"tokyo", "core"}
 
 
-class TestFilterByTags:
-    """_filter_by_tags() のテスト"""
+class TestFilterByTagGroups:
+    """Tests for _filter_by_tag_groups()."""
 
     def test_single_tag(self, junos_common, mock_args, mock_config_with_tags):
-        """単一タグで tokyo のホストをフィルタ"""
-        matched = junos_common._filter_by_tags({"tokyo"})
+        """Single tag in one group filters to tokyo hosts."""
+        matched = junos_common._filter_by_tag_groups([{"tokyo"}])
         assert matched == ["rt1.example.jp", "sw1.example.jp"]
 
-    def test_and_filter(self, junos_common, mock_args, mock_config_with_tags):
-        """AND フィルタ: tokyo AND core"""
-        matched = junos_common._filter_by_tags({"tokyo", "core"})
+    def test_and_within_group(self, junos_common, mock_args, mock_config_with_tags):
+        """AND filter inside a group: tokyo AND core."""
+        matched = junos_common._filter_by_tag_groups([{"tokyo", "core"}])
         assert matched == ["rt1.example.jp"]
 
+    def test_or_between_groups(self, junos_common, mock_args, mock_config_with_tags):
+        """OR between groups: {access} OR {core} matches hosts with either."""
+        matched = junos_common._filter_by_tag_groups([{"access"}, {"core"}])
+        # core: rt1, rt2; access: sw1 -> union preserves section order
+        assert matched == ["rt1.example.jp", "rt2.example.jp", "sw1.example.jp"]
+
+    def test_mixed_and_or(self, junos_common, mock_args, mock_config_with_tags):
+        """(tokyo AND core) OR osaka."""
+        matched = junos_common._filter_by_tag_groups([{"tokyo", "core"}, {"osaka"}])
+        # tokyo AND core: rt1; osaka: rt2
+        assert matched == ["rt1.example.jp", "rt2.example.jp"]
+
     def test_no_match(self, junos_common, mock_args, mock_config_with_tags):
-        """マッチなしは空リスト"""
-        matched = junos_common._filter_by_tags({"nonexistent"})
+        """No matching tag returns empty."""
+        matched = junos_common._filter_by_tag_groups([{"nonexistent"}])
         assert matched == []
 
 
@@ -169,6 +181,13 @@ class TestGetTargetsWithTags:
         junos_common.args.tags = "nonexistent"
         with pytest.raises(SystemExit):
             junos_common.get_targets()
+
+    def test_tags_repeated_or(self, junos_common, mock_args, mock_config_with_tags):
+        """--tags a --tags b: OR between groups."""
+        junos_common.args.specialhosts = []
+        junos_common.args.tags = ["access", "core"]
+        targets = junos_common.get_targets()
+        assert targets == ["rt1.example.jp", "rt2.example.jp", "sw1.example.jp"]
 
     def test_tags_plus_hosts_intersection(self, junos_common, mock_args, mock_config_with_tags):
         """--tags core + hosts: intersection keeps only tag-matching names."""

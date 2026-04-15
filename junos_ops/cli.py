@@ -579,8 +579,12 @@ def _run():
         help="parallel workers (default: 1 for upgrade, 20 for rsi/check)",
     )
     parent.add_argument(
-        "--tags", type=str, default=None,
-        help="filter hosts by tags (comma-separated, AND match)",
+        "--tags", type=str, default=None, action="append",
+        help=(
+            "filter hosts by tags. Within a single --tags value, "
+            "comma-separated tags AND together. Repeat --tags to OR "
+            "groups: --tags a,b --tags c = (a AND b) OR c."
+        ),
     )
 
     parser = argparse.ArgumentParser(

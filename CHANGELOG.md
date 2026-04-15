@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.16.6] - 2026-04-15
+
+### Added
+- `--tags` is now repeatable. Within a single `--tags` value, comma-separated tags AND together (`--tags tokyo,core`); across repeated `--tags` flags, the groups OR together (`--tags main --tags backup`). Mixing both is supported: `--tags tokyo,core --tags access` = `(tokyo AND core) OR access`. README / README.ja have a new "tag-based host filtering" section with worked examples.
+
+### Changed
+- Previously repeating `--tags` silently let the last occurrence replace earlier ones (argparse default without `action="append"`). The new semantics produce a union of the groups, matching what `junos-ops check --tags main --tags backup` would intuitively do.
+
 ## [0.16.5] - 2026-04-15
 
 ### Fixed

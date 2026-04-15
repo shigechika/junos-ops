@@ -173,13 +173,42 @@ def _get_host_tags(section: str) -> set[str]:
     return {t.strip().lower() for t in raw.split(",")}
 
 
-def _filter_by_tags(required_tags: set[str]) -> list[str]:
-    """Return sections whose tags are a superset of required_tags (AND)."""
+def _filter_by_tag_groups(tag_groups: list[set[str]]) -> list[str]:
+    """Return sections that match any of the tag groups.
+
+    Each element of ``tag_groups`` is a set of required tags. A section
+    matches if its tag set is a superset of at least one group (OR
+    across groups, AND within a group). Section order is preserved so
+    host ordering stays stable.
+    """
     matched = []
     for section in config.sections():
-        if required_tags <= _get_host_tags(section):
-            matched.append(section)
+        host_tags = _get_host_tags(section)
+        for group in tag_groups:
+            if group <= host_tags:
+                matched.append(section)
+                break
     return matched
+
+
+def _parse_tag_groups(tags) -> list[set[str]]:
+    """Normalize the ``--tags`` CLI value into a list of tag sets.
+
+    ``--tags`` is ``action="append"``, so the argparse value is either
+    ``None`` (flag not used), a single string (legacy non-append
+    consumers), or a list of strings (one per ``--tags`` occurrence).
+    Each string is further comma-split, with whitespace trimmed and
+    folded to lower case. Empty groups are dropped.
+    """
+    if tags is None:
+        return []
+    raw_groups = tags if isinstance(tags, list) else [tags]
+    groups: list[set[str]] = []
+    for raw in raw_groups:
+        group = {t.strip().lower() for t in raw.split(",") if t.strip()}
+        if group:
+            groups.append(group)
+    return groups
 
 
 def get_targets():
@@ -187,14 +216,10 @@ def get_targets():
     tags = getattr(args, "tags", None)
     has_hosts = len(args.specialhosts) > 0
 
-    # タグ指定時: パースして AND フィルタ用の set を作成
-    if tags is not None:
-        required_tags = {t.strip().lower() for t in tags.split(",")}
-    else:
-        required_tags = set()
+    tag_groups = _parse_tag_groups(tags)
 
     # パターン1: --tags なし & hosts なし → 全セクション（現行動作）
-    if not required_tags and not has_hosts:
+    if not tag_groups and not has_hosts:
         targets = []
         for i in config.sections():
             tmp = config.get(i, "host")
@@ -207,7 +232,7 @@ def get_targets():
         return targets
 
     # パターン2: --tags なし & hosts あり → 指定ホストのみ（現行動作）
-    if not required_tags and has_hosts:
+    if not tag_groups and has_hosts:
         targets = []
         for i in args.specialhosts:
             if config.has_section(i):
@@ -219,9 +244,12 @@ def get_targets():
             targets.append(i)
         return targets
 
-    # パターン3: --tags あり & hosts なし → タグで AND フィルタ
-    if required_tags and not has_hosts:
-        targets = _filter_by_tags(required_tags)
+    # Pattern 3: --tags only -> union of each group's AND match.
+    # Within a --tags group (comma-separated) tags AND together; multiple
+    # --tags occurrences OR together. Example: --tags a,b --tags c
+    # matches hosts with (a AND b) OR c.
+    if tag_groups and not has_hosts:
+        targets = _filter_by_tag_groups(tag_groups)
         if not targets:
             print("no hosts matched tags:", tags)
             sys.exit(1)
@@ -230,7 +258,7 @@ def get_targets():
     # Pattern 4: --tags + hosts -> intersection (tag filter AND name list).
     # Pre-0.16.4 was union; intersection is more intuitive ("narrow the
     # tag selection further by name") and keeps --tags as a safety rail.
-    tag_matched = set(_filter_by_tags(required_tags))
+    tag_matched = set(_filter_by_tag_groups(tag_groups))
     targets = []
     for i in args.specialhosts:
         if not config.has_section(i):

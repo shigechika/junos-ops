@@ -201,7 +201,7 @@ junos-ops <subcommand> [options] [hostname ...]
 | `-n`, `--dry-run` | テスト実行（接続とメッセージ出力のみ、実行しない） |
 | `-d`, `--debug` | デバッグ出力 |
 | `--force` | 条件を無視して強制実行 |
-| `--tags TAG,...` | タグでホストをフィルタ（カンマ区切り、AND マッチ） |
+| `--tags TAG[,TAG...]` | タグでホストをフィルタ。カンマ区切りは 1 グループ内の AND、`--tags` の繰り返しはグループ間 OR。ホスト名併記時はタグフィルタと積集合。詳細は「タグベースのホストフィルタリング」セクション参照 |
 | `--workers N` | 並列実行数（デフォルト: upgrade系=1, rsi=20） |
 | `--version` | プログラムバージョン表示 |
 
@@ -333,9 +333,16 @@ flowchart TD
 
 ### タグベースのホストフィルタリング
 
-`--tags` で config.ini に定義したタグでホストを絞り込めます。複数タグは AND マッチ（すべてのタグを持つホストのみ）。明示的なホスト名と組み合わせた場合は **AND（積集合）** になります。「タグ条件を満たすホストのうち、さらに名前で絞り込む」動作です。`check` で bad だった数台だけを `--tags backup` の安全柵を残したまま再 copy したい、といった使い方に向いています。
+`--tags` で `config.ini` に定義したタグによりホストを絞り込めます。2 種類の演算子を組み合わせて柔軟に選択できます。
 
-> **注意:** v0.16.3 以前は union（和集合: タグ OR 名前）でした。v0.16.4 で intersection（積集合: タグ AND 名前）に変更しています。旧来の union 挙動に依存していた場合は、`--tags` を外してホスト名だけで指定するか、タグ指定と名前指定を別コマンドに分けてください。
+- **グループ内は AND**: `--tags` の値をカンマ区切りにすると、そのすべてのタグを持つホストだけが対象になります（`--tags tokyo,core` → tokyo と core を**両方**持つホスト）。
+- **グループ間は OR**: `--tags` を複数回指定するとそれぞれがグループになり、**いずれか**を満たせばマッチします（`--tags main --tags backup` → main か backup のどちらかを持つホスト）。
+- **ホスト名併記は AND（積集合）**: 明示ホスト名と組み合わせた場合、タグで絞ったうえで名前リストとの積集合を取ります。「タグ条件を満たすホストのうち、さらに名前で絞り込む」動作です。
+
+論理式で書くと `(--tags group₁) OR (--tags group₂) OR …` でホスト集合を絞り、ホスト名リストがあればさらに `AND` で交差させる形になります。`check` で bad だった数台だけを `--tags backup` の安全柵を残したまま再 copy する、といった使い方に向きます。
+
+> **履歴:**
+> v0.16.3 以前は `--tags` + ホスト名を和集合として扱っていました。v0.16.4 で積集合に変更し、`--tags` を「さらに名前で絞り込む」安全フィルタとして読ませています。v0.16.6 で `--tags` を繰り返し指定可能にしてグループ間 OR を追加しました（それ以前は argparse の仕様で最後の `--tags` しか効かず、黙って上書きされていました）。
 
 ```
 # tokyo タグを持つ全ホスト
@@ -344,7 +351,13 @@ junos-ops version --tags tokyo
 # tokyo AND core の両方のタグを持つホスト
 junos-ops version --tags tokyo,core
 
-# backup タグを持つホストのうち、指定した 2 台だけを対象にする
+# main または backup のどちらかのタグを持つホスト
+junos-ops check --remote --tags main --tags backup
+
+# (tokyo AND core) OR access — tokyo かつ core、または access タグを持つホスト
+junos-ops version --tags tokyo,core --tags access
+
+# backup タグを持つホストのうち、指定した 2 台だけを対象にする（タグフィルタ ∩ 名前リスト）
 junos-ops copy --tags backup rt1.example.jp rt2.example.jp
 ```
 

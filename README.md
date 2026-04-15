@@ -201,7 +201,7 @@ junos-ops <subcommand> [options] [hostname ...]
 | `-n`, `--dry-run` | Test run (connect and display messages only, no execution) |
 | `-d`, `--debug` | Debug output |
 | `--force` | Force execution regardless of conditions |
-| `--tags TAG,...` | Filter hosts by tags (comma-separated, AND match) |
+| `--tags TAG[,TAG...]` | Filter hosts by tags. Comma-separates AND together inside one value; repeating `--tags` ORs groups. Combined with explicit hostnames, the tag filter and hostname list intersect. See "Tag-based Host Filtering" below. |
 | `--workers N` | Parallel workers (default: 1 for upgrade, 20 for rsi) |
 | `--version` | Show program version |
 
@@ -333,9 +333,29 @@ See [docs/config.md](docs/config.md) for full details including health check opt
 
 ### Tag-based Host Filtering
 
-Use `--tags` to target hosts by tags defined in config.ini. Multiple tags are AND-matched (hosts must have all specified tags). When combined with explicit hostnames, the two filters are **AND-combined** (intersection): only hosts that both match the tag filter and appear in the hostname list are targeted. This lets you say "among hosts tagged `backup`, just these two" — useful after `check` flags a few failures and you want to re-copy only those without losing the tag safety rail.
+Use `--tags` to target hosts by tags defined in `config.ini`. The
+flag combines two operators so you can build almost any selection:
 
-> **Note:** v0.16.3 and earlier used union (tagged hosts OR named hosts). v0.16.4 changed this to intersection, which is more intuitive and lines up with how `--tags` is meant to be a safety filter. If you relied on the old union semantics, drop `--tags` and list hostnames explicitly, or run each set separately.
+- **AND within a group**: comma-separated tags in one `--tags` value
+  require the host to carry *all* of them
+  (`--tags tokyo,core` → hosts tagged both tokyo AND core).
+- **OR between groups**: repeat `--tags` to add another group. A host
+  matches if it satisfies *any* group
+  (`--tags main --tags backup` → hosts tagged either main or backup).
+- **AND with a hostname list**: when explicit hostnames are also given,
+  the tag filter and the hostname list intersect — only hostnames that
+  also satisfy the tag filter are targeted.
+
+In logical terms: `(--tags group₁) OR (--tags group₂) OR …` filters
+the host set, and `[hostname …]` further restricts that set to the
+listed names.
+
+> **History:**
+> v0.16.3 and earlier treated `--tags` + hostnames as *union*.
+> v0.16.4 switched to *intersection* so `--tags` reads as a safety
+> filter ("narrow further by name"). v0.16.6 added repeatable `--tags`
+> for OR between groups — previously the last `--tags` occurrence
+> silently replaced earlier ones.
 
 ```
 # All hosts tagged "tokyo"
@@ -344,7 +364,15 @@ junos-ops version --tags tokyo
 # Hosts tagged both "tokyo" AND "core"
 junos-ops version --tags tokyo,core
 
-# Among "backup"-tagged hosts, target only these two
+# Hosts tagged "main" OR "backup"
+junos-ops check --remote --tags main --tags backup
+
+# (tokyo AND core) OR access — any host that is a tokyo core router
+# or carries the access tag.
+junos-ops version --tags tokyo,core --tags access
+
+# Among "backup"-tagged hosts, target only these two (tag filter +
+# hostname list = intersection)
 junos-ops copy --tags backup rt1.example.jp rt2.example.jp
 ```
 
