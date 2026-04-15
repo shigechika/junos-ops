@@ -171,15 +171,15 @@ class TestGetTargetsWithTags:
             junos_common.get_targets()
 
     def test_tags_plus_hosts_intersection(self, junos_common, mock_args, mock_config_with_tags):
-        """--tags core + hosts → intersection（積集合）。タグを持つホストのみ残る。"""
+        """--tags core + hosts: intersection keeps only tag-matching names."""
         junos_common.args.specialhosts = ["rt1.example.jp", "sw2.example.jp"]
         junos_common.args.tags = "core"
         targets = junos_common.get_targets()
-        # core タグを持つのは rt1/rt2。明示指定のうち rt1 のみ交わる。
+        # core tag is on rt1/rt2; only rt1 is also in the explicit list.
         assert targets == ["rt1.example.jp"]
 
     def test_tags_plus_hosts_preserves_order(self, junos_common, mock_args, mock_config_with_tags):
-        """--tags + hosts の出力順は specialhosts の指定順。"""
+        """--tags + hosts: output order follows specialhosts order."""
         junos_common.args.specialhosts = ["sw1.example.jp", "rt1.example.jp"]
         junos_common.args.tags = "tokyo"
         targets = junos_common.get_targets()
@@ -188,7 +188,7 @@ class TestGetTargetsWithTags:
     def test_tags_plus_hosts_empty_intersection_exits(
         self, junos_common, mock_args, mock_config_with_tags
     ):
-        """タグと名前の積集合が空なら sys.exit。"""
+        """Empty intersection of tags and names exits with sys.exit."""
         junos_common.args.specialhosts = ["sw2.example.jp"]
         junos_common.args.tags = "tokyo"
         with pytest.raises(SystemExit):
@@ -209,7 +209,7 @@ class TestGetTargetsWithTags:
         assert targets == ["rt1.example.jp"]
 
     def test_intersection_unknown_host_exits(self, junos_common, mock_args, mock_config_with_tags):
-        """intersection 時の不明ホストで sys.exit"""
+        """Unknown host in intersection mode exits with sys.exit."""
         junos_common.args.specialhosts = ["unknown-host"]
         junos_common.args.tags = "tokyo"
         with pytest.raises(SystemExit):
