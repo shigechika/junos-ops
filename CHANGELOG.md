@@ -7,7 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-## [0.16.8] - 2026-04-16
+## [0.16.9] - 2026-04-16
+
+### Fixed
+- `delete_snapshots` no longer fails with `TypeError: Type 'bool' cannot be serialized.` on recent PyEZ/ncclient. The kwarg form `dev.rpc.request_snapshot(delete="*")` was coerced to bool True somewhere in the XML builder; switched to the positional-dict idiom `dev.rpc.request_snapshot({"delete": "*"}, dev_timeout=60)` used elsewhere in this file. Snapshots are now actually deleted, which was the whole point of this pre-install step on EX/QFX switches.
+- `check_remote_package_by_model` was reporting `checksum(cache) is OK` from stale cache entries after `request system storage cleanup` swept `/var/tmp` out from under it, which led the install phase to fail with `ERROR: cannot find: /var/tmp/...`. Added `clear_hashcache(hostname, file)` and invalidate the cache entry immediately after `storage_cleanup` runs, so the next remote check re-verifies against the real device state and falls through to a fresh SCP when necessary.
+
+### Changed
+- `copy()` now runs `request system storage cleanup` + `request system snapshot delete *` **before** the remote-package check, not after the `already_copied` early-return. The old ordering skipped both cleanups when the staged package was already present — which is exactly the case where low-flash EX2300/EX3400 hit `ERROR: insufficient space` during `pkgadd` on the install phase. SRX_BRANCH happened to get clean space from the forced pre-install rollback; EX didn't. With the new ordering the cleanup runs on every path through `copy()`, and because cleanup can sweep `/var/tmp`, the post-cleanup remote check correctly re-copies a swept-away package instead of trusting a pre-cleanup checksum.
+
+
 
 ### Changed
 - `config` subcommand default health check is now `uptime` (NETCONF `get-system-uptime-information` RPC) instead of `ping count 3 255.255.255.255 rapid`. The `--help` text already advertised `uptime` as a supported probe, but the fall-through default still pointed at the ping command — a stale carry-over that caused operators to see ping failures on devices where broadcast ping is blocked. `uptime` uses the existing NETCONF session so it always reflects whether commit confirmed left the management plane reachable, and does not depend on ICMP reachability to an external address.

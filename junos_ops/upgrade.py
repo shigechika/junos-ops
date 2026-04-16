@@ -62,7 +62,14 @@ def delete_snapshots(dev) -> dict:
         }
 
     try:
-        rpc = dev.rpc.request_snapshot(delete="*", dev_timeout=60)
+        # Send <request-snapshot><delete>*</delete></request-snapshot> as a
+        # positional dict, the same idiom used for request_package_rollback
+        # elsewhere in this file. The earlier ``delete="*"`` kwarg form was
+        # coerced to bool True somewhere in the PyEZ/ncclient XML builder and
+        # failed with "Type 'bool' cannot be serialized".
+        rpc = dev.rpc.request_snapshot(
+            {"delete": "*"}, dev_timeout=60
+        )
         xml_str = etree.tostring(rpc, encoding="unicode")
         logger.debug(f"delete_snapshots: {xml_str}")
         return {
@@ -135,10 +142,8 @@ def copy(hostname, dev) -> dict:
         "error": None,
     }
 
-    # pre-flight skip checks
-    if common.args.force:
-        logger.debug("copy: force copy")
-    else:
+    # pre-flight: skip entirely if the target version is already running.
+    if not common.args.force:
         if check_running_package(hostname, dev)["match"]:
             result["ok"] = True
             result["skipped"] = True
@@ -149,40 +154,16 @@ def copy(hostname, dev) -> dict:
                 "message": "Already Running, COPY Skip.",
             })
             return result
-        remote_check = check_remote_package(hostname, dev)
-        # When the remote copy is stale (bad) or missing we are about to
-        # re-copy, so the "BAD. COPY AGAIN!" / "is not found." wording is
-        # rewritten to a forward-looking message instead of quoting the
-        # pre-copy state (which reads as a failure once the copy succeeds).
-        rc_status = remote_check["status"]
-        file = remote_check.get("file") or ""
-        if rc_status == "bad":
-            step_msg = (
-                f"  - remote package: {file} exists but checksum mismatch; "
-                "overwriting"
-            )
-        elif rc_status == "missing":
-            step_msg = f"  - remote package: {file} not present; copying"
-        else:
-            step_msg = remote_check["message"]
-        steps.append({
-            "action": "remote_check",
-            "ok": rc_status == "ok",
-            "status": rc_status,
-            "message": step_msg,
-        })
-        if rc_status == "ok":
-            result["ok"] = True
-            result["skipped"] = True
-            result["skip_reason"] = "already_copied"
-            steps.append({
-                "action": "skip",
-                "ok": True,
-                "message": "remote package is already copied successfully",
-            })
-            return result
 
-    # request-system-storage-cleanup
+    # request-system-storage-cleanup BEFORE the remote-package check — low-flash
+    # devices (EX2300/EX3400) can fill up when the subsequent install extracts
+    # the tgz contents, so we want the cleanup to run even on an otherwise
+    # idempotent re-run. Note that ``storage cleanup`` also sweeps /var/tmp,
+    # which is exactly where our staged package lives; hence the remote check
+    # has to happen *after* the cleanup so that a swept-away package gets
+    # re-copied instead of failing pkgadd with "cannot find: /var/tmp/...".
+    # SRX_BRANCH hosts happened to get clean space from the forced rollback;
+    # EX hosts did not and routinely hit "insufficient space" during pkgadd.
     cleanup: dict = {
         "ok": False,
         "dry_run": common.args.dry_run,
@@ -218,11 +199,56 @@ def copy(hostname, dev) -> dict:
         result["error"] = "storage_cleanup_failed"
         return result
 
+    # storage cleanup sweeps /var/tmp, which is exactly where our staged
+    # package lives. Drop any cached checksum for this hostname/package so
+    # that the remote check below re-verifies against the real device state
+    # instead of trusting a checksum that was valid before the cleanup.
+    if not common.args.dry_run:
+        clear_hashcache(
+            hostname, get_model_file(hostname, dev.facts["model"])
+        )
+
     # EX/QFX: snapshot delete to free disk
     snap = delete_snapshots(dev)
     result["snapshot_delete"] = snap
     if snap.get("applied"):
         steps.append({"action": "snapshot_delete", **snap})
+
+    # Remote-package check AFTER cleanup so a swept-away package triggers
+    # a fresh copy instead of a failed pkgadd.
+    if not common.args.force:
+        remote_check = check_remote_package(hostname, dev)
+        # When the remote copy is stale (bad) or missing we are about to
+        # re-copy, so the "BAD. COPY AGAIN!" / "is not found." wording is
+        # rewritten to a forward-looking message instead of quoting the
+        # pre-copy state (which reads as a failure once the copy succeeds).
+        rc_status = remote_check["status"]
+        file = remote_check.get("file") or ""
+        if rc_status == "bad":
+            step_msg = (
+                f"  - remote package: {file} exists but checksum mismatch; "
+                "overwriting"
+            )
+        elif rc_status == "missing":
+            step_msg = f"  - remote package: {file} not present; copying"
+        else:
+            step_msg = remote_check["message"]
+        steps.append({
+            "action": "remote_check",
+            "ok": rc_status == "ok",
+            "status": rc_status,
+            "message": step_msg,
+        })
+        if rc_status == "ok":
+            result["ok"] = True
+            result["skipped"] = True
+            result["skip_reason"] = "already_copied"
+            steps.append({
+                "action": "skip",
+                "ok": True,
+                "message": "remote package is already copied successfully",
+            })
+            return result
 
     # scp
     file = get_model_file(hostname, dev.facts["model"])
@@ -682,6 +708,21 @@ def set_hashcache(hostname, file, value):
             # "localhost"
             common.config.add_section(hostname)
         common.config.set(hostname, file + "hashcache", value)
+
+
+def clear_hashcache(hostname, file) -> None:
+    """Drop the cached checksum entry for ``hostname``/``file`` (thread-safe).
+
+    Call this whenever something may have deleted the file out from under the
+    cache — notably after ``request system storage cleanup`` sweeps ``/var/tmp``.
+    Without this, :func:`check_remote_package_by_model` would keep reporting
+    ``checksum(cache) is OK`` even though the file is gone, and the subsequent
+    ``pkgadd`` would fail with ``cannot find: /var/tmp/...``.
+    """
+    with common.config_lock:
+        if not common.config.has_section(hostname):
+            return
+        common.config.remove_option(hostname, file + "hashcache")
 
 
 def iter_configured_models() -> list[str]:

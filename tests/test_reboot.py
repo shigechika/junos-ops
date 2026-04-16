@@ -165,7 +165,11 @@ class TestDeleteSnapshots:
         assert result["applied"] is True
         assert result["ok"] is True
         assert result["error"] is None
-        dev.rpc.request_snapshot.assert_called_once_with(delete="*", dev_timeout=60)
+        # Call style is positional dict to bypass the kwarg bool-coercion bug
+        # that recent PyEZ hits with delete="*".
+        dev.rpc.request_snapshot.assert_called_once_with(
+            {"delete": "*"}, dev_timeout=60
+        )
         # core は print しない
         assert capsys.readouterr().out == ""
 
