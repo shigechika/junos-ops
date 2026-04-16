@@ -681,7 +681,7 @@ def _run():
              '(repeatable, tries in order; '
              '"uptime" for NETCONF uptime probe, '
              'or any CLI command; '
-             'if omitted: "ping count 3 255.255.255.255 rapid")',
+             'default: "uptime")',
     )
     p_config.add_argument(
         "--no-health-check", dest="no_health_check",

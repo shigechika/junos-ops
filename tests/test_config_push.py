@@ -12,10 +12,12 @@ class TestLoadConfig:
     def test_success(self, junos_upgrade, mock_args, mock_config):
         """正常系: load → diff → commit_check → commit confirmed → health check → confirm"""
         dev = MagicMock()
-        dev.cli.return_value = (
-            "PING 255.255.255.255 (255.255.255.255): 56 data bytes\n"
-            "...3 packets transmitted, 3 packets received, 0% packet loss"
-        )
+        uptime_xml = MagicMock()
+        current_time = MagicMock()
+        current_time.text = "2026-04-16 12:00:00 JST"
+        uptime_xml.findtext.return_value = "2026-04-16 12:00:00 JST"
+        uptime_xml.find.return_value = current_time
+        dev.rpc.get_system_uptime_information.return_value = uptime_xml
         mock_cu = MagicMock()
         mock_cu.diff.return_value = "[edit]\n+  set system ..."
         with (
@@ -32,13 +34,12 @@ class TestLoadConfig:
             "set system host-name test", format="set",
         )
         mock_cu.diff.assert_called_once()
-        mock_cu.pdiff.assert_called_once()
         mock_cu.commit_check.assert_called_once()
         # commit confirmed 1 → health check → commit で確定
         assert mock_cu.commit.call_count == 2
         mock_cu.commit.assert_any_call(confirm=1)
         mock_cu.commit.assert_any_call()
-        dev.cli.assert_called_once_with("ping count 3 255.255.255.255 rapid")
+        dev.rpc.get_system_uptime_information.assert_called_once()
         mock_cu.unlock.assert_called_once()
 
     def test_no_changes(self, junos_upgrade, mock_args, mock_config):
@@ -69,7 +70,7 @@ class TestLoadConfig:
         ):
             result = junos_upgrade.load_config("test-host", dev, "commands.set")
         assert result["ok"] is True
-        mock_cu.pdiff.assert_called_once()
+        assert result["diff"] == "[edit]\n+  set system ..."
         mock_cu.commit.assert_not_called()
         mock_cu.rollback.assert_called_once()
         mock_cu.unlock.assert_called_once()
@@ -203,6 +204,7 @@ class TestHealthCheck:
 
     def test_health_check_ping_success(self, junos_upgrade, mock_args, mock_config):
         """ping 成功 → 最終 commit 実行"""
+        mock_args.health_check = ["ping count 3 255.255.255.255 rapid"]
         dev = MagicMock()
         dev.cli.return_value = (
             "PING 255.255.255.255 (255.255.255.255): 56 data bytes\n"
@@ -221,6 +223,7 @@ class TestHealthCheck:
 
     def test_health_check_ping_fail(self, junos_upgrade, mock_args, mock_config):
         """0 packets received → 最終 commit なし、return True"""
+        mock_args.health_check = ["ping count 3 255.255.255.255 rapid"]
         dev = MagicMock()
         dev.cli.return_value = (
             "PING 255.255.255.255 (255.255.255.255): 56 data bytes\n"
@@ -240,6 +243,7 @@ class TestHealthCheck:
 
     def test_health_check_exception(self, junos_upgrade, mock_args, mock_config):
         """dev.cli() で例外 → 最終 commit なし、return True"""
+        mock_args.health_check = ["ping count 3 255.255.255.255 rapid"]
         dev = MagicMock()
         dev.cli.side_effect = Exception("RPC timeout")
         mock_cu = MagicMock()
@@ -285,8 +289,8 @@ class TestHealthCheck:
         assert mock_cu.commit.call_count == 2
 
     def test_health_check_default(self, mock_args):
-        """デフォルト値がリスト ["ping count 3 255.255.255.255 rapid"] であること"""
-        assert mock_args.health_check == ["ping count 3 255.255.255.255 rapid"]
+        """Default is None; load_config falls back to ["uptime"]."""
+        assert mock_args.health_check is None
 
     def test_health_check_fallback(self, junos_upgrade, mock_args, mock_config):
         """1つ目失敗 → 2つ目成功でフォールバック、最終 commit 実行"""
@@ -875,9 +879,8 @@ class TestRpcTimeout:
         """--timeout 未指定 + config.ini にもなし → dev.timeout = 120（config デフォルト）"""
         mock_args.rpc_timeout = None
         mock_args.configfile = "commands.set"
-        mock_dev = MagicMock(spec=["cli", "close", "timeout"])
+        mock_dev = MagicMock(spec=["cli", "close", "timeout", "rpc"])
         mock_dev.timeout = 30  # PyEZ デフォルト
-        mock_dev.cli.return_value = "3 packets transmitted, 3 packets received"
         mock_cu = MagicMock()
         mock_cu.diff.return_value = "[edit]\n+  set system ..."
         with (

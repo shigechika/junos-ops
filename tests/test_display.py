@@ -351,6 +351,20 @@ def test_format_load_config_walks_steps():
     assert "commit confirmed 1 applied" in text
 
 
+def test_format_load_config_includes_diff():
+    result = {
+        "ok": True,
+        "diff": "[edit system]\n-  no-tcp-forwarding;\n",
+        "steps": [
+            {"action": "dry_run", "message": "\tdry-run: rollback (no commit)"},
+        ],
+    }
+    text = display.format_load_config(result)
+    assert "[edit system]" in text
+    assert "no-tcp-forwarding" in text
+    assert "dry-run: rollback" in text
+
+
 # -------------------------------------------------------------------
 # print_* = format_* parity (no-stdout-leak + format match)
 # -------------------------------------------------------------------

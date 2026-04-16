@@ -30,7 +30,7 @@ def mock_args(junos_common):
         rebootat=None,
         configfile=None,
         confirm_timeout=1,
-        health_check=["ping count 3 255.255.255.255 rapid"],
+        health_check=None,
         no_health_check=False,
         show_command=None,
         showfile=None,

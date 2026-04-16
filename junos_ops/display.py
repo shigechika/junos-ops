@@ -265,8 +265,15 @@ def print_reinstall(result: dict) -> None:
 
 
 def format_load_config(result: dict) -> str:
-    """Return ``upgrade.load_config`` result by walking its steps list."""
-    return _steps_text(result)
+    """Return ``upgrade.load_config`` result including diff and steps."""
+    parts: list[str] = []
+    diff = result.get("diff")
+    if diff:
+        parts.append(diff)
+    steps = _steps_text(result)
+    if steps:
+        parts.append(steps)
+    return "\n".join(parts)
 
 
 def print_load_config(result: dict) -> None:

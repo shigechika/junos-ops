@@ -614,11 +614,11 @@ def install(hostname, dev) -> dict:
     logger.debug(f"{msg=}")
     result["install_message"] = msg
     if status:
-        logger.info("install successful")
+        logger.debug("install successful")
         result["ok"] = True
         steps.append({"action": "sw_install", "ok": True, "message": msg})
     else:
-        logger.info("install failed")
+        logger.debug("install failed")
         result["error"] = "sw_install_failed"
         steps.append({"action": "sw_install", "ok": False, "message": msg})
 
@@ -1719,7 +1719,7 @@ def _run_health_check(hostname, dev, health_cmds) -> dict:
                     continue
             except Exception as e:
                 entry["message"] = f"RPC error: {e}"
-                logger.error(f"{hostname}: health check RPC failed: {e}")
+                logger.debug(f"{hostname}: health check RPC failed: {e}")
                 _step("health_check_error", f"\thealth check error: {e}")
                 commands.append(entry)
                 continue
@@ -1731,7 +1731,7 @@ def _run_health_check(hostname, dev, health_cmds) -> dict:
             output = dev.cli(health_cmd)
         except Exception as e:
             entry["message"] = f"CLI error: {e}"
-            logger.error(f"{hostname}: health check command failed: {e}")
+            logger.debug(f"{hostname}: health check command failed: {e}")
             _step("health_check_error", f"\thealth check error: {e}")
             commands.append(entry)
             continue
@@ -1820,7 +1820,7 @@ def load_config(hostname, dev, configfile) -> dict:
           failure.
         - ``error_message`` (str | None): full error detail.
 
-    During execution, each step is also echoed via ``logger.info`` so
+    During execution, each step is also echoed via ``logger.debug`` so
     operators watching the log see real-time progress. Does not print.
     """
     steps: list[dict] = []
@@ -1842,11 +1842,11 @@ def load_config(hostname, dev, configfile) -> dict:
     }
 
     def _step(action: str, message: str, **extra) -> None:
-        """Append to steps and echo via logger.info for live progress."""
+        """Append to steps and echo via logger.debug for live progress."""
         entry = {"action": action, "message": message}
         entry.update(extra)
         steps.append(entry)
-        logger.info(f"{hostname}: {message.strip()}")
+        logger.debug(f"{hostname}: {message.strip()}")
 
     cu = Config(dev)
 
@@ -1854,7 +1854,7 @@ def load_config(hostname, dev, configfile) -> dict:
     try:
         cu.lock()
     except Exception as e:
-        logger.error(f"{hostname}: config lock failed: {e}")
+        logger.debug(f"{hostname}: config lock failed: {e}")
         result["error"] = "lock_failed"
         result["error_message"] = str(e)
         _step("lock", f"\tconfig lock failed: {e}", ok=False)
@@ -1884,8 +1884,6 @@ def load_config(hostname, dev, configfile) -> dict:
         if result["template"]:
             for cmd in commands:
                 _step("rendered_command", f"\t  {cmd}")
-
-        cu.pdiff()
 
         # dry-run: diff only, no commit
         if common.args.dry_run:
@@ -1920,7 +1918,7 @@ def load_config(hostname, dev, configfile) -> dict:
             health_cmds = getattr(common.args, "health_check", None)
             if not no_health_check:
                 if health_cmds is None:
-                    health_cmds = ["ping count 3 255.255.255.255 rapid"]
+                    health_cmds = ["uptime"]
                 result["health_check"]["ran"] = True
                 result["health_check"]["commands_tried"] = list(health_cmds)
                 hc_result = _run_health_check(hostname, dev, health_cmds)
@@ -1938,7 +1936,7 @@ def load_config(hostname, dev, configfile) -> dict:
                         f"\thealth check FAILED — config will auto-rollback "
                         f"in {confirm_timeout} minute(s)",
                     )
-                    logger.error(
+                    logger.debug(
                         f"{hostname}: health check failed, "
                         f"not confirming commit"
                     )
@@ -1956,7 +1954,7 @@ def load_config(hostname, dev, configfile) -> dict:
         result["ok"] = True
 
     except Exception as e:
-        logger.error(f"{hostname}: config push failed: {e}")
+        logger.debug(f"{hostname}: config push failed: {e}")
         _step("exception", f"\tconfig push failed: {e}", ok=False)
         result["error"] = "exception"
         result["error_message"] = str(e)

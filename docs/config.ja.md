@@ -103,7 +103,7 @@ flowchart TD
 
 ### デフォルト
 
-`--health-check` 未指定時は `ping count 3 255.255.255.255 rapid` がデフォルトです。ICMP が使えない環境では `--health-check uptime` を使用してください。
+`--health-check` 未指定時は `uptime`（NETCONF RPC プローブ）がデフォルトです。既存の NETCONF セッションを利用するため ICMP の到達性に依存せず、commit confirmed 後に管理プレーンが応答可能であることを確認できます。
 
 ### フォールバック（複数指定）
 

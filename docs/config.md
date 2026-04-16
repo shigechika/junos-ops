@@ -103,7 +103,7 @@ After `commit confirmed`, a health check verifies that the device is still reach
 
 ### Default
 
-If `--health-check` is not specified, the default is `ping count 3 255.255.255.255 rapid`. Use `--health-check uptime` for environments where ICMP is not available.
+If `--health-check` is not specified, the default is `uptime` (NETCONF RPC probe). It uses the existing NETCONF session so it does not depend on ICMP reachability, and confirms that commit confirmed left the management plane responsive.
 
 ### Fallback (multiple health checks)
 

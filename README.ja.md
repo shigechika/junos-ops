@@ -476,8 +476,8 @@ set system login user viewer authentication ssh-ed25519 "ssh-ed25519 AAAA..."
 	...
 	commit check passed
 	commit confirmed 1 applied
-	health check: ping count 3 255.255.255.255 rapid
-	health check passed (3 packets received)
+	health check: uptime (NETCONF RPC)
+	health check passed (uptime: 2026-04-16 13:20:31 JST)
 	commit confirmed, changes are now permanent
 # rt2.example.jp
 	...

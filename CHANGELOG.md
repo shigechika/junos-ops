@@ -7,7 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-## [0.16.7] - 2026-04-15
+## [0.16.8] - 2026-04-16
+
+### Changed
+- `config` subcommand default health check is now `uptime` (NETCONF `get-system-uptime-information` RPC) instead of `ping count 3 255.255.255.255 rapid`. The `--help` text already advertised `uptime` as a supported probe, but the fall-through default still pointed at the ping command — a stale carry-over that caused operators to see ping failures on devices where broadcast ping is blocked. `uptime` uses the existing NETCONF session so it always reflects whether commit confirmed left the management plane reachable, and does not depend on ICMP reachability to an external address.
+- `config` subcommand output is now truly host-atomic when `--workers > 1`. Previously the PyEZ `cu.pdiff()` call printed the diff to stdout before the display layer emitted the host block, and each `_step()` call emitted the same message a second time via `logger.info` — so under `--workers 10` the diff and progress lines from different hosts interleaved with each other and with the host headers. The diff is now carried in the result dict (`result["diff"]`) and folded into `display.format_load_config`, and the live-progress `logger.info` / `logger.error` calls in `load_config` have been demoted to `logger.debug` so they no longer compete with the host-atomic block.
+
+### Fixed
+- `install` no longer prints `[INFO] install successful` / `[INFO] install failed` through the logger when running in a terminal. Those lines were intended for log scrapers but leaked into visible output because the logging config sends INFO+ to stderr; the information is already carried by the step message that the display layer emits inside the host block.
+
+
 
 ### Fixed
 - `install` no longer prints the "remote package file not found. Please consider --copy before --install" line twice. The step message already reaches stdout through the display layer; a parallel `logger.info` emitted the same text with a timestamp prefix, which became a visible duplicate once the display layer was switched to host-atomic output in 0.16.2.
