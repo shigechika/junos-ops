@@ -650,7 +650,7 @@ def _run():
         "show", parents=[parent], help="run CLI command on devices",
     )
     p_show.add_argument(
-        "-f", "--file", dest="showfile",
+        "-f", "--file", dest="showfile", metavar="FILE",
         help="path to file containing CLI commands (one per line)",
     )
     p_show.add_argument(
@@ -667,7 +667,7 @@ def _run():
         "config", parents=[parent], help="push set command file to devices",
     )
     p_config.add_argument(
-        "-f", "--file", dest="configfile", required=True,
+        "-f", "--file", dest="configfile", required=True, metavar="FILE",
         help="path to set command file",
     )
     p_config.add_argument(
