@@ -182,15 +182,23 @@ CI で sdist / wheel のビルドを検証。pyproject.toml の記述ミス（PE
 
 ## リリース手順
 
-1. `junos_ops/__init__.py` の `__version__` を更新
-2. `CHANGELOG.md` にバージョンエントリを追加
-3. コミット & push
-4. タグを作成して push → GitHub Actions が TestPyPI → PyPI → GitHub Release を自動実行
+リリースは [release-please](https://github.com/googleapis/release-please) で自動化されている。手動で `__version__` やタグを触る必要はない。
 
-```bash
-git tag v0.X.Y
-git push origin v0.X.Y
-```
+1. Conventional Commits（`feat:` / `fix:` / `refactor:` / `perf:` など）で main にマージする
+2. release-please が自動で "chore(release): ..." の PR を開き、次バージョン候補と CHANGELOG を提示する
+3. 内容を確認して PR をマージ → release-please がタグ (`v0.X.Y`) と GitHub Release を作成
+4. `release.yml` が `release: published` で発火 → TestPyPI → PyPI → homebrew-tap 通知まで自動実行
+
+`junos_ops/__init__.py` の `__version__` には `# x-release-please-version` マーカーが付いており、release-please が `.release-please-manifest.json` と同期して書き換える。CHANGELOG.md も自動 prepend される。
+
+### 設定ファイル
+
+- `release-please-config.json` — package-name、release-type（python）、extra-files、changelog-sections
+- `.release-please-manifest.json` — 現在のバージョン（release-please が更新）
+- `.github/workflows/release-please.yml` — push: main で発火、`RELEASE_PLEASE_TOKEN`（fine-grained PAT）で下流 workflow を起動
+- `.github/workflows/release.yml` — `release: published` をフック、PyPI 公開と homebrew-tap 通知
+
+### 下流連携
 
 PyPI リリース後、`shigechika/homebrew-tap` の `update-formula.yml` が `repository_dispatch` で自動トリガーされ、Formula 更新 → bottle ビルドまで自動で行われる。
 
