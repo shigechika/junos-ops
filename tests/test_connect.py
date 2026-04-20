@@ -32,6 +32,31 @@ class TestConnect:
             captured = capsys.readouterr()
             assert captured.out == ""
 
+    def test_ssh_config_passthrough(self, junos_common, mock_args, mock_config, capsys):
+        """ssh_config is expanded with ~ and forwarded to Device."""
+        import os
+
+        mock_config.set("test-host", "ssh_config", "~/.ssh/config")
+        with patch.object(junos_common, "Device") as MockDevice:
+            MockDevice.return_value = MagicMock()
+
+            junos_common.connect("test-host")
+
+            assert MockDevice.call_args.kwargs["ssh_config"] == os.path.expanduser(
+                "~/.ssh/config"
+            )
+            assert capsys.readouterr().out == ""
+
+    def test_ssh_config_absent(self, junos_common, mock_args, mock_config, capsys):
+        """Without ssh_config set, no kwarg is passed so PyEZ's default applies."""
+        with patch.object(junos_common, "Device") as MockDevice:
+            MockDevice.return_value = MagicMock()
+
+            junos_common.connect("test-host")
+
+            assert "ssh_config" not in MockDevice.call_args.kwargs
+            assert capsys.readouterr().out == ""
+
     def _assert_error(self, result, exc_name):
         assert result["ok"] is False
         assert result["dev"] is None
