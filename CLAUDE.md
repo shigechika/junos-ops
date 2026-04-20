@@ -25,6 +25,7 @@ junos_ops/
 ├── cli.py          # サブコマンドルーティング、argparse、main()
 ├── common.py       # 共通機能（設定読込、接続管理、ターゲット決定、並列実行）
 ├── upgrade.py      # upgrade系機能（コピー、インストール、ロールバック、バージョン管理）
+├── show.py         # show サブコマンド core（run_cli / run_cli_batch、text|json|xml）
 └── rsi.py          # RSI/SCF収集機能
 tests/
 ├── conftest.py     # pytest フィクスチャ
@@ -81,9 +82,16 @@ LICENSE
 - すべての core 関数は stdout に print しない。人間向け整形は `display` 層が担う。
 
 ### display.py — 表示層
-- `print_version()`, `print_copy()`, `print_install()`, `print_rollback()`, `print_reboot()`, `print_reinstall()`, `print_load_config()`, `print_list_remote()`, `print_dry_run()`, `print_rsi()`, `print_connect_error()`, `print_read_config_error()`, `print_host_header()`, `print_host_footer()` — core が返す dict を人間向けに整形
+- `print_version()`, `print_copy()`, `print_install()`, `print_rollback()`, `print_reboot()`, `print_reinstall()`, `print_load_config()`, `print_list_remote()`, `print_dry_run()`, `print_rsi()`, `print_show()`, `print_connect_error()`, `print_read_config_error()`, `print_host_header()`, `print_host_footer()` — core が返す dict を人間向けに整形
 - `_print_lock` (`threading.Lock`) でマルチワーカー時の出力インターリーブを防止
 - junos-mcp など非 CLI 利用者は display を import しなければ stdout 出力ゼロ
+
+### show.py — show サブコマンド core（すべて dict を返す）
+- `run_cli(dev, command, *, output_format="text", retry=0, hostname="")` — 単一コマンド実行。`format=text`→`dev.cli(cmd)`（string）、`json`→`dev.cli(cmd, format="json")`（dict）、`xml`→`dev.cli(cmd, format="xml")` の lxml を pretty-print 文字列化
+- `run_cli_batch(dev, commands, ...)` — `-f FILE` 用。最初の失敗で短絡
+- `_cli_with_retry()` — `RpcTimeoutError` 時のバックオフ付きリトライ（5秒, 10秒, 15秒, ...）
+- `VALID_FORMATS` — `("text", "json", "xml")`
+- Caveat: NETCONF は `json` / `xml` 取得時に `| match` / `| last` / `| count` などのパイプ段を落とす。フィルタしたいときは `text` かつシェル側で加工
 
 ### rsi.py — RSI/SCF収集
 - RSI = request support information
@@ -108,7 +116,7 @@ junos-ops rollback [hostname ...]          # ロールバック
 junos-ops version [hostname ...]           # バージョン表示
 junos-ops reboot --at YYMMDDHHMM [hostname ...]  # リブート
 junos-ops ls [-l] [hostname ...]           # リモートファイル一覧
-junos-ops show COMMAND [hostname ...]           # 任意の CLI コマンドを実行
+junos-ops show COMMAND [-F text|json|xml] [hostname ...]   # 任意の CLI コマンドを実行（-F で構造化出力）
 junos-ops config -f FILE [--confirm N] [hostname ...]  # set コマンドファイル適用
 junos-ops check [--connect|--local|--remote|--all] [--model M] [hostname ...]  # pre-flight チェック
 junos-ops rsi [hostname ...]               # RSI/SCF収集

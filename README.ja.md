@@ -537,7 +537,22 @@ show security flow session summary
 % junos-ops show "show system alarms" --retry 2 --workers 10 --config accounts.ini
 ```
 
-> **注意:** JUNOS CLI のパイプフィルタ（`| match`、`| count` 等）は使用できません。PyEZ の `dev.cli()` は NETCONF RPC 経由でコマンドを送信するため、パイプ修飾子は処理されません。出力のフィルタにはシェル側のツール（`grep` 等）を使用してください。
+#### 構造化出力（`--format`）
+
+`-F` / `--format {text,json,xml}` で出力形式を切り替えられます。`text` が既定（従来動作）、`json` はプログラム／AI アシスタント向け、`xml` は RPC 応答を pretty-print して返します。
+
+```
+% junos-ops show "show interfaces terse" --format json gw1.example.jp
+# gw1.example.jp
+## show interfaces terse
+{
+  "interface-information": {
+    "physical-interface": [ ... ]
+  }
+}
+```
+
+> **注意 — `json` / `xml` ではパイプ段が落ちる。** NETCONF 経由で `json`／`xml` を要求すると、`| match`、`| last`、`| count` などのパイプ修飾子はデバイス側で暗黙に落とされます（[Juniper/junos-mcp-server#4](https://github.com/Juniper/junos-mcp-server/issues/4)／[#12](https://github.com/Juniper/junos-mcp-server/issues/12) 参照）。`--format text` なら従来どおりパイプ段は有効です。構造化出力をフィルタしたいときは `text` のままシェル側（`jc` / `grep` / 後段の `jq` 等）で加工するか、対応する RPC を直接呼び出してください。
 
 ### 引数なし（デバイスファクト表示）
 

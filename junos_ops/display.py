@@ -39,6 +39,7 @@ Conventions:
       keys; programmatic consumers should strip them before serializing.
 """
 
+import json
 import threading
 from pprint import pformat
 
@@ -448,13 +449,42 @@ def print_rsi(result: dict) -> None:
 
 
 # -------------------------------------------------------------------
-# show (not yet migrated)
+# show
 # -------------------------------------------------------------------
 
 
+def _format_single_show(result: dict) -> str:
+    """Render one ``show.run_cli`` result (body only, no host header)."""
+    command = result.get("command", "")
+    if not result.get("ok"):
+        err = result.get("error_message") or result.get("error") or "error"
+        return f"## {command}\n{err}".rstrip()
+    fmt = result.get("format", "text")
+    output = result.get("output")
+    if fmt == "json":
+        body = json.dumps(output, indent=2, ensure_ascii=False)
+    else:
+        body = output or ""
+    return f"## {command}\n{body}".rstrip()
+
+
+def format_show(result: dict) -> str:
+    """Format a ``show.run_cli`` (single) or ``show.run_cli_batch`` result.
+
+    The dict shape is detected by the presence of ``results`` (batch) vs
+    ``output`` (single). Both layouts share the ``# hostname`` header
+    followed by one or more ``## command`` blocks.
+    """
+    header = format_host_header(result.get("hostname", ""))
+    if "results" in result:
+        blocks = [_format_single_show(sub) for sub in result["results"]]
+        return f"{header}\n" + "\n\n".join(blocks) + "\n"
+    return f"{header}\n{_format_single_show(result)}\n"
+
+
 def print_show(result: dict) -> None:
-    """Print ``cmd_show`` result (a list of command/output pairs)."""
-    raise NotImplementedError
+    """Print ``show.run_cli`` / ``run_cli_batch`` result atomically."""
+    _emit(format_show(result))
 
 
 # -------------------------------------------------------------------
