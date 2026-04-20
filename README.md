@@ -134,6 +134,7 @@ sshkey = id_ed25519   # SSH private key file
 port = 830            # NETCONF port
 hashalgo = md5        # Checksum algorithm
 rpath = /var/tmp      # Remote path
+# ssh_config = ~/.ssh/config   # OpenSSH config (ProxyCommand etc.); if unset, PyEZ auto-picks up ~/.ssh/config
 # lpath = ~/firmware   # Local firmware directory (~ expanded, default: current directory)
 # huge_tree = true    # Allow large XML responses
 # RSI_DIR = ./rsi/    # Output directory for RSI/SCF files
@@ -161,6 +162,7 @@ tags = osaka, core
 [sw1.example.jp]
 id = sw1                     # Override SSH username
 sshkey = sw1_rsa             # Override SSH key
+ssh_config = ~/.ssh/config.lab   # Per-host OpenSSH config (e.g. behind a bastion)
 tags = tokyo, access
 [sw2.example.jp]
 port = 10830                 # Override port

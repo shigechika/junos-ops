@@ -1,5 +1,6 @@
 """connect() のモックテスト（dict 返却）"""
 
+import os
 from unittest.mock import patch, MagicMock
 
 from jnpr.junos.exception import (
@@ -31,6 +32,32 @@ class TestConnect:
             # core は print しない
             captured = capsys.readouterr()
             assert captured.out == ""
+
+    def test_ssh_config_passthrough(self, junos_common, mock_args, mock_config, capsys):
+        """ssh_config is expanded with ~ and forwarded alongside existing kwargs."""
+        mock_config.set("test-host", "ssh_config", "~/.ssh/config")
+        with patch.object(junos_common, "Device") as MockDevice:
+            MockDevice.return_value = MagicMock()
+
+            junos_common.connect("test-host")
+
+            kw = MockDevice.call_args.kwargs
+            assert kw["ssh_config"] == os.path.expanduser("~/.ssh/config")
+            # Existing kwargs must survive the refactor to a kwargs dict.
+            assert kw["host"] == "192.0.2.1"
+            assert kw["port"] == 830
+            assert kw["user"] == "testuser"
+            assert capsys.readouterr().out == ""
+
+    def test_ssh_config_absent(self, junos_common, mock_args, mock_config, capsys):
+        """Without ssh_config set, no kwarg is passed so PyEZ's default applies."""
+        with patch.object(junos_common, "Device") as MockDevice:
+            MockDevice.return_value = MagicMock()
+
+            junos_common.connect("test-host")
+
+            assert "ssh_config" not in MockDevice.call_args.kwargs
+            assert capsys.readouterr().out == ""
 
     def _assert_error(self, result, exc_name):
         assert result["ok"] is False

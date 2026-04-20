@@ -116,15 +116,21 @@ def connect(
     """
     logger.debug("connect: start")
     host = config.get(hostname, "host")
-    dev = Device(
-        host=host,
-        port=int(config.get(hostname, "port")),
-        user=config.get(hostname, "id"),
-        passwd=config.get(hostname, "pw"),
-        ssh_private_key_file=os.path.expanduser(config.get(hostname, "sshkey")),
-        huge_tree=config.getboolean(hostname, "huge_tree", fallback=False),
-        gather_facts=gather_facts,
-    )
+    kwargs = {
+        "host": host,
+        "port": int(config.get(hostname, "port")),
+        "user": config.get(hostname, "id"),
+        "passwd": config.get(hostname, "pw"),
+        "ssh_private_key_file": os.path.expanduser(config.get(hostname, "sshkey")),
+        "huge_tree": config.getboolean(hostname, "huge_tree", fallback=False),
+        "gather_facts": gather_facts,
+    }
+    # Pass ssh_config only when the operator sets it; leaving it out preserves
+    # PyEZ/paramiko's implicit ~/.ssh/config auto-pickup.
+    ssh_config_path = config.get(hostname, "ssh_config", fallback=None)
+    if ssh_config_path:
+        kwargs["ssh_config"] = os.path.expanduser(ssh_config_path)
+    dev = Device(**kwargs)
     _ERROR_PREFIX = {
         ConnectAuthError: "Authentication credentials fail to login",
         ConnectRefusedError: "NETCONF Connection refused",

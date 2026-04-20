@@ -141,6 +141,7 @@ sshkey = id_ed25519   # SSH秘密鍵ファイル
 port = 830            # NETCONFポート
 hashalgo = md5        # チェックサムアルゴリズム
 rpath = /var/tmp      # リモートパス
+# ssh_config = ~/.ssh/config    # OpenSSH 互換設定（ProxyCommand 等）。未指定時は PyEZ が ~/.ssh/config を自動参照
 # lpath = ~/firmware            # ローカルのファームウェア置き場（~ 展開対応、デフォルト: カレントディレクトリ）
 # huge_tree = true    # 大きなXMLレスポンスを許可
 # RSI_DIR = ./rsi/    # RSI/SCFファイル出力先

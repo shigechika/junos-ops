@@ -134,6 +134,7 @@ sshkey = id_ed25519   # SSH秘密鍵ファイル
 port = 830            # NETCONFポート
 hashalgo = md5        # チェックサムアルゴリズム
 rpath = /var/tmp      # リモートパス
+# ssh_config = ~/.ssh/config    # OpenSSH 互換設定（ProxyCommand 等）。未指定時は PyEZ が ~/.ssh/config を自動参照
 # lpath = ~/firmware            # ローカルのファームウェア置き場（~ 展開対応、デフォルト: カレントディレクトリ）
 # huge_tree = true    # 大きなXMLレスポンスを許可
 # RSI_DIR = ./rsi/    # RSI/SCFファイルの出力先
@@ -161,6 +162,7 @@ tags = osaka, core
 [sw1.example.jp]
 id = sw1                     # 接続ユーザを変更
 sshkey = sw1_rsa             # SSH鍵を変更
+ssh_config = ~/.ssh/config.lab   # ホスト別の OpenSSH 設定（bastion 等）
 tags = tokyo, access
 [sw2.example.jp]
 port = 10830                 # ポートを変更
