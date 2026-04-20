@@ -1,337 +1,375 @@
-"""show サブコマンドのテスト"""
+"""Tests for the show subcommand and the junos_ops.show core."""
 
 from unittest.mock import MagicMock, patch, call
-from jnpr.junos.exception import RpcTimeoutError
 
-from junos_ops import cli
-from junos_ops import common
+import pytest
+from jnpr.junos.exception import RpcTimeoutError
+from lxml import etree
+
+from junos_ops import cli, common, display, show
+
+
+CONNECT_OK = {
+    "hostname": "test-host",
+    "host": "test-host",
+    "ok": True,
+    "dev": None,
+    "error": None,
+    "error_message": None,
+}
+CONNECT_FAIL = {
+    "hostname": "test-host",
+    "host": "test-host",
+    "ok": False,
+    "dev": None,
+    "error": "ConnectError",
+    "error_message": "mock connect error",
+}
+
+
+def _connect_ok(dev):
+    return {**CONNECT_OK, "dev": dev}
+
+
+class TestRunCli:
+    """show.run_cli() returns a dict describing the outcome."""
+
+    def test_text_success(self):
+        dev = MagicMock()
+        dev.cli.return_value = "output line\n"
+        result = show.run_cli(dev, "show version", hostname="h")
+        assert result["ok"] is True
+        assert result["command"] == "show version"
+        assert result["format"] == "text"
+        assert result["output"] == "output line\n"
+        assert result["error"] is None
+        dev.cli.assert_called_once_with("show version")
+
+    def test_json_passthrough(self):
+        dev = MagicMock()
+        dev.cli.return_value = {"interface-information": {"physical-interface": []}}
+        result = show.run_cli(
+            dev, "show interfaces terse", output_format="json", hostname="h"
+        )
+        assert result["ok"] is True
+        assert result["format"] == "json"
+        assert result["output"] == {
+            "interface-information": {"physical-interface": []}
+        }
+        dev.cli.assert_called_once_with(
+            "show interfaces terse", format="json"
+        )
+
+    def test_xml_pretty_printed(self):
+        dev = MagicMock()
+        dev.cli.return_value = etree.fromstring("<root><child>x</child></root>")
+        result = show.run_cli(
+            dev, "show version", output_format="xml", hostname="h"
+        )
+        assert result["ok"] is True
+        assert result["format"] == "xml"
+        # Serialised with pretty_print=True -> indented, str (not bytes).
+        assert isinstance(result["output"], str)
+        assert "<child>x</child>" in result["output"]
+        assert "\n" in result["output"]
+        dev.cli.assert_called_once_with("show version", format="xml")
+
+    def test_invalid_format_raises(self):
+        dev = MagicMock()
+        with pytest.raises(ValueError, match="invalid format"):
+            show.run_cli(dev, "show version", output_format="yaml")
+
+    def test_generic_exception_returns_error_dict(self):
+        dev = MagicMock()
+        dev.cli.side_effect = RuntimeError("boom")
+        result = show.run_cli(dev, "show version", hostname="h")
+        assert result["ok"] is False
+        assert result["output"] is None
+        assert result["error"] == "RuntimeError"
+        assert result["error_message"] == "boom"
+
+
+class TestRunCliRetry:
+    """show.run_cli retries RpcTimeoutError only."""
+
+    @patch("junos_ops.show.time.sleep")
+    def test_retry_then_success(self, mock_sleep):
+        dev = MagicMock()
+        dev.cli.side_effect = [
+            RpcTimeoutError(MagicMock(hostname="h"), "c", 30),
+            "ok",
+        ]
+        result = show.run_cli(dev, "show system alarms", retry=2, hostname="h")
+        assert result["ok"] is True
+        assert result["output"] == "ok"
+        assert dev.cli.call_count == 2
+        mock_sleep.assert_called_once_with(5)
+
+    @patch("junos_ops.show.time.sleep")
+    def test_retry_exhausted_returns_error(self, mock_sleep):
+        dev = MagicMock()
+        dev.cli.side_effect = RpcTimeoutError(
+            MagicMock(hostname="h"), "c", 30
+        )
+        result = show.run_cli(dev, "show ...", retry=2, hostname="h")
+        assert result["ok"] is False
+        assert result["error"] == "RpcTimeoutError"
+        assert dev.cli.call_count == 3  # first call + 2 retries
+        mock_sleep.assert_has_calls([call(5), call(10)])
+
+    def test_no_retry_default(self):
+        dev = MagicMock()
+        dev.cli.side_effect = RpcTimeoutError(
+            MagicMock(hostname="h"), "c", 30
+        )
+        result = show.run_cli(dev, "show ...", hostname="h")
+        assert result["ok"] is False
+        assert dev.cli.call_count == 1
+
+    @patch("junos_ops.show.time.sleep")
+    def test_non_timeout_not_retried(self, mock_sleep):
+        dev = MagicMock()
+        dev.cli.side_effect = RuntimeError("other")
+        result = show.run_cli(dev, "show ...", retry=3, hostname="h")
+        assert result["ok"] is False
+        assert result["error"] == "RuntimeError"
+        assert dev.cli.call_count == 1
+        mock_sleep.assert_not_called()
+
+
+class TestRunCliBatch:
+    """show.run_cli_batch aggregates per-command results and short-circuits."""
+
+    def test_all_succeed(self):
+        dev = MagicMock()
+        dev.cli.side_effect = ["a", "b"]
+        result = show.run_cli_batch(
+            dev, ["show a", "show b"], hostname="h"
+        )
+        assert result["ok"] is True
+        assert [r["command"] for r in result["results"]] == ["show a", "show b"]
+        assert [r["output"] for r in result["results"]] == ["a", "b"]
+
+    def test_short_circuits_on_first_failure(self):
+        dev = MagicMock()
+        dev.cli.side_effect = [RuntimeError("boom"), "unreached"]
+        result = show.run_cli_batch(
+            dev, ["show a", "show b"], hostname="h"
+        )
+        assert result["ok"] is False
+        assert len(result["results"]) == 1
+        assert result["results"][0]["error"] == "RuntimeError"
+        # show b must not be attempted after show a fails.
+        assert dev.cli.call_count == 1
+
+
+class TestFormatShow:
+    """display.format_show renders text / json / xml appropriately."""
+
+    def test_text_single(self):
+        result = {
+            "hostname": "h",
+            "command": "show version",
+            "format": "text",
+            "ok": True,
+            "output": "  Model: MX204  \n",
+            "error": None,
+            "error_message": None,
+        }
+        out = display.format_show(result)
+        assert out.startswith("# h\n## show version\n")
+        assert "Model: MX204" in out
+
+    def test_json_single(self):
+        result = {
+            "hostname": "h",
+            "command": "show interfaces",
+            "format": "json",
+            "ok": True,
+            "output": {"greeting": "こんにちは"},
+            "error": None,
+            "error_message": None,
+        }
+        out = display.format_show(result)
+        # ensure_ascii=False preserves non-ASCII.
+        assert "こんにちは" in out
+        assert '"greeting"' in out
+
+    def test_batch_layout(self):
+        result = {
+            "hostname": "h",
+            "format": "text",
+            "ok": True,
+            "results": [
+                {
+                    "hostname": "h",
+                    "command": "show a",
+                    "format": "text",
+                    "ok": True,
+                    "output": "out-a",
+                    "error": None,
+                    "error_message": None,
+                },
+                {
+                    "hostname": "h",
+                    "command": "show b",
+                    "format": "text",
+                    "ok": True,
+                    "output": "out-b",
+                    "error": None,
+                    "error_message": None,
+                },
+            ],
+        }
+        out = display.format_show(result)
+        assert "# h" in out
+        assert "## show a" in out and "out-a" in out
+        assert "## show b" in out and "out-b" in out
+
+    def test_error_rendered(self):
+        result = {
+            "hostname": "h",
+            "command": "show x",
+            "format": "text",
+            "ok": False,
+            "output": None,
+            "error": "RpcTimeoutError",
+            "error_message": "timeout after 30s",
+        }
+        out = display.format_show(result)
+        assert "timeout after 30s" in out
 
 
 class TestCmdShow:
-    """cmd_show() のテスト"""
+    """Integration tests via cli.cmd_show."""
 
-    def test_connect_fail(self, junos_common, mock_args, mock_config):
-        """接続失敗時に 1 を返す"""
+    def test_connect_fail_returns_1(self, junos_common, mock_args, mock_config):
         mock_args.show_command = "show version"
-        with patch.object(cli.common, "connect", return_value={"hostname": "test-host", "host": "test-host", "ok": False, "dev": None, "error": "ConnectError", "error_message": "mock connect error"}):
-            result = cli.cmd_show("test-host")
-            assert result == 1
+        with patch.object(cli.common, "connect", return_value=CONNECT_FAIL):
+            assert cli.cmd_show("test-host") == 1
 
-    def test_success(self, junos_common, mock_args, mock_config, capsys):
-        """正常時にホスト名付きで出力される"""
+    def test_text_success_prints_via_display(
+        self, junos_common, mock_args, mock_config, capsys
+    ):
         mock_args.show_command = "show version"
-        mock_dev = MagicMock()
-        mock_dev.cli.return_value = "  Hostname: test-host\nModel: MX204  \n"
+        mock_args.show_format = "text"
+        dev = MagicMock()
+        dev.cli.return_value = "Hostname: test-host\n"
+        with patch.object(cli.common, "connect", return_value=_connect_ok(dev)):
+            rc = cli.cmd_show("test-host")
+        assert rc == 0
+        dev.cli.assert_called_once_with("show version")
+        dev.close.assert_called_once()
+        captured = capsys.readouterr().out
+        assert "# test-host" in captured
+        assert "## show version" in captured
+        assert "Hostname: test-host" in captured
 
-        with patch.object(cli.common, "connect", return_value={"hostname": "test-host", "host": "test-host", "ok": True, "dev": mock_dev, "error": None, "error_message": None}):
-            result = cli.cmd_show("test-host")
-
-        assert result == 0
-        mock_dev.cli.assert_called_once_with("show version")
-        mock_dev.close.assert_called_once()
-        captured = capsys.readouterr()
-        assert "# test-host" in captured.out
-        assert "Hostname: test-host" in captured.out
-        assert "Model: MX204" in captured.out
-
-    def test_exception(self, junos_common, mock_args, mock_config):
-        """dev.cli() 例外時に 1 を返す"""
-        mock_args.show_command = "show bgp summary"
-        mock_dev = MagicMock()
-        mock_dev.cli.side_effect = Exception("RPC timeout")
-
-        with patch.object(cli.common, "connect", return_value={"hostname": "test-host", "host": "test-host", "ok": True, "dev": mock_dev, "error": None, "error_message": None}):
-            result = cli.cmd_show("test-host")
-
-        assert result == 1
-        mock_dev.close.assert_called_once()
-
-    def test_dev_close_on_exception(self, junos_common, mock_args, mock_config):
-        """例外時でも dev.close() が呼ばれる"""
+    def test_json_flag_passes_format_kwarg(
+        self, junos_common, mock_args, mock_config, capsys
+    ):
         mock_args.show_command = "show interfaces terse"
-        mock_dev = MagicMock()
-        mock_dev.cli.side_effect = RuntimeError("unexpected")
+        mock_args.show_format = "json"
+        dev = MagicMock()
+        dev.cli.return_value = {"interface-information": {}}
+        with patch.object(cli.common, "connect", return_value=_connect_ok(dev)):
+            rc = cli.cmd_show("test-host")
+        assert rc == 0
+        dev.cli.assert_called_once_with("show interfaces terse", format="json")
+        assert '"interface-information"' in capsys.readouterr().out
 
-        with patch.object(cli.common, "connect", return_value={"hostname": "test-host", "host": "test-host", "ok": True, "dev": mock_dev, "error": None, "error_message": None}):
-            result = cli.cmd_show("test-host")
+    def test_cli_exception_returns_1(self, junos_common, mock_args, mock_config):
+        mock_args.show_command = "show bgp summary"
+        mock_args.show_format = "text"
+        dev = MagicMock()
+        dev.cli.side_effect = Exception("RPC timeout")
+        with patch.object(cli.common, "connect", return_value=_connect_ok(dev)):
+            rc = cli.cmd_show("test-host")
+        assert rc == 1
+        dev.close.assert_called_once()
 
-        assert result == 1
-        mock_dev.close.assert_called_once()
-
-    def test_close_exception_suppressed(self, junos_common, mock_args, mock_config):
-        """dev.close() の例外が握り潰される"""
+    def test_dev_close_exception_suppressed(
+        self, junos_common, mock_args, mock_config
+    ):
         mock_args.show_command = "show version"
-        mock_dev = MagicMock()
-        mock_dev.cli.return_value = "output"
-        mock_dev.close.side_effect = Exception("close failed")
-
-        with patch.object(cli.common, "connect", return_value={"hostname": "test-host", "host": "test-host", "ok": True, "dev": mock_dev, "error": None, "error_message": None}):
-            result = cli.cmd_show("test-host")
-
-        assert result == 0
-
-    def test_show_command_passed_to_cli(self, junos_common, mock_args, mock_config):
-        """args.show_command がそのまま dev.cli() に渡される"""
-        mock_args.show_command = "show configuration system login user nttview"
-        mock_dev = MagicMock()
-        mock_dev.cli.return_value = "user nttview { ... }"
-
-        with patch.object(cli.common, "connect", return_value={"hostname": "test-host", "host": "test-host", "ok": True, "dev": mock_dev, "error": None, "error_message": None}):
-            result = cli.cmd_show("test-host")
-
-        assert result == 0
-        mock_dev.cli.assert_called_once_with(
-            "show configuration system login user nttview"
-        )
+        mock_args.show_format = "text"
+        dev = MagicMock()
+        dev.cli.return_value = "output"
+        dev.close.side_effect = Exception("close failed")
+        with patch.object(cli.common, "connect", return_value=_connect_ok(dev)):
+            assert cli.cmd_show("test-host") == 0
 
 
 class TestCmdShowFile:
-    """cmd_show() の -f ファイルモードのテスト"""
+    """cmd_show with -f FILE exercises run_cli_batch."""
 
-    def test_showfile_success(self, junos_common, mock_args, mock_config, capsys):
-        """複数コマンドファイルからの正常実行、出力フォーマット確認"""
+    def test_batch_success(self, junos_common, mock_args, mock_config, capsys):
         mock_args.showfile = "commands.txt"
         mock_args.show_command = None
-        mock_dev = MagicMock()
-        mock_dev.cli.side_effect = [
-            "  terse output  ",
-            "  route summary  ",
-        ]
-
+        mock_args.show_format = "text"
+        dev = MagicMock()
+        dev.cli.side_effect = ["terse output", "route summary"]
         with (
-            patch.object(cli.common, "connect", return_value={"hostname": "test-host", "host": "test-host", "ok": True, "dev": mock_dev, "error": None, "error_message": None}),
+            patch.object(cli.common, "connect", return_value=_connect_ok(dev)),
             patch.object(
-                cli.common, "load_commands",
+                cli.common,
+                "load_commands",
                 return_value=["show interfaces terse", "show route summary"],
             ),
         ):
-            result = cli.cmd_show("test-host")
+            rc = cli.cmd_show("test-host")
+        assert rc == 0
+        assert dev.cli.call_count == 2
+        out = capsys.readouterr().out
+        assert "## show interfaces terse" in out
+        assert "## show route summary" in out
 
-        assert result == 0
-        assert mock_dev.cli.call_count == 2
-        mock_dev.cli.assert_any_call("show interfaces terse")
-        mock_dev.cli.assert_any_call("show route summary")
-        mock_dev.close.assert_called_once()
-
-        captured = capsys.readouterr()
-        assert "# test-host" in captured.out
-        assert "## show interfaces terse" in captured.out
-        assert "terse output" in captured.out
-        assert "## show route summary" in captured.out
-        assert "route summary" in captured.out
-
-    def test_showfile_skips_comments_and_blanks(
-        self, junos_common, mock_args, mock_config, capsys
-    ):
-        """load_commands がコメント行と空行をスキップすることの確認"""
+    def test_batch_short_circuits(self, junos_common, mock_args, mock_config):
         mock_args.showfile = "commands.txt"
         mock_args.show_command = None
-        mock_dev = MagicMock()
-        mock_dev.cli.return_value = "output"
-
+        mock_args.show_format = "text"
+        dev = MagicMock()
+        dev.cli.side_effect = Exception("RPC timeout")
         with (
-            patch.object(cli.common, "connect", return_value={"hostname": "test-host", "host": "test-host", "ok": True, "dev": mock_dev, "error": None, "error_message": None}),
+            patch.object(cli.common, "connect", return_value=_connect_ok(dev)),
             patch.object(
-                cli.common, "load_commands",
-                return_value=["show version"],
+                cli.common,
+                "load_commands",
+                return_value=["show a", "show b"],
             ),
         ):
-            result = cli.cmd_show("test-host")
-
-        assert result == 0
-        # load_commands がフィルタ済みの1コマンドだけ返すので cli() は1回
-        mock_dev.cli.assert_called_once_with("show version")
-
-    def test_showfile_exception_on_one_command(
-        self, junos_common, mock_args, mock_config
-    ):
-        """途中のコマンドで例外 → エラー返却"""
-        mock_args.showfile = "commands.txt"
-        mock_args.show_command = None
-        mock_dev = MagicMock()
-        mock_dev.cli.side_effect = Exception("RPC timeout")
-
-        with (
-            patch.object(cli.common, "connect", return_value={"hostname": "test-host", "host": "test-host", "ok": True, "dev": mock_dev, "error": None, "error_message": None}),
-            patch.object(
-                cli.common, "load_commands",
-                return_value=["show version", "show bgp summary"],
-            ),
-        ):
-            result = cli.cmd_show("test-host")
-
-        assert result == 1
-        mock_dev.close.assert_called_once()
-
-    def test_showfile_connect_fail(self, junos_common, mock_args, mock_config):
-        """接続失敗時に 1 を返す"""
-        mock_args.showfile = "commands.txt"
-        mock_args.show_command = None
-        with patch.object(cli.common, "connect", return_value={"hostname": "test-host", "host": "test-host", "ok": False, "dev": None, "error": "ConnectError", "error_message": "mock connect error"}):
-            result = cli.cmd_show("test-host")
-            assert result == 1
+            rc = cli.cmd_show("test-host")
+        assert rc == 1
+        # Second command not attempted.
+        assert dev.cli.call_count == 1
+        dev.close.assert_called_once()
 
 
 class TestLoadCommands:
-    """common.load_commands() ヘルパーの単体テスト"""
+    """common.load_commands strips blank / comment lines."""
 
-    def test_load_commands(self, tmp_path):
-        """コメント行と空行を除外してコマンド行のみ返す"""
-        cmd_file = tmp_path / "commands.txt"
-        cmd_file.write_text(
-            "# コメント行\n"
+    def test_filters_comments_and_blanks(self, tmp_path):
+        f = tmp_path / "commands.txt"
+        f.write_text(
+            "# comment\n"
             "show version\n"
             "\n"
-            "  # インデント付きコメント\n"
+            "  # indented comment\n"
             "show interfaces terse\n"
             "  show route summary  \n"
         )
-        result = common.load_commands(str(cmd_file))
-        assert result == [
+        assert common.load_commands(str(f)) == [
             "show version",
             "show interfaces terse",
             "show route summary",
         ]
 
-    def test_load_commands_empty_file(self, tmp_path):
-        """空ファイルからは空リストが返る"""
-        cmd_file = tmp_path / "empty.txt"
-        cmd_file.write_text("")
-        result = common.load_commands(str(cmd_file))
-        assert result == []
+    def test_empty_file(self, tmp_path):
+        f = tmp_path / "empty.txt"
+        f.write_text("")
+        assert common.load_commands(str(f)) == []
 
-    def test_load_commands_only_comments(self, tmp_path):
-        """コメントのみのファイルからは空リストが返る"""
-        cmd_file = tmp_path / "comments.txt"
-        cmd_file.write_text("# comment 1\n# comment 2\n\n")
-        result = common.load_commands(str(cmd_file))
-        assert result == []
-
-
-class TestCliWithRetry:
-    """_cli_with_retry() のテスト (Issue #38)"""
-
-    @patch("junos_ops.cli.time.sleep")
-    def test_retry_success_after_timeout(self, mock_sleep, junos_common, mock_args):
-        """1回目 RpcTimeoutError → 2回目成功"""
-        mock_args.retry = 2
-        mock_dev = MagicMock()
-        mock_dev.cli.side_effect = [RpcTimeoutError(MagicMock(hostname="test-host"), "command", 30), "output"]
-        result = cli._cli_with_retry(mock_dev, "show version", "test-host", 2)
-        assert result == "output"
-        assert mock_dev.cli.call_count == 2
-        mock_sleep.assert_called_once_with(5)
-
-    @patch("junos_ops.cli.time.sleep")
-    def test_retry_exhausted(self, mock_sleep, junos_common, mock_args):
-        """リトライ回数を使い切ったら RpcTimeoutError を再送出"""
-        import pytest
-        mock_dev = MagicMock()
-        mock_dev.cli.side_effect = RpcTimeoutError(MagicMock(hostname="test-host"), "command", 30)
-        with pytest.raises(RpcTimeoutError):
-            cli._cli_with_retry(mock_dev, "show version", "test-host", 2)
-        assert mock_dev.cli.call_count == 3  # 初回 + リトライ2回
-        assert mock_sleep.call_count == 2
-        mock_sleep.assert_has_calls([call(5), call(10)])
-
-    def test_no_retry(self, junos_common, mock_args):
-        """retry=0 で RpcTimeoutError はそのまま送出"""
-        import pytest
-        mock_dev = MagicMock()
-        mock_dev.cli.side_effect = RpcTimeoutError(MagicMock(hostname="test-host"), "command", 30)
-        with pytest.raises(RpcTimeoutError):
-            cli._cli_with_retry(mock_dev, "show version", "test-host", 0)
-        assert mock_dev.cli.call_count == 1
-
-    @patch("junos_ops.cli.time.sleep")
-    def test_non_timeout_not_retried(self, mock_sleep, junos_common, mock_args):
-        """RpcTimeoutError 以外の例外はリトライしない"""
-        import pytest
-        mock_dev = MagicMock()
-        mock_dev.cli.side_effect = RuntimeError("other error")
-        with pytest.raises(RuntimeError):
-            cli._cli_with_retry(mock_dev, "show version", "test-host", 2)
-        assert mock_dev.cli.call_count == 1
-        mock_sleep.assert_not_called()
-
-    @patch("junos_ops.cli.time.sleep")
-    def test_backoff_increases(self, mock_sleep, junos_common, mock_args):
-        """バックオフが 5, 10, 15... と増加する"""
-        mock_dev = MagicMock()
-        mock_dev.cli.side_effect = [
-            RpcTimeoutError(MagicMock(hostname="test-host"), "command", 30),
-            RpcTimeoutError(MagicMock(hostname="test-host"), "command", 30),
-            "output",
-        ]
-        result = cli._cli_with_retry(mock_dev, "show version", "test-host", 3)
-        assert result == "output"
-        mock_sleep.assert_has_calls([call(5), call(10)])
-
-
-class TestCmdShowRetry:
-    """cmd_show() のリトライ統合テスト (Issue #38)"""
-
-    @patch("junos_ops.cli.time.sleep")
-    def test_show_retry_success(self, mock_sleep, junos_common, mock_args,
-                                 mock_config, capsys):
-        """cmd_show で RpcTimeoutError 後にリトライ成功"""
-        mock_args.show_command = "show system alarms"
-        mock_args.retry = 1
-        mock_dev = MagicMock()
-        mock_dev.cli.side_effect = [
-            RpcTimeoutError(MagicMock(hostname="test-host"), "command", 30),
-            "No alarms currently active",
-        ]
-
-        with patch.object(cli.common, "connect", return_value={"hostname": "test-host", "host": "test-host", "ok": True, "dev": mock_dev, "error": None, "error_message": None}):
-            result = cli.cmd_show("test-host")
-
-        assert result == 0
-        assert mock_dev.cli.call_count == 2
-        captured = capsys.readouterr()
-        assert "No alarms currently active" in captured.out
-
-    @patch("junos_ops.cli.time.sleep")
-    def test_show_retry_exhausted_returns_error(self, mock_sleep, junos_common,
-                                                 mock_args, mock_config):
-        """リトライ使い切りで exit code 1"""
-        mock_args.show_command = "show system alarms"
-        mock_args.retry = 1
-        mock_dev = MagicMock()
-        mock_dev.cli.side_effect = RpcTimeoutError(MagicMock(hostname="test-host"), "command", 30)
-
-        with patch.object(cli.common, "connect", return_value={"hostname": "test-host", "host": "test-host", "ok": True, "dev": mock_dev, "error": None, "error_message": None}):
-            result = cli.cmd_show("test-host")
-
-        assert result == 1
-        assert mock_dev.cli.call_count == 2
-        mock_dev.close.assert_called_once()
-
-    @patch("junos_ops.cli.time.sleep")
-    def test_showfile_retry(self, mock_sleep, junos_common, mock_args,
-                             mock_config, capsys):
-        """-f モードでもリトライが効く"""
-        mock_args.showfile = "commands.txt"
-        mock_args.show_command = None
-        mock_args.retry = 1
-        mock_dev = MagicMock()
-        mock_dev.cli.side_effect = [
-            RpcTimeoutError(MagicMock(hostname="test-host"), "command", 30),
-            "terse output",
-            "route summary",
-        ]
-
-        with (
-            patch.object(cli.common, "connect", return_value={"hostname": "test-host", "host": "test-host", "ok": True, "dev": mock_dev, "error": None, "error_message": None}),
-            patch.object(
-                cli.common, "load_commands",
-                return_value=["show interfaces terse", "show route summary"],
-            ),
-        ):
-            result = cli.cmd_show("test-host")
-
-        assert result == 0
-        assert mock_dev.cli.call_count == 3
-        captured = capsys.readouterr()
-        assert "terse output" in captured.out
-        assert "route summary" in captured.out
+    def test_comments_only(self, tmp_path):
+        f = tmp_path / "c.txt"
+        f.write_text("# a\n# b\n\n")
+        assert common.load_commands(str(f)) == []

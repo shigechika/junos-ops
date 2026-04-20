@@ -552,7 +552,22 @@ Use `--retry N` to retry commands that fail with `RpcTimeoutError` (with increme
 % junos-ops show "show system alarms" --retry 2 --workers 10 --config accounts.ini
 ```
 
-> **Note:** JUNOS CLI pipe filters (`| match`, `| count`, etc.) are not supported. PyEZ's `dev.cli()` sends commands via NETCONF RPC, which does not process pipe modifiers. Filter output with shell tools (e.g. `grep`) instead.
+#### Structured output (`--format`)
+
+Use `-F` / `--format {text,json,xml}` to change the output format. `text` is the default (legacy behaviour); `json` is handy for programmatic consumers and AI assistants; `xml` returns the pretty-printed RPC reply.
+
+```
+% junos-ops show "show interfaces terse" --format json gw1.example.jp
+# gw1.example.jp
+## show interfaces terse
+{
+  "interface-information": {
+    "physical-interface": [ ... ]
+  }
+}
+```
+
+> **Caveat — pipe stages with `json` / `xml`.** Over NETCONF, pipe modifiers like `| match`, `| last`, and `| count` are silently dropped when the device is asked to emit `json` or `xml` (see [Juniper/junos-mcp-server#4](https://github.com/Juniper/junos-mcp-server/issues/4) / [#12](https://github.com/Juniper/junos-mcp-server/issues/12)). They are honoured for `--format text`. If you need to filter structured output, either stay on `text` and pipe through shell tools (e.g. `jc`, `grep`, `jq` after a separate parse step) or call the equivalent RPC directly.
 
 ### No subcommand (show device facts)
 
