@@ -30,14 +30,14 @@ def get_support_information(dev) -> dict:
     # model-specific timeout selection
     try:
         if dev.facts["personality"] == "SRX_BRANCH":
-            timeout = 1200  # SRX3xx is slow
+            timeout = 2400  # SRX300/320/340/345 are very slow; 1200 was borderline
         elif dev.facts["model"] == "EX2300-24T":
-            timeout = 1200
+            timeout = 2400  # low-flash EX2300 RSI can exceed 1200s under load
         elif len(dev.facts["model_info"]) >= 2:
             # Virtual Chassis is slower
             timeout = 1800
             if dev.facts["model"] == "QFX5110-48S-4C":
-                timeout = 2400  # QFX5110-48S-4C is slowest
+                timeout = 2400  # matches the slowest tier (SRX_BRANCH / EX2300-24T)
         else:
             timeout = 600
     except Exception as e:
