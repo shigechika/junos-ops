@@ -1598,7 +1598,8 @@ def reboot(hostname: str, dev, reboot_dt: datetime.datetime) -> dict:
         - ``code`` (int): legacy exit code (0 = success, 2 = cannot read
           reboot info, 3 = clear_reboot failed, 4 = ConnectError on
           reboot RPC, 5 = RpcError on reboot RPC, 6 =
-          check_and_reinstall failed).
+          check_and_reinstall failed, 7 = get_reboot_information XML
+          parse error without ``--force`` — see issue #60).
         - ``dry_run`` (bool)
         - ``reboot_at`` (str): formatted ``yymmddhhmm`` target time.
         - ``existing_schedule`` (str | None): summary of any
@@ -1632,16 +1633,69 @@ def reboot(hostname: str, dev, reboot_dt: datetime.datetime) -> dict:
         "error": None,
     }
 
+    xml_str: str = ""
+    parse_error: Exception | None = None
     try:
         rpc = dev.rpc.get_reboot_information({"format": "text"})
+        xml_str = etree.tostring(rpc, encoding="unicode")
     except ConnectError as err:
         logger.error(f"{err=}")
         result["code"] = 2
         result["error"] = "ConnectError"
         return result
-    xml_str = etree.tostring(rpc, encoding="unicode")
+    except etree.XMLSyntaxError as e:
+        # PyEZ / lxml can fail to parse the ``get_reboot_information``
+        # response on some devices that already have a halt schedule with
+        # a custom message — observed on SRX345 running 22.4R3-S6.5 when
+        # ``request system halt at "..." message "..."`` had been issued
+        # earlier. The payload is downstream of NETCONF so we never see
+        # the raw bytes here. Record the failure, surface a clear warning,
+        # and fall back to the ``--force`` branch: the separate
+        # ``clear_reboot`` RPC uses a different code path and works fine
+        # against the same device. See issue #60.
+        parse_error = e
+
     logger.debug(f"{xml_str=}")
-    if xml_str.find("No shutdown/reboot scheduled.") < 0:
+    if parse_error is not None:
+        # ``logger.warning`` rather than ``logger.error`` because the
+        # condition is recoverable via ``--force``; an ``error`` level
+        # would wrongly suggest a terminal failure.
+        logger.warning(
+            f"{hostname}: get_reboot_information XML parse failed: {parse_error}"
+        )
+        steps.append({
+            "action": "existing_schedule",
+            "message": (
+                "\tWARNING: cannot parse existing reboot schedule "
+                f"({type(parse_error).__name__}: {parse_error}). "
+                "Assume a schedule exists."
+            ),
+        })
+        if not common.args.force:
+            result["code"] = 7
+            result["error"] = "get_reboot_information_parse_error"
+            result["message"] = (
+                "cannot parse existing reboot schedule; retry with --force "
+                "to unconditionally clear the existing schedule before "
+                "proceeding"
+            )
+            steps.append({
+                "action": "error",
+                "message": f"\t{result['message']}",
+            })
+            return result
+        steps.append({
+            "action": "force_clear",
+            "message": "\tforce: clearing reboot schedule blindly (parse failed)",
+        })
+        clear_result = clear_reboot(dev)
+        steps.append({"action": "clear_reboot", **clear_result})
+        if not clear_result["ok"]:
+            result["code"] = 3
+            result["error"] = "clear_reboot_failed"
+            return result
+        result["cleared_existing"] = True
+    elif xml_str.find("No shutdown/reboot scheduled.") < 0:
         logger.debug("ANY SHUTDWON/REBOOT SCHEDULE EXISTS")
         match = re.search(r"^(\w+) requested by (\w+) at (.*)$", xml_str, re.MULTILINE)
         if match and len(match.groups()) == 3:

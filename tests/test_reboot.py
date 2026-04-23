@@ -170,6 +170,78 @@ class TestRebootWithReinstall:
         assert result["code"] == 6
         assert result["ok"] is False
 
+    def test_reboot_xml_parse_error_without_force(self, junos_upgrade, mock_args, mock_config):
+        """get_reboot_information の XML parse エラー + --force なし → code=7 で fail (issue #60)
+
+        code=7 を code=3 (clear_reboot_failed) と分離してある点を確認する —
+        CLI exit code だけで両者を区別できるのが期待。
+        """
+        dev = MagicMock()
+        dev.rpc.get_reboot_information.side_effect = etree.XMLSyntaxError(
+            "Opening and ending tag mismatch: request-reboot-status line 3 and rpc-reply",
+            None, 21, 13,
+        )
+        mock_args.force = False
+        reboot_dt = datetime.datetime(2025, 6, 13, 5, 0)
+        result = junos_upgrade.reboot("test-host", dev, reboot_dt)
+        assert result["code"] == 7
+        assert result["ok"] is False
+        assert result["error"] == "get_reboot_information_parse_error"
+        # --force の案内メッセージが含まれる
+        assert "--force" in (result.get("message") or "")
+        assert any(
+            "cannot parse" in step.get("message", "") for step in result["steps"]
+        )
+
+    def test_reboot_xml_parse_error_with_force(self, junos_upgrade, mock_args, mock_config):
+        """get_reboot_information の XML parse エラー + --force → clear_reboot へ blind fall-through (issue #60)"""
+        dev = MagicMock()
+        dev.rpc.get_reboot_information.side_effect = etree.XMLSyntaxError(
+            "Opening and ending tag mismatch: request-reboot-status line 3 and rpc-reply",
+            None, 21, 13,
+        )
+        # clear_reboot は成功させる
+        dev.rpc.request_reboot_clear.return_value = etree.Element("output")
+        mock_sw = MagicMock()
+        mock_sw.reboot.return_value = "Shutdown at Fri Jun 13 05:00:00 2025. [pid 97978]"
+        mock_args.force = True
+        reboot_dt = datetime.datetime(2025, 6, 13, 5, 0)
+        with patch.object(junos_upgrade, "check_and_reinstall", return_value={"ok": True, "steps": []}):
+            with patch.object(junos_upgrade, "clear_reboot", return_value={"ok": True, "message": "cleared"}) as mock_clear:
+                with patch("junos_ops.upgrade.SW", return_value=mock_sw):
+                    result = junos_upgrade.reboot("test-host", dev, reboot_dt)
+        # blind clear が呼ばれて reboot が成功する
+        mock_clear.assert_called_once_with(dev)
+        assert result["cleared_existing"] is True
+        assert result["code"] == 0
+        assert result["ok"] is True
+        assert any(
+            "clearing reboot schedule blindly" in step.get("message", "")
+            for step in result["steps"]
+        )
+
+    def test_reboot_xml_parse_error_with_force_but_clear_fails(
+        self, junos_upgrade, mock_args, mock_config
+    ):
+        """parse エラー + --force だが blind clear_reboot も失敗 → code=3 (clear_reboot_failed)"""
+        dev = MagicMock()
+        dev.rpc.get_reboot_information.side_effect = etree.XMLSyntaxError(
+            "Opening and ending tag mismatch: request-reboot-status line 3 and rpc-reply",
+            None, 21, 13,
+        )
+        mock_args.force = True
+        reboot_dt = datetime.datetime(2025, 6, 13, 5, 0)
+        with patch.object(
+            junos_upgrade, "clear_reboot",
+            return_value={"ok": False, "message": "clear failed"},
+        ) as mock_clear:
+            result = junos_upgrade.reboot("test-host", dev, reboot_dt)
+        mock_clear.assert_called_once_with(dev)
+        # parse_error path でも従来の clear_reboot_failed は code=3 を維持
+        assert result["code"] == 3
+        assert result["error"] == "clear_reboot_failed"
+        assert result["cleared_existing"] is False
+
 
 class TestDeleteSnapshots:
     """delete_snapshots() は dict を返す"""
