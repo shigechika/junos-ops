@@ -1437,31 +1437,49 @@ def show_version(hostname, dev) -> dict:
 
 
 def check_and_reinstall(hostname, dev) -> dict:
-    """Re-install firmware if config was modified after the last install.
+    """Pre-reboot drift check against the pending firmware image.
+
+    Does **not** attempt to re-install: JUNOS refuses any install while a
+    pending slot is already staged (it responds with
+    ``There is already an install pending.`` — the only supported paths
+    are ``request system reboot`` or ``request system software rollback``).
+    The earlier design of this function tried to refresh the pending
+    image's embedded config with ``sw.install(validate=True)``, but that
+    pattern has never been possible against an already-pending slot and
+    simply failed the reboot operation on platforms without rescue
+    config (issue #54, issue #57).
+
+    Instead, this function now diagnoses whether the pending image's
+    embedded config is likely to be stale with respect to the running
+    config, surfaces a warning if so, and always returns ``ok=True`` so
+    the caller can proceed with the reboot. The decision of *how* to
+    refresh the pending image (rollback + re-upgrade) is left to the
+    operator.
 
     :return: dict with keys:
 
         - ``hostname`` (str)
-        - ``ok`` (bool): True on success (including the common "no
-          action needed" path); False only if rescue save or re-install
-          raised an error.
-        - ``reinstalled`` (bool): True iff the PyEZ install RPC was
-          actually invoked (not dry-run, not skipped).
-        - ``skipped`` (bool): True when we decided no re-install was
-          needed.
-        - ``skip_reason`` (str | None): ``"no_pending"`` |
-          ``"no_commit_info"`` | ``"pending_current"`` |
-          ``"config_unchanged"`` | ``"dry_run"`` |
-          ``"already_pending"`` | None. ``"pending_current"`` means the
-          pending image's embedded config already reflects the latest
-          commit (primary check, based on pending-slot mtime).
-          ``"config_unchanged"`` is the legacy fallback used when the
-          pending install time cannot be determined; it compares
-          ``commit_epoch`` against ``rescue_epoch`` instead.
-          ``"already_pending"`` is a safety net set when JUNOS refuses a
-          re-install because the target firmware is already staged —
-          see issue #54. When a drift is detected (commit newer than
-          pending install) the step list includes a warning.
+        - ``ok`` (bool): always True; the function no longer does
+          anything that can fail. ``reboot`` should always proceed.
+        - ``reinstalled`` (bool): always False (kept for result-dict
+          stability; no install is attempted).
+        - ``skipped`` (bool): always True; re-install is always skipped.
+        - ``skip_reason`` (str): ``"no_pending"`` | ``"no_commit_info"``
+          | ``"pending_current"`` | ``"config_unchanged"`` |
+          ``"drift_detected"`` | ``"cannot_verify"``.
+
+          * ``"pending_current"`` — primary, authoritative skip: the
+            pending image's install time (``/var/sw/pkg/`` mtime) is no
+            older than the latest commit, so the embedded config is
+            current.
+          * ``"config_unchanged"`` — legacy fallback when
+            ``pending_install_epoch`` cannot be determined but
+            ``rescue_epoch`` is and no newer commit exists.
+          * ``"drift_detected"`` — commit happened after the pending
+            install; the embedded config is provably stale. A warning
+            step explains the situation.
+          * ``"cannot_verify"`` — neither ``pending_install_epoch`` nor
+            ``rescue_epoch`` is available. Softer warning.
         - ``dry_run`` (bool)
         - ``commit`` (dict | None): ``{epoch, datetime, user, client}``
           of the most recent commit, when available.
@@ -1469,10 +1487,10 @@ def check_and_reinstall(hostname, dev) -> dict:
         - ``pending_install_epoch`` (int | None): best-effort epoch of
           the most recent file under ``/var/sw/pkg/``, used as a proxy
           for when the pending firmware was staged.
-        - ``rescue_save`` (dict | None): ``{ok, message, error}``.
-        - ``install_message`` (str | None): PyEZ ``SW.install`` message.
+        - ``drift_detected`` (bool): True when commit is provably newer
+          than the pending install.
         - ``steps`` (list[dict]): chronological progress for display.
-        - ``error`` (str | None).
+        - ``error`` (str | None): always None.
 
     Does not print.
     """
@@ -1481,29 +1499,26 @@ def check_and_reinstall(hostname, dev) -> dict:
         "hostname": hostname,
         "ok": True,
         "reinstalled": False,
-        "skipped": False,
+        "skipped": True,
         "skip_reason": None,
         "dry_run": common.args.dry_run,
         "commit": None,
         "rescue_epoch": None,
         "pending_install_epoch": None,
-        "rescue_save": None,
-        "install_message": None,
+        "drift_detected": False,
         "steps": steps,
         "error": None,
     }
 
     pending = get_pending_version(hostname, dev)
     if pending is None:
-        logger.debug("check_and_reinstall: no pending version, skip")
-        result["skipped"] = True
+        logger.debug("check_and_reinstall: no pending version")
         result["skip_reason"] = "no_pending"
         return result
 
     commit_info = get_commit_information(dev)
     if commit_info is None:
-        logger.debug("check_and_reinstall: cannot get commit information, skip")
-        result["skipped"] = True
+        logger.debug("check_and_reinstall: cannot get commit information")
         result["skip_reason"] = "no_commit_info"
         return result
 
@@ -1519,165 +1534,57 @@ def check_and_reinstall(hostname, dev) -> dict:
     pending_install_epoch = get_pending_install_time(dev)
     result["pending_install_epoch"] = pending_install_epoch
 
-    # The pending firmware image carries the config that was active at
-    # install time. If the latest commit is no newer than that snapshot,
-    # the pending image already reflects the running config and no
-    # re-install is needed. This is the primary and authoritative check.
-    #
-    # Fall back to the legacy rescue-save comparison when
-    # ``pending_install_epoch`` cannot be determined (older platforms or
-    # RPC failure); the rescue save in install() is usually close in time
-    # to the pending install, so it remains a reasonable secondary proxy.
-    skip_epoch = None
+    # Primary: does the pending image's install time cover the latest
+    # commit? If so, the embedded config is current.
     if pending_install_epoch is not None:
-        skip_epoch = pending_install_epoch
-    elif rescue_epoch is not None:
-        skip_epoch = rescue_epoch
-
-    if skip_epoch is not None and commit_epoch <= skip_epoch:
-        logger.debug(
-            "check_and_reinstall: pending image already covers latest commit, skip"
-        )
-        result["skipped"] = True
-        result["skip_reason"] = (
-            "pending_current" if pending_install_epoch is not None
-            else "config_unchanged"
-        )
-        return result
-
-    # Config was modified after the pending image was staged — the pending
-    # image's embedded config is stale. Warn and attempt re-install so the
-    # pending slot picks up the current config. If JUNOS refuses because
-    # an install is already pending (issue #54), we fall through to the
-    # safety net below that records a skip with a drift warning.
-    if pending_install_epoch is None and rescue_epoch is None:
-        steps.append({
-            "action": "warning",
-            "message": "\tWARNING: cannot determine pending install time. "
-                       "Re-installing firmware with current config.",
-        })
-    else:
+        if commit_epoch <= pending_install_epoch:
+            result["skip_reason"] = "pending_current"
+            return result
+        # Provable drift: commit happened after the pending install.
+        result["drift_detected"] = True
+        result["skip_reason"] = "drift_detected"
         steps.append({
             "action": "warning",
             "message": (
-                f"\tWARNING: config modified after firmware install "
-                f"({commit_dt_str} by {commit_user} via {commit_client})."
+                f"\tWARNING: config modified "
+                f"({commit_dt_str} by {commit_user} via {commit_client}) "
+                f"after pending firmware was staged. Reboot will activate "
+                f"firmware with the older embedded config. To refresh the "
+                f"pending image, roll back the pending slot and re-run "
+                f"``junos-ops upgrade``."
             ),
         })
+        return result
+
+    # Fallback when pending_install_epoch is not available.
+    if rescue_epoch is not None:
+        if commit_epoch <= rescue_epoch:
+            result["skip_reason"] = "config_unchanged"
+            return result
+        # Can't be sure pending is stale (rescue_epoch ≠ install time),
+        # but the commit postdates rescue, which is a soft signal.
+        result["skip_reason"] = "cannot_verify"
         steps.append({
             "action": "warning",
-            "message": "\tRe-installing firmware to validate current config.",
-        })
-
-    if common.args.dry_run:
-        result["skipped"] = True
-        result["skip_reason"] = "dry_run"
-        steps.append({
-            "action": "dry_run",
-            "message": "\tdry-run: re-install and rescue config save skipped",
+            "message": (
+                f"\tWARNING: config modified "
+                f"({commit_dt_str} by {commit_user} via {commit_client}) "
+                f"after last rescue save. Cannot determine whether the "
+                f"pending image reflects this change; reboot will proceed."
+            ),
         })
         return result
 
-    # rescue config save
-    rescue_save: dict = {"ok": False, "message": None, "error": None}
-    cu = Config(dev)
-    try:
-        saved = cu.rescue("save")
-        if saved:
-            rescue_save["ok"] = True
-            rescue_save["message"] = "\tre-install: rescue config save successful"
-        else:
-            rescue_save["message"] = "\tre-install: rescue config save failed"
-    except Exception as e:
-        rescue_save["error"] = type(e).__name__
-        rescue_save["message"] = f"\tre-install: rescue config save failed: {e}"
-        logger.error(f"check_and_reinstall: rescue save failed: {e}")
-    result["rescue_save"] = rescue_save
-    steps.append({"action": "rescue_save", **rescue_save})
-    if not rescue_save["ok"]:
-        result["ok"] = False
-        result["error"] = "rescue_save_failed"
-        return result
-
-    # re-install (with validation)
-    try:
-        sw = SW(dev)
-        try:
-            status, msg = sw.install(
-                get_model_file(hostname, dev.facts["model"]),
-                remote_path=common.config.get(hostname, "rpath"),
-                progress=True,
-                validate=True,
-                cleanfs=False,
-                no_copy=True,
-                issu=False,
-                nssu=False,
-                timeout=2400,
-                checksum=get_model_hash(hostname, dev.facts["model"]),
-                checksum_timeout=1200,
-                checksum_algorithm=common.config.get(hostname, "hashalgo"),
-                all_re=True,
-            )
-        finally:
-            del sw
-        logger.debug(f"check_and_reinstall: {msg=}")
-        result["install_message"] = msg
-        if status:
-            result["reinstalled"] = True
-            steps.append({
-                "action": "reinstall",
-                "ok": True,
-                "message": "\tre-install: successful",
-            })
-        elif "already an install pending" in (msg or "").lower():
-            # Safety net: JUNOS refuses to re-install on top of an existing
-            # pending slot. We get here when the primary timestamp check
-            # above decided a re-install was needed (commit is newer than
-            # ``pending_install_epoch`` / ``rescue_epoch``) but the only
-            # way to actually restage the pending image is to rollback
-            # first, which is disruptive enough that we do not do it
-            # automatically. Record a drift warning and let ``reboot``
-            # proceed — the operator should know that the pending image
-            # carries the config from ``pending_install_epoch``, not the
-            # latest commit. See issue #54.
-            result["skipped"] = True
-            result["skip_reason"] = "already_pending"
-            steps.append({
-                "action": "reinstall",
-                "ok": True,
-                "skipped": True,
-                "message": (
-                    "\tre-install: skipped "
-                    "(firmware already pending; reboot will complete the install)"
-                ),
-            })
-            if pending_install_epoch is not None and commit_epoch > pending_install_epoch:
-                steps.append({
-                    "action": "warning",
-                    "message": (
-                        "\tWARNING: latest commit is newer than the pending image; "
-                        "reboot will activate firmware with stale embedded config. "
-                        "Roll back the pending slot and re-run upgrade to refresh it."
-                    ),
-                })
-        else:
-            result["reinstalled"] = True
-            result["ok"] = False
-            result["error"] = "reinstall_failed"
-            steps.append({
-                "action": "reinstall",
-                "ok": False,
-                "message": f"\tre-install: failed: {msg}",
-            })
-    except Exception as e:
-        result["ok"] = False
-        result["error"] = type(e).__name__
-        logger.error(f"check_and_reinstall: install failed: {e}")
-        steps.append({
-            "action": "reinstall",
-            "ok": False,
-            "message": f"\tre-install: failed: {e}",
-        })
+    # Neither marker available — emit a soft warning and skip.
+    result["skip_reason"] = "cannot_verify"
+    steps.append({
+        "action": "warning",
+        "message": (
+            "\tWARNING: cannot determine pending install time and no "
+            "rescue config exists. Unable to verify embedded config "
+            "freshness; reboot will proceed."
+        ),
+    })
     return result
 
 
