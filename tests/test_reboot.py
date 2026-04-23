@@ -96,8 +96,47 @@ class TestCheckAndReinstall:
                             result = junos_upgrade.check_and_reinstall("test-host", dev)
         assert result["ok"] is False
 
+    def test_pending_current_primary_skip(self, junos_upgrade, mock_args, mock_config):
+        """pending_install_epoch >= commit_epoch → primary skip (issue #54 fundamental fix)"""
+        dev = MagicMock()
+        with patch.object(junos_upgrade, "get_pending_version", return_value="23.4R2-S7.4"):
+            with patch.object(junos_upgrade, "get_commit_information", return_value=(1000, "2001-01-01", "admin", "cli")):
+                with patch.object(junos_upgrade, "get_rescue_config_time", return_value=None):
+                    with patch.object(junos_upgrade, "get_pending_install_time", return_value=2000):
+                        result = junos_upgrade.check_and_reinstall("test-host", dev)
+        assert result["ok"] is True
+        assert result["skipped"] is True
+        assert result["skip_reason"] == "pending_current"
+        assert result["reinstalled"] is False
+        # rescue save 不要（SW.install も呼ばれていないはず）
+        assert result["rescue_save"] is None
+
+    def test_pending_current_takes_priority_over_rescue(self, junos_upgrade, mock_args, mock_config):
+        """pending_install_epoch が利用できれば rescue_epoch より優先"""
+        dev = MagicMock()
+        # commit(1500) > rescue(1000) だが pending_install(2000) はより新しい → skip
+        with patch.object(junos_upgrade, "get_pending_version", return_value="23.4R2-S7.4"):
+            with patch.object(junos_upgrade, "get_commit_information", return_value=(1500, "2001-01-01", "admin", "cli")):
+                with patch.object(junos_upgrade, "get_rescue_config_time", return_value=1000):
+                    with patch.object(junos_upgrade, "get_pending_install_time", return_value=2000):
+                        result = junos_upgrade.check_and_reinstall("test-host", dev)
+        assert result["skipped"] is True
+        assert result["skip_reason"] == "pending_current"
+
+    def test_rescue_fallback_when_pending_unknown(self, junos_upgrade, mock_args, mock_config):
+        """get_pending_install_time が None → rescue_epoch に fallback"""
+        dev = MagicMock()
+        with patch.object(junos_upgrade, "get_pending_version", return_value="22.4R3-S6.5"):
+            with patch.object(junos_upgrade, "get_commit_information", return_value=(1000, "2001-01-01", "admin", "cli")):
+                with patch.object(junos_upgrade, "get_rescue_config_time", return_value=2000):
+                    with patch.object(junos_upgrade, "get_pending_install_time", return_value=None):
+                        result = junos_upgrade.check_and_reinstall("test-host", dev)
+        assert result["skipped"] is True
+        # fallback path は legacy の reason を保持
+        assert result["skip_reason"] == "config_unchanged"
+
     def test_already_pending_treated_as_skip(self, junos_upgrade, mock_args, mock_config):
-        """`already an install pending` は再インストール不要の skip として扱う (issue #54)"""
+        """`already an install pending` は再インストール不要の skip として扱う (issue #54 安全網)"""
         dev = MagicMock()
         dev.facts = {"model": "EX2300-24T"}
         mock_sw = MagicMock()
@@ -113,9 +152,10 @@ class TestCheckAndReinstall:
         with patch.object(junos_upgrade, "get_pending_version", return_value="22.4R3-S6.5"):
             with patch.object(junos_upgrade, "get_commit_information", return_value=(2000, "2001-01-01", "admin", "cli")):
                 with patch.object(junos_upgrade, "get_rescue_config_time", return_value=None):
-                    with patch("junos_ops.upgrade.Config", return_value=mock_cu):
-                        with patch("junos_ops.upgrade.SW", return_value=mock_sw):
-                            result = junos_upgrade.check_and_reinstall("test-host", dev)
+                    with patch.object(junos_upgrade, "get_pending_install_time", return_value=None):
+                        with patch("junos_ops.upgrade.Config", return_value=mock_cu):
+                            with patch("junos_ops.upgrade.SW", return_value=mock_sw):
+                                result = junos_upgrade.check_and_reinstall("test-host", dev)
         # reboot should still be allowed to proceed.
         assert result["ok"] is True
         assert result["skipped"] is True
@@ -124,6 +164,32 @@ class TestCheckAndReinstall:
         assert result["error"] is None
         assert any(
             "already pending" in step.get("message", "") for step in result["steps"]
+        )
+
+    def test_drift_warning_when_commit_newer_than_pending(self, junos_upgrade, mock_args, mock_config):
+        """commit > pending_install の状態で already_pending → config drift 警告付き skip"""
+        dev = MagicMock()
+        dev.facts = {"model": "EX2300-24T"}
+        mock_sw = MagicMock()
+        mock_sw.install.return_value = (
+            False,
+            "Package validation failed\nERROR: There is already an install pending.\n",
+        )
+        mock_cu = MagicMock()
+        mock_cu.rescue.return_value = True
+        with patch.object(junos_upgrade, "get_pending_version", return_value="22.4R3-S6.5"):
+            with patch.object(junos_upgrade, "get_commit_information", return_value=(3000, "2001-01-01", "admin", "cli")):
+                with patch.object(junos_upgrade, "get_rescue_config_time", return_value=None):
+                    with patch.object(junos_upgrade, "get_pending_install_time", return_value=1000):
+                        with patch("junos_ops.upgrade.Config", return_value=mock_cu):
+                            with patch("junos_ops.upgrade.SW", return_value=mock_sw):
+                                result = junos_upgrade.check_and_reinstall("test-host", dev)
+        assert result["ok"] is True
+        assert result["skipped"] is True
+        assert result["skip_reason"] == "already_pending"
+        # drift 警告が含まれる
+        assert any(
+            "stale embedded config" in step.get("message", "") for step in result["steps"]
         )
 
     def test_rescue_save_failure(self, junos_upgrade, mock_args, mock_config):
