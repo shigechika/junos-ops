@@ -199,6 +199,61 @@ class TestGetRescueConfigTime:
         assert result is None
 
 
+class TestGetPendingInstallTime:
+    """get_pending_install_time() のテスト (issue #54 根本対策)"""
+
+    def _make_dir_listing(self, entries):
+        """複数 file-information を持つ directory XML を作る。entries: list of (name, seconds)。"""
+        root = etree.Element("directory")
+        for name, seconds in entries:
+            fi = etree.SubElement(root, "file-information")
+            etree.SubElement(fi, "file-name").text = name
+            fd = etree.SubElement(fi, "file-date")
+            fd.set("seconds", seconds)
+            fd.text = "Apr 16 12:00"
+        return root
+
+    def test_single_file(self, junos_upgrade, mock_args):
+        """1ファイルだけの時はその mtime を返す"""
+        dev = MagicMock()
+        dev.rpc.file_list.return_value = self._make_dir_listing(
+            [("junos-arm-32-23.4R2-S7.4.tgz", "1713200000")]
+        )
+        assert junos_upgrade.get_pending_install_time(dev) == 1713200000
+
+    def test_picks_newest(self, junos_upgrade, mock_args):
+        """複数ファイルがあれば最新の mtime を返す"""
+        dev = MagicMock()
+        dev.rpc.file_list.return_value = self._make_dir_listing([
+            ("junos-old.tgz", "1000000000"),
+            ("junos-new.tgz", "1713200000"),
+            ("junos-mid.tgz", "1500000000"),
+        ])
+        assert junos_upgrade.get_pending_install_time(dev) == 1713200000
+
+    def test_empty_directory(self, junos_upgrade, mock_args):
+        """ファイルなし → None"""
+        dev = MagicMock()
+        dev.rpc.file_list.return_value = etree.Element("directory")
+        assert junos_upgrade.get_pending_install_time(dev) is None
+
+    def test_rpc_error(self, junos_upgrade, mock_args):
+        """RPC エラー → None"""
+        from jnpr.junos.exception import RpcError
+        dev = MagicMock()
+        dev.rpc.file_list.side_effect = RpcError()
+        assert junos_upgrade.get_pending_install_time(dev) is None
+
+    def test_non_integer_seconds(self, junos_upgrade, mock_args):
+        """seconds が int に parse できないエントリは無視"""
+        dev = MagicMock()
+        dev.rpc.file_list.return_value = self._make_dir_listing([
+            ("bogus.tgz", "notanumber"),
+            ("good.tgz", "1713200000"),
+        ])
+        assert junos_upgrade.get_pending_install_time(dev) == 1713200000
+
+
 class TestShowVersionWithoutFile:
     """show_version() が .file 未定義でもエラーにならないテスト (Issue #37)"""
 
