@@ -7,211 +7,134 @@ from lxml import etree
 
 
 class TestCheckAndReinstall:
-    """check_and_reinstall() のテスト"""
+    """check_and_reinstall() のテスト
+
+    Design after issue #57: check_and_reinstall は pending に対して re-install
+    を試みない。JUNOS が pending 上に install を許さないためで、旧実装の
+    「config が更新されたら再 install で pending を refresh」は常に失敗
+    していた。今は diagnostic のみで、ok は常に True、skipped は常に True。
+    """
 
     def test_no_pending(self, junos_upgrade, mock_args, mock_config):
-        """pending version なし → 再インストールしない"""
+        """pending version なし → skip_reason='no_pending'"""
         dev = MagicMock()
         with patch.object(junos_upgrade, "get_pending_version", return_value=None):
             result = junos_upgrade.check_and_reinstall("test-host", dev)
         assert result["ok"] is True
-
-    def test_config_not_changed(self, junos_upgrade, mock_args, mock_config):
-        """コミット時刻 <= rescue 時刻 → 再インストールしない"""
-        dev = MagicMock()
-        with patch.object(junos_upgrade, "get_pending_version", return_value="22.4R3-S6.5"):
-            with patch.object(junos_upgrade, "get_commit_information", return_value=(1000, "2001-01-01", "admin", "cli")):
-                with patch.object(junos_upgrade, "get_rescue_config_time", return_value=2000):
-                    result = junos_upgrade.check_and_reinstall("test-host", dev)
-        assert result["ok"] is True
-
-    def test_config_equal_time(self, junos_upgrade, mock_args, mock_config):
-        """コミット時刻 == rescue 時刻 → 再インストールしない"""
-        dev = MagicMock()
-        with patch.object(junos_upgrade, "get_pending_version", return_value="22.4R3-S6.5"):
-            with patch.object(junos_upgrade, "get_commit_information", return_value=(1000, "2001-01-01", "admin", "cli")):
-                with patch.object(junos_upgrade, "get_rescue_config_time", return_value=1000):
-                    result = junos_upgrade.check_and_reinstall("test-host", dev)
-        assert result["ok"] is True
-
-    def test_config_changed(self, junos_upgrade, mock_args, mock_config):
-        """コミット時刻 > rescue 時刻 → 再インストール実行"""
-        dev = MagicMock()
-        dev.facts = {"model": "EX2300-24T"}
-        mock_sw = MagicMock()
-        mock_sw.install.return_value = (True, "install ok")
-        mock_cu = MagicMock()
-        mock_cu.rescue.return_value = True
-        with patch.object(junos_upgrade, "get_pending_version", return_value="22.4R3-S6.5"):
-            with patch.object(junos_upgrade, "get_commit_information", return_value=(2000, "2001-01-01", "admin", "cli")):
-                with patch.object(junos_upgrade, "get_rescue_config_time", return_value=1000):
-                    with patch("junos_ops.upgrade.Config", return_value=mock_cu):
-                        with patch("junos_ops.upgrade.SW", return_value=mock_sw):
-                            result = junos_upgrade.check_and_reinstall("test-host", dev)
-        assert result["ok"] is True
-        mock_cu.rescue.assert_called_once_with("save")
-        mock_sw.install.assert_called_once()
-
-    def test_no_rescue_file(self, junos_upgrade, mock_args, mock_config):
-        """rescue ファイルなし → 再インストール実行"""
-        dev = MagicMock()
-        dev.facts = {"model": "EX2300-24T"}
-        mock_sw = MagicMock()
-        mock_sw.install.return_value = (True, "install ok")
-        mock_cu = MagicMock()
-        mock_cu.rescue.return_value = True
-        with patch.object(junos_upgrade, "get_pending_version", return_value="22.4R3-S6.5"):
-            with patch.object(junos_upgrade, "get_commit_information", return_value=(2000, "2001-01-01", "admin", "cli")):
-                with patch.object(junos_upgrade, "get_rescue_config_time", return_value=None):
-                    with patch("junos_ops.upgrade.Config", return_value=mock_cu):
-                        with patch("junos_ops.upgrade.SW", return_value=mock_sw):
-                            result = junos_upgrade.check_and_reinstall("test-host", dev)
-        assert result["ok"] is True
-        mock_cu.rescue.assert_called_once_with("save")
-        mock_sw.install.assert_called_once()
-
-    def test_dry_run(self, junos_upgrade, mock_args, mock_config):
-        """dry-run 時はメッセージのみ、再インストールしない"""
-        mock_args.dry_run = True
-        dev = MagicMock()
-        with patch.object(junos_upgrade, "get_pending_version", return_value="22.4R3-S6.5"):
-            with patch.object(junos_upgrade, "get_commit_information", return_value=(2000, "2001-01-01", "admin", "cli")):
-                with patch.object(junos_upgrade, "get_rescue_config_time", return_value=1000):
-                    result = junos_upgrade.check_and_reinstall("test-host", dev)
-        assert result["ok"] is True
-
-    def test_install_failure(self, junos_upgrade, mock_args, mock_config):
-        """再インストール失敗 → True を返す"""
-        dev = MagicMock()
-        dev.facts = {"model": "EX2300-24T"}
-        mock_sw = MagicMock()
-        mock_sw.install.return_value = (False, "install failed")
-        mock_cu = MagicMock()
-        mock_cu.rescue.return_value = True
-        with patch.object(junos_upgrade, "get_pending_version", return_value="22.4R3-S6.5"):
-            with patch.object(junos_upgrade, "get_commit_information", return_value=(2000, "2001-01-01", "admin", "cli")):
-                with patch.object(junos_upgrade, "get_rescue_config_time", return_value=1000):
-                    with patch("junos_ops.upgrade.Config", return_value=mock_cu):
-                        with patch("junos_ops.upgrade.SW", return_value=mock_sw):
-                            result = junos_upgrade.check_and_reinstall("test-host", dev)
-        assert result["ok"] is False
-
-    def test_pending_current_primary_skip(self, junos_upgrade, mock_args, mock_config):
-        """pending_install_epoch >= commit_epoch → primary skip (issue #54 fundamental fix)"""
-        dev = MagicMock()
-        with patch.object(junos_upgrade, "get_pending_version", return_value="23.4R2-S7.4"):
-            with patch.object(junos_upgrade, "get_commit_information", return_value=(1000, "2001-01-01", "admin", "cli")):
-                with patch.object(junos_upgrade, "get_rescue_config_time", return_value=None):
-                    with patch.object(junos_upgrade, "get_pending_install_time", return_value=2000):
-                        result = junos_upgrade.check_and_reinstall("test-host", dev)
-        assert result["ok"] is True
         assert result["skipped"] is True
-        assert result["skip_reason"] == "pending_current"
+        assert result["skip_reason"] == "no_pending"
         assert result["reinstalled"] is False
-        # rescue save 不要（SW.install も呼ばれていないはず）
-        assert result["rescue_save"] is None
-
-    def test_pending_current_takes_priority_over_rescue(self, junos_upgrade, mock_args, mock_config):
-        """pending_install_epoch が利用できれば rescue_epoch より優先"""
-        dev = MagicMock()
-        # commit(1500) > rescue(1000) だが pending_install(2000) はより新しい → skip
-        with patch.object(junos_upgrade, "get_pending_version", return_value="23.4R2-S7.4"):
-            with patch.object(junos_upgrade, "get_commit_information", return_value=(1500, "2001-01-01", "admin", "cli")):
-                with patch.object(junos_upgrade, "get_rescue_config_time", return_value=1000):
-                    with patch.object(junos_upgrade, "get_pending_install_time", return_value=2000):
-                        result = junos_upgrade.check_and_reinstall("test-host", dev)
-        assert result["skipped"] is True
-        assert result["skip_reason"] == "pending_current"
-
-    def test_rescue_fallback_when_pending_unknown(self, junos_upgrade, mock_args, mock_config):
-        """get_pending_install_time が None → rescue_epoch に fallback"""
-        dev = MagicMock()
-        with patch.object(junos_upgrade, "get_pending_version", return_value="22.4R3-S6.5"):
-            with patch.object(junos_upgrade, "get_commit_information", return_value=(1000, "2001-01-01", "admin", "cli")):
-                with patch.object(junos_upgrade, "get_rescue_config_time", return_value=2000):
-                    with patch.object(junos_upgrade, "get_pending_install_time", return_value=None):
-                        result = junos_upgrade.check_and_reinstall("test-host", dev)
-        assert result["skipped"] is True
-        # fallback path は legacy の reason を保持
-        assert result["skip_reason"] == "config_unchanged"
-
-    def test_already_pending_treated_as_skip(self, junos_upgrade, mock_args, mock_config):
-        """`already an install pending` は再インストール不要の skip として扱う (issue #54 安全網)"""
-        dev = MagicMock()
-        dev.facts = {"model": "EX2300-24T"}
-        mock_sw = MagicMock()
-        mock_sw.install.return_value = (
-            False,
-            "Package validation failed\n"
-            "ERROR: There is already an install pending.\n"
-            "ERROR:     Use the 'request system reboot' command to complete the install,\n"
-            "ERROR:     or the 'request system software rollback' command to back it out.\n",
-        )
-        mock_cu = MagicMock()
-        mock_cu.rescue.return_value = True
-        with patch.object(junos_upgrade, "get_pending_version", return_value="22.4R3-S6.5"):
-            with patch.object(junos_upgrade, "get_commit_information", return_value=(2000, "2001-01-01", "admin", "cli")):
-                with patch.object(junos_upgrade, "get_rescue_config_time", return_value=None):
-                    with patch.object(junos_upgrade, "get_pending_install_time", return_value=None):
-                        with patch("junos_ops.upgrade.Config", return_value=mock_cu):
-                            with patch("junos_ops.upgrade.SW", return_value=mock_sw):
-                                result = junos_upgrade.check_and_reinstall("test-host", dev)
-        # reboot should still be allowed to proceed.
-        assert result["ok"] is True
-        assert result["skipped"] is True
-        assert result["skip_reason"] == "already_pending"
-        assert result["reinstalled"] is False
-        assert result["error"] is None
-        assert any(
-            "already pending" in step.get("message", "") for step in result["steps"]
-        )
-
-    def test_drift_warning_when_commit_newer_than_pending(self, junos_upgrade, mock_args, mock_config):
-        """commit > pending_install の状態で already_pending → config drift 警告付き skip"""
-        dev = MagicMock()
-        dev.facts = {"model": "EX2300-24T"}
-        mock_sw = MagicMock()
-        mock_sw.install.return_value = (
-            False,
-            "Package validation failed\nERROR: There is already an install pending.\n",
-        )
-        mock_cu = MagicMock()
-        mock_cu.rescue.return_value = True
-        with patch.object(junos_upgrade, "get_pending_version", return_value="22.4R3-S6.5"):
-            with patch.object(junos_upgrade, "get_commit_information", return_value=(3000, "2001-01-01", "admin", "cli")):
-                with patch.object(junos_upgrade, "get_rescue_config_time", return_value=None):
-                    with patch.object(junos_upgrade, "get_pending_install_time", return_value=1000):
-                        with patch("junos_ops.upgrade.Config", return_value=mock_cu):
-                            with patch("junos_ops.upgrade.SW", return_value=mock_sw):
-                                result = junos_upgrade.check_and_reinstall("test-host", dev)
-        assert result["ok"] is True
-        assert result["skipped"] is True
-        assert result["skip_reason"] == "already_pending"
-        # drift 警告が含まれる
-        assert any(
-            "stale embedded config" in step.get("message", "") for step in result["steps"]
-        )
-
-    def test_rescue_save_failure(self, junos_upgrade, mock_args, mock_config):
-        """rescue config 保存失敗 → True を返す"""
-        dev = MagicMock()
-        dev.facts = {"model": "EX2300-24T"}
-        mock_cu = MagicMock()
-        mock_cu.rescue.return_value = False
-        with patch.object(junos_upgrade, "get_pending_version", return_value="22.4R3-S6.5"):
-            with patch.object(junos_upgrade, "get_commit_information", return_value=(2000, "2001-01-01", "admin", "cli")):
-                with patch.object(junos_upgrade, "get_rescue_config_time", return_value=1000):
-                    with patch("junos_ops.upgrade.Config", return_value=mock_cu):
-                        result = junos_upgrade.check_and_reinstall("test-host", dev)
-        assert result["ok"] is False
 
     def test_no_commit_info(self, junos_upgrade, mock_args, mock_config):
-        """コミット情報取得失敗 → スキップ"""
+        """コミット情報取得失敗 → skip_reason='no_commit_info'"""
         dev = MagicMock()
         with patch.object(junos_upgrade, "get_pending_version", return_value="22.4R3-S6.5"):
             with patch.object(junos_upgrade, "get_commit_information", return_value=None):
                 result = junos_upgrade.check_and_reinstall("test-host", dev)
         assert result["ok"] is True
+        assert result["skip_reason"] == "no_commit_info"
+
+    def test_pending_current_primary_skip(self, junos_upgrade, mock_args, mock_config):
+        """commit_epoch <= pending_install_epoch → skip_reason='pending_current'"""
+        dev = MagicMock()
+        with patch.object(junos_upgrade, "get_pending_version", return_value="23.4R2-S7.4"):
+            with patch.object(junos_upgrade, "get_commit_information", return_value=(1000, "2001-01-01", "admin", "cli")):
+                with patch.object(junos_upgrade, "get_rescue_config_time", return_value=None):
+                    with patch.object(junos_upgrade, "get_pending_install_time", return_value=2000):
+                        result = junos_upgrade.check_and_reinstall("test-host", dev)
+        assert result["ok"] is True
+        assert result["skipped"] is True
+        assert result["skip_reason"] == "pending_current"
+        assert result["reinstalled"] is False
+        assert result["drift_detected"] is False
+        # 警告は出ない（embedded config が最新なので）
+        assert len(result["steps"]) == 0
+
+    def test_pending_current_takes_priority_over_rescue(self, junos_upgrade, mock_args, mock_config):
+        """pending_install_epoch があれば rescue_epoch より優先して判定"""
+        dev = MagicMock()
+        # commit(1500) > rescue(1000) でも pending_install(2000) の方が新しい → skip
+        with patch.object(junos_upgrade, "get_pending_version", return_value="23.4R2-S7.4"):
+            with patch.object(junos_upgrade, "get_commit_information", return_value=(1500, "2001-01-01", "admin", "cli")):
+                with patch.object(junos_upgrade, "get_rescue_config_time", return_value=1000):
+                    with patch.object(junos_upgrade, "get_pending_install_time", return_value=2000):
+                        result = junos_upgrade.check_and_reinstall("test-host", dev)
+        assert result["skip_reason"] == "pending_current"
+
+    def test_drift_detected(self, junos_upgrade, mock_args, mock_config):
+        """commit_epoch > pending_install_epoch → drift 警告付き skip"""
+        dev = MagicMock()
+        with patch.object(junos_upgrade, "get_pending_version", return_value="23.4R2-S7.4"):
+            with patch.object(junos_upgrade, "get_commit_information", return_value=(3000, "2026-04-22 16:19", "admin", "cli")):
+                with patch.object(junos_upgrade, "get_rescue_config_time", return_value=None):
+                    with patch.object(junos_upgrade, "get_pending_install_time", return_value=1000):
+                        result = junos_upgrade.check_and_reinstall("test-host", dev)
+        assert result["ok"] is True
+        assert result["skipped"] is True
+        assert result["skip_reason"] == "drift_detected"
+        assert result["drift_detected"] is True
+        assert result["reinstalled"] is False
+        # drift 警告が含まれる
+        assert any(
+            "older embedded config" in step.get("message", "")
+            for step in result["steps"]
+        )
+
+    def test_rescue_fallback_when_pending_unknown(self, junos_upgrade, mock_args, mock_config):
+        """pending_install_epoch が None → rescue_epoch に fallback"""
+        dev = MagicMock()
+        with patch.object(junos_upgrade, "get_pending_version", return_value="22.4R3-S6.5"):
+            with patch.object(junos_upgrade, "get_commit_information", return_value=(1000, "2001-01-01", "admin", "cli")):
+                with patch.object(junos_upgrade, "get_rescue_config_time", return_value=2000):
+                    with patch.object(junos_upgrade, "get_pending_install_time", return_value=None):
+                        result = junos_upgrade.check_and_reinstall("test-host", dev)
+        assert result["skipped"] is True
+        assert result["skip_reason"] == "config_unchanged"
+
+    def test_rescue_fallback_commit_newer_warns(self, junos_upgrade, mock_args, mock_config):
+        """pending_install 不明 + commit > rescue → 'cannot_verify' with soft warning"""
+        dev = MagicMock()
+        with patch.object(junos_upgrade, "get_pending_version", return_value="22.4R3-S6.5"):
+            with patch.object(junos_upgrade, "get_commit_information", return_value=(3000, "2026-04-22", "admin", "cli")):
+                with patch.object(junos_upgrade, "get_rescue_config_time", return_value=1000):
+                    with patch.object(junos_upgrade, "get_pending_install_time", return_value=None):
+                        result = junos_upgrade.check_and_reinstall("test-host", dev)
+        assert result["ok"] is True
+        assert result["skip_reason"] == "cannot_verify"
+        assert any(
+            "rescue" in step.get("message", "").lower()
+            for step in result["steps"]
+        )
+
+    def test_cannot_verify_neither_marker(self, junos_upgrade, mock_args, mock_config):
+        """pending_install も rescue も不明（issue #54 / #57 の再現条件）→ cannot_verify + warning"""
+        dev = MagicMock()
+        with patch.object(junos_upgrade, "get_pending_version", return_value="23.4R2-S7.4"):
+            with patch.object(junos_upgrade, "get_commit_information", return_value=(2000, "2026-04-22", "admin", "cli")):
+                with patch.object(junos_upgrade, "get_rescue_config_time", return_value=None):
+                    with patch.object(junos_upgrade, "get_pending_install_time", return_value=None):
+                        result = junos_upgrade.check_and_reinstall("test-host", dev)
+        # ok=True が最重要: issue #54 / #57 では install 失敗で False になっていた
+        assert result["ok"] is True
+        assert result["skip_reason"] == "cannot_verify"
+        assert result["reinstalled"] is False
+        # SW.install も rescue.save も呼ばれていない（pattern は patch しないことで暗黙に保証）
+
+    def test_never_attempts_install(self, junos_upgrade, mock_args, mock_config):
+        """どのパスでも SW.install は呼ばれない（設計方針の回帰ガード）"""
+        dev = MagicMock()
+        mock_sw = MagicMock()
+        mock_cu = MagicMock()
+        with patch.object(junos_upgrade, "get_pending_version", return_value="23.4R2-S7.4"):
+            with patch.object(junos_upgrade, "get_commit_information", return_value=(3000, "2026-04-22", "admin", "cli")):
+                with patch.object(junos_upgrade, "get_rescue_config_time", return_value=1000):
+                    with patch.object(junos_upgrade, "get_pending_install_time", return_value=500):
+                        with patch("junos_ops.upgrade.SW", return_value=mock_sw):
+                            with patch("junos_ops.upgrade.Config", return_value=mock_cu):
+                                result = junos_upgrade.check_and_reinstall("test-host", dev)
+        assert result["ok"] is True
+        mock_sw.install.assert_not_called()
+        mock_cu.rescue.assert_not_called()
 
 
 class TestRebootWithReinstall:
