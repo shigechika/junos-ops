@@ -96,6 +96,36 @@ class TestCheckAndReinstall:
                             result = junos_upgrade.check_and_reinstall("test-host", dev)
         assert result["ok"] is False
 
+    def test_already_pending_treated_as_skip(self, junos_upgrade, mock_args, mock_config):
+        """`already an install pending` は再インストール不要の skip として扱う (issue #54)"""
+        dev = MagicMock()
+        dev.facts = {"model": "EX2300-24T"}
+        mock_sw = MagicMock()
+        mock_sw.install.return_value = (
+            False,
+            "Package validation failed\n"
+            "ERROR: There is already an install pending.\n"
+            "ERROR:     Use the 'request system reboot' command to complete the install,\n"
+            "ERROR:     or the 'request system software rollback' command to back it out.\n",
+        )
+        mock_cu = MagicMock()
+        mock_cu.rescue.return_value = True
+        with patch.object(junos_upgrade, "get_pending_version", return_value="22.4R3-S6.5"):
+            with patch.object(junos_upgrade, "get_commit_information", return_value=(2000, "2001-01-01", "admin", "cli")):
+                with patch.object(junos_upgrade, "get_rescue_config_time", return_value=None):
+                    with patch("junos_ops.upgrade.Config", return_value=mock_cu):
+                        with patch("junos_ops.upgrade.SW", return_value=mock_sw):
+                            result = junos_upgrade.check_and_reinstall("test-host", dev)
+        # reboot should still be allowed to proceed.
+        assert result["ok"] is True
+        assert result["skipped"] is True
+        assert result["skip_reason"] == "already_pending"
+        assert result["reinstalled"] is False
+        assert result["error"] is None
+        assert any(
+            "already pending" in step.get("message", "") for step in result["steps"]
+        )
+
     def test_rescue_save_failure(self, junos_upgrade, mock_args, mock_config):
         """rescue config 保存失敗 → True を返す"""
         dev = MagicMock()

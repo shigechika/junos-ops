@@ -1406,7 +1406,10 @@ def check_and_reinstall(hostname, dev) -> dict:
           needed.
         - ``skip_reason`` (str | None): ``"no_pending"`` |
           ``"no_commit_info"`` | ``"config_unchanged"`` | ``"dry_run"``
-          | None.
+          | ``"already_pending"`` | None. ``"already_pending"`` is set
+          when JUNOS rejects the re-install because the target firmware
+          is already staged in the pending slot (issue #54) — the caller
+          should proceed to schedule the reboot unchanged.
         - ``dry_run`` (bool)
         - ``commit`` (dict | None): ``{epoch, datetime, user, client}``
           of the most recent commit, when available.
@@ -1537,14 +1540,34 @@ def check_and_reinstall(hostname, dev) -> dict:
             del sw
         logger.debug(f"check_and_reinstall: {msg=}")
         result["install_message"] = msg
-        result["reinstalled"] = True
         if status:
+            result["reinstalled"] = True
             steps.append({
                 "action": "reinstall",
                 "ok": True,
                 "message": "\tre-install: successful",
             })
+        elif "already an install pending" in (msg or "").lower():
+            # JUNOS refuses to re-validate/re-install when the target image is
+            # already staged in the pending slot (e.g. from a prior
+            # ``junos-ops upgrade`` run). In that case the pending firmware
+            # already reflects the running config for validation purposes and
+            # the only remaining step is ``request system reboot`` — which is
+            # what the caller is about to do. Treat this as a skip, not a
+            # failure, so ``reboot`` can proceed. See issue #54.
+            result["skipped"] = True
+            result["skip_reason"] = "already_pending"
+            steps.append({
+                "action": "reinstall",
+                "ok": True,
+                "skipped": True,
+                "message": (
+                    "\tre-install: skipped "
+                    "(firmware already pending; reboot will complete the install)"
+                ),
+            })
         else:
+            result["reinstalled"] = True
             result["ok"] = False
             result["error"] = "reinstall_failed"
             steps.append({
