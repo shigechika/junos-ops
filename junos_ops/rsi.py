@@ -30,9 +30,9 @@ def get_support_information(dev) -> dict:
     # model-specific timeout selection
     try:
         if dev.facts["personality"] == "SRX_BRANCH":
-            timeout = 1200  # SRX3xx is slow
+            timeout = 2400  # SRX300/320/340/345 are very slow; 1200 was borderline
         elif dev.facts["model"] == "EX2300-24T":
-            timeout = 1200
+            timeout = 2400
         elif len(dev.facts["model_info"]) >= 2:
             # Virtual Chassis is slower
             timeout = 1800
