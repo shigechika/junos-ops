@@ -171,7 +171,11 @@ class TestRebootWithReinstall:
         assert result["ok"] is False
 
     def test_reboot_xml_parse_error_without_force(self, junos_upgrade, mock_args, mock_config):
-        """get_reboot_information の XML parse エラー + --force なし → code=3 で fail (issue #60)"""
+        """get_reboot_information の XML parse エラー + --force なし → code=7 で fail (issue #60)
+
+        code=7 を code=3 (clear_reboot_failed) と分離してある点を確認する —
+        CLI exit code だけで両者を区別できるのが期待。
+        """
         dev = MagicMock()
         dev.rpc.get_reboot_information.side_effect = etree.XMLSyntaxError(
             "Opening and ending tag mismatch: request-reboot-status line 3 and rpc-reply",
@@ -180,7 +184,7 @@ class TestRebootWithReinstall:
         mock_args.force = False
         reboot_dt = datetime.datetime(2025, 6, 13, 5, 0)
         result = junos_upgrade.reboot("test-host", dev, reboot_dt)
-        assert result["code"] == 3
+        assert result["code"] == 7
         assert result["ok"] is False
         assert result["error"] == "get_reboot_information_parse_error"
         # --force の案内メッセージが含まれる
@@ -215,6 +219,28 @@ class TestRebootWithReinstall:
             "clearing reboot schedule blindly" in step.get("message", "")
             for step in result["steps"]
         )
+
+    def test_reboot_xml_parse_error_with_force_but_clear_fails(
+        self, junos_upgrade, mock_args, mock_config
+    ):
+        """parse エラー + --force だが blind clear_reboot も失敗 → code=3 (clear_reboot_failed)"""
+        dev = MagicMock()
+        dev.rpc.get_reboot_information.side_effect = etree.XMLSyntaxError(
+            "Opening and ending tag mismatch: request-reboot-status line 3 and rpc-reply",
+            None, 21, 13,
+        )
+        mock_args.force = True
+        reboot_dt = datetime.datetime(2025, 6, 13, 5, 0)
+        with patch.object(
+            junos_upgrade, "clear_reboot",
+            return_value={"ok": False, "message": "clear failed"},
+        ) as mock_clear:
+            result = junos_upgrade.reboot("test-host", dev, reboot_dt)
+        mock_clear.assert_called_once_with(dev)
+        # parse_error path でも従来の clear_reboot_failed は code=3 を維持
+        assert result["code"] == 3
+        assert result["error"] == "clear_reboot_failed"
+        assert result["cleared_existing"] is False
 
 
 class TestDeleteSnapshots:

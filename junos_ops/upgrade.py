@@ -1598,7 +1598,8 @@ def reboot(hostname: str, dev, reboot_dt: datetime.datetime) -> dict:
         - ``code`` (int): legacy exit code (0 = success, 2 = cannot read
           reboot info, 3 = clear_reboot failed, 4 = ConnectError on
           reboot RPC, 5 = RpcError on reboot RPC, 6 =
-          check_and_reinstall failed).
+          check_and_reinstall failed, 7 = get_reboot_information XML
+          parse error without ``--force`` — see issue #60).
         - ``dry_run`` (bool)
         - ``reboot_at`` (str): formatted ``yymmddhhmm`` target time.
         - ``existing_schedule`` (str | None): summary of any
@@ -1656,6 +1657,9 @@ def reboot(hostname: str, dev, reboot_dt: datetime.datetime) -> dict:
 
     logger.debug(f"{xml_str=}")
     if parse_error is not None:
+        # ``logger.warning`` rather than ``logger.error`` because the
+        # condition is recoverable via ``--force``; an ``error`` level
+        # would wrongly suggest a terminal failure.
         logger.warning(
             f"{hostname}: get_reboot_information XML parse failed: {parse_error}"
         )
@@ -1668,7 +1672,7 @@ def reboot(hostname: str, dev, reboot_dt: datetime.datetime) -> dict:
             ),
         })
         if not common.args.force:
-            result["code"] = 3
+            result["code"] = 7
             result["error"] = "get_reboot_information_parse_error"
             result["message"] = (
                 "cannot parse existing reboot schedule; retry with --force "
