@@ -25,7 +25,7 @@ class TestGetSupportInformation:
         )
 
     def test_srx_branch_timeout(self):
-        """SRX_BRANCH は timeout=1200"""
+        """SRX_BRANCH は timeout=2400"""
         dev = MagicMock()
         dev.facts = {
             "personality": "SRX_BRANCH",
@@ -36,11 +36,11 @@ class TestGetSupportInformation:
         }
         rsi.get_support_information(dev)
         dev.rpc.get_support_information.assert_called_once_with(
-            {"format": "text"}, dev_timeout=1200
+            {"format": "text"}, dev_timeout=2400
         )
 
     def test_ex2300_timeout(self):
-        """EX2300-24T は timeout=1200"""
+        """EX2300-24T は timeout=2400"""
         dev = MagicMock()
         dev.facts = {
             "personality": "SWITCH",
@@ -51,7 +51,7 @@ class TestGetSupportInformation:
         }
         rsi.get_support_information(dev)
         dev.rpc.get_support_information.assert_called_once_with(
-            {"format": "text"}, dev_timeout=1200
+            {"format": "text"}, dev_timeout=2400
         )
 
     def test_virtual_chassis_timeout(self):
