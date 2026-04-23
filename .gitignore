@@ -23,3 +23,12 @@ logger.log*
 
 # JUNOSパッケージ
 *.tgz
+
+# ローカル scratch（`git add -A` 事故防止、v0.16.2 yank 教訓）
+.srx-nat-usage.ini
+junos-rsi.py
+safe_copy.py
+sw.py
+test_safe_copy.py
+thread.py
+ver.py
