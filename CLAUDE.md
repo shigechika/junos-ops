@@ -75,7 +75,7 @@ LICENSE
 - `check_local_package(hostname, dev)` / `check_local_package_by_model(hostname, model)` — ローカル firmware checksum 検証（後者は hashlib 直接、NETCONF 不要）
 - `check_remote_package(hostname, dev)` / `check_remote_package_by_model(hostname, dev, model)` — リモート firmware checksum 検証（by_model 版はモデルを明示指定）
 - `_compute_local_checksum(path, algo)` — hashlib ベースの純粋関数（PyEZ SW 非依存）
-- `get_hashcache()` / `set_hashcache()` — チェックサムキャッシュ（スレッド安全）
+- `get_hashcache()` / `set_hashcache()` / `clear_hashcache()` — チェックサムキャッシュ（スレッド安全）。`clear_hashcache` は `storage_cleanup` 後に invoke して cache が stale 化するのを防ぐ
 - `load_config()` — set コマンドファイルのロード＋コミット（dict: steps + logger.info でリアルタイム進捗）
 - `list_remote_path()` — リモートファイル一覧（dict: files/file_count/format）
 - `dry_run()` — local/remote package の検証（dict）
