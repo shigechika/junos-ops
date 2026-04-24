@@ -1,6 +1,5 @@
 """Tests for the show subcommand and the junos_ops.show core."""
 
-import warnings
 from unittest.mock import MagicMock, patch, call
 
 import pytest
@@ -44,7 +43,7 @@ class TestRunCli:
         assert result["format"] == "text"
         assert result["output"] == "output line\n"
         assert result["error"] is None
-        dev.cli.assert_called_once_with("show version")
+        dev.cli.assert_called_once_with("show version", warning=False)
 
     def test_json_passthrough(self):
         dev = MagicMock()
@@ -58,7 +57,7 @@ class TestRunCli:
             "interface-information": {"physical-interface": []}
         }
         dev.cli.assert_called_once_with(
-            "show interfaces terse", format="json"
+            "show interfaces terse", warning=False, format="json"
         )
 
     def test_xml_pretty_printed(self):
@@ -73,7 +72,9 @@ class TestRunCli:
         assert isinstance(result["output"], str)
         assert "<child>x</child>" in result["output"]
         assert "\n" in result["output"]
-        dev.cli.assert_called_once_with("show version", format="xml")
+        dev.cli.assert_called_once_with(
+            "show version", warning=False, format="xml"
+        )
 
     def test_invalid_format_raises(self):
         dev = MagicMock()
@@ -89,50 +90,28 @@ class TestRunCli:
         assert result["error"] == "RuntimeError"
         assert result["error_message"] == "boom"
 
-    def test_suppresses_pyez_cli_debug_warning(self):
-        """PyEZ's per-call RuntimeWarning must not leak from run_cli.
-
-        PyEZ (device.py) emits the warning with a leading newline -
-        see jnpr.junos.device.Device.cli - so the filter regex must tolerate it.
+    def test_passes_warning_false_to_dev_cli(self):
+        """``warning=False`` must always be forwarded so PyEZ skips its
+        "CLI command is for debug use only" RuntimeWarning block at
+        ``jnpr/junos/device.py`` ``Device.cli``. Filtering the warning
+        from the outside is unreliable because PyEZ resets the filter
+        stack via ``simplefilter('always')`` before emitting it.
         """
 
         dev = MagicMock()
+        dev.cli.return_value = "ok"
+        show.run_cli(dev, "show system alarms", hostname="h")
+        _, kwargs = dev.cli.call_args
+        assert kwargs.get("warning") is False
 
-        def _cli_emitting_warning(*args, **kwargs):
-            warnings.warn(
-                "\nCLI command is for debug use only!\n"
-                "Instead of:\ncli('show system alarms')\n"
-                "Use:\nrpc.get_system_alarm_information()\n",
-                RuntimeWarning,
-            )
-            return "No alarms currently active\n"
-
-        dev.cli.side_effect = _cli_emitting_warning
-        with warnings.catch_warnings(record=True) as caught:
-            warnings.simplefilter("always")
-            result = show.run_cli(dev, "show system alarms", hostname="h")
-        assert result["ok"] is True
-        assert not any(
-            "debug use only" in str(rec.message) for rec in caught
-        ), [str(rec.message) for rec in caught]
-
-    def test_unrelated_runtime_warning_still_surfaces(self):
-        """Only the PyEZ debug warning is silenced; others pass through."""
-
-        dev = MagicMock()
-
-        def _cli_emitting_warning(*args, **kwargs):
-            warnings.warn("something else entirely", RuntimeWarning)
-            return "ok"
-
-        dev.cli.side_effect = _cli_emitting_warning
-        with warnings.catch_warnings(record=True) as caught:
-            warnings.simplefilter("always")
-            result = show.run_cli(dev, "show version", hostname="h")
-        assert result["ok"] is True
-        assert any(
-            "something else entirely" in str(rec.message) for rec in caught
+        dev2 = MagicMock()
+        dev2.cli.return_value = {}
+        show.run_cli(
+            dev2, "show interfaces terse", output_format="json", hostname="h"
         )
+        _, kwargs2 = dev2.cli.call_args
+        assert kwargs2.get("warning") is False
+        assert kwargs2.get("format") == "json"
 
 
 class TestRunCliRetry:
@@ -304,7 +283,7 @@ class TestCmdShow:
         with patch.object(cli.common, "connect", return_value=_connect_ok(dev)):
             rc = cli.cmd_show("test-host")
         assert rc == 0
-        dev.cli.assert_called_once_with("show version")
+        dev.cli.assert_called_once_with("show version", warning=False)
         dev.close.assert_called_once()
         captured = capsys.readouterr().out
         assert "# test-host" in captured
@@ -321,7 +300,9 @@ class TestCmdShow:
         with patch.object(cli.common, "connect", return_value=_connect_ok(dev)):
             rc = cli.cmd_show("test-host")
         assert rc == 0
-        dev.cli.assert_called_once_with("show interfaces terse", format="json")
+        dev.cli.assert_called_once_with(
+            "show interfaces terse", warning=False, format="json"
+        )
         assert '"interface-information"' in capsys.readouterr().out
 
     def test_cli_exception_returns_1(self, junos_common, mock_args, mock_config):
