@@ -20,6 +20,7 @@ RPC directly.
 """
 
 import time
+import warnings
 from logging import getLogger
 
 from jnpr.junos.exception import RpcTimeoutError
@@ -40,7 +41,15 @@ def _cli_with_retry(
     kwargs = {} if output_format == "text" else {"format": output_format}
     for attempt in range(retry + 1):
         try:
-            return dev.cli(command, **kwargs)
+            # ``show`` is intentionally a CLI passthrough, so suppress PyEZ's
+            # per-call "CLI command is for debug use only" RuntimeWarning.
+            with warnings.catch_warnings():
+                warnings.filterwarnings(
+                    "ignore",
+                    message="CLI command is for debug use only",
+                    category=RuntimeWarning,
+                )
+                return dev.cli(command, **kwargs)
         except RpcTimeoutError:
             if attempt < retry:
                 wait = 5 * (attempt + 1)

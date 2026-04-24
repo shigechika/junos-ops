@@ -1,5 +1,6 @@
 """Tests for the show subcommand and the junos_ops.show core."""
 
+import warnings
 from unittest.mock import MagicMock, patch, call
 
 import pytest
@@ -87,6 +88,46 @@ class TestRunCli:
         assert result["output"] is None
         assert result["error"] == "RuntimeError"
         assert result["error_message"] == "boom"
+
+    def test_suppresses_pyez_cli_debug_warning(self):
+        """PyEZ's per-call RuntimeWarning must not leak from run_cli."""
+
+        dev = MagicMock()
+
+        def _cli_emitting_warning(*args, **kwargs):
+            warnings.warn(
+                "CLI command is for debug use only!\n"
+                "Instead of:\ncli('show system alarms')\n",
+                RuntimeWarning,
+            )
+            return "No alarms currently active\n"
+
+        dev.cli.side_effect = _cli_emitting_warning
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            result = show.run_cli(dev, "show system alarms", hostname="h")
+        assert result["ok"] is True
+        assert not any(
+            "debug use only" in str(rec.message) for rec in caught
+        ), [str(rec.message) for rec in caught]
+
+    def test_unrelated_runtime_warning_still_surfaces(self):
+        """Only the PyEZ debug warning is silenced; others pass through."""
+
+        dev = MagicMock()
+
+        def _cli_emitting_warning(*args, **kwargs):
+            warnings.warn("something else entirely", RuntimeWarning)
+            return "ok"
+
+        dev.cli.side_effect = _cli_emitting_warning
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            result = show.run_cli(dev, "show version", hostname="h")
+        assert result["ok"] is True
+        assert any(
+            "something else entirely" in str(rec.message) for rec in caught
+        )
 
 
 class TestRunCliRetry:
