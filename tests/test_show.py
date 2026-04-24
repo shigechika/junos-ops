@@ -90,14 +90,19 @@ class TestRunCli:
         assert result["error_message"] == "boom"
 
     def test_suppresses_pyez_cli_debug_warning(self):
-        """PyEZ's per-call RuntimeWarning must not leak from run_cli."""
+        """PyEZ's per-call RuntimeWarning must not leak from run_cli.
+
+        PyEZ (device.py) emits the warning with a leading newline -
+        see jnpr.junos.device.Device.cli - so the filter regex must tolerate it.
+        """
 
         dev = MagicMock()
 
         def _cli_emitting_warning(*args, **kwargs):
             warnings.warn(
-                "CLI command is for debug use only!\n"
-                "Instead of:\ncli('show system alarms')\n",
+                "\nCLI command is for debug use only!\n"
+                "Instead of:\ncli('show system alarms')\n"
+                "Use:\nrpc.get_system_alarm_information()\n",
                 RuntimeWarning,
             )
             return "No alarms currently active\n"

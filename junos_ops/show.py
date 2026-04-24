@@ -43,10 +43,12 @@ def _cli_with_retry(
         try:
             # ``show`` is intentionally a CLI passthrough, so suppress PyEZ's
             # per-call "CLI command is for debug use only" RuntimeWarning.
+            # PyEZ prepends a newline to the warning text, so the ``message``
+            # regex must allow a leading ``\n`` (``re.match`` is anchored).
             with warnings.catch_warnings():
                 warnings.filterwarnings(
                     "ignore",
-                    message="CLI command is for debug use only",
+                    message=r"\s*CLI command is for debug use only",
                     category=RuntimeWarning,
                 )
                 return dev.cli(command, **kwargs)
