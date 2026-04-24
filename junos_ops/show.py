@@ -37,7 +37,14 @@ def _cli_with_retry(
 
     :raises RpcTimeoutError: once the retry budget is exhausted.
     """
-    kwargs = {} if output_format == "text" else {"format": output_format}
+    # ``show`` is intentionally a CLI passthrough. PyEZ otherwise emits a
+    # per-call "CLI command is for debug use only" RuntimeWarning and even
+    # resets the warnings filter stack around it, which makes external
+    # ``warnings.filterwarnings`` suppression unreliable. Passing
+    # ``warning=False`` skips that block entirely at the source.
+    kwargs = {"warning": False}
+    if output_format != "text":
+        kwargs["format"] = output_format
     for attempt in range(retry + 1):
         try:
             return dev.cli(command, **kwargs)
