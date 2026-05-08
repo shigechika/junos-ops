@@ -1,0 +1,112 @@
+name: Build .rpm packages
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to build (e.g. 0.20.0)"
+        required: true
+
+jobs:
+  build-rpm:
+    runs-on: ubuntu-latest
+    container: rockylinux:9
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install build dependencies
+        run: |
+          dnf install -y \
+            python3.12 python3.12-devel \
+            ruby ruby-devel gcc make rpm-build \
+            libxml2-devel libxslt-devel openssl-devel libffi-devel \
+            git-core
+
+      - name: Install gh CLI
+        run: |
+          dnf install -y dnf-plugins-core
+          dnf config-manager --add-repo https://cli.github.com/packages/rpm/gh-cli.repo
+          dnf install -y gh
+
+      - name: Install fpm
+        run: gem install fpm --no-document
+
+      - name: Determine version
+        id: version
+        run: |
+          if [ -n "${{ inputs.version }}" ]; then
+            echo "version=${{ inputs.version }}" >> $GITHUB_OUTPUT
+          else
+            echo "version=${GITHUB_REF_NAME#v}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Build virtualenv
+        run: |
+          python3.12 -m venv /opt/venvs/junos-ops
+          /opt/venvs/junos-ops/bin/pip install --upgrade pip setuptools
+          /opt/venvs/junos-ops/bin/pip install "${GITHUB_WORKSPACE}"
+          /opt/venvs/junos-ops/bin/junos-ops --version
+
+      - name: Prepare staging directory
+        run: |
+          mkdir -p staging/opt/venvs staging/usr/bin
+          cp -a /opt/venvs/junos-ops staging/opt/venvs/
+          ln -s /opt/venvs/junos-ops/bin/junos-ops staging/usr/bin/junos-ops
+
+      - name: Build .rpm package
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          fpm -s dir -t rpm \
+            -C staging \
+            -n junos-ops \
+            -v "${VERSION}" \
+            --iteration 1.el9 \
+            --license "Apache-2.0" \
+            --vendor "AIKAWA Shigechika" \
+            --maintainer "AIKAWA Shigechika <shigechika@users.noreply.github.com>" \
+            --url "https://github.com/shigechika/junos-ops" \
+            --description "Automated JUNOS package management for Juniper Networks devices" \
+            --rpm-summary "Automated JUNOS package management for Juniper Networks devices" \
+            --depends python3.12 \
+            --after-remove rpm/post-remove.sh \
+            .
+
+      - name: Upload .rpm as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: junos-ops-el9
+          path: "*.rpm"
+          retention-days: 7
+
+      - name: Wait for GitHub Release to exist
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          for i in $(seq 1 30); do
+            if gh release view "$TAG" >/dev/null 2>&1; then
+              echo "Release $TAG found"
+              exit 0
+            fi
+            echo "Waiting for release $TAG... ($i/30)"
+            sleep 30
+          done
+          echo "Release $TAG not found after 15 minutes, creating it"
+          gh release create "$TAG" --generate-notes
+
+      - name: Upload .rpm to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release upload "${GITHUB_REF_NAME}" *.rpm --clobber

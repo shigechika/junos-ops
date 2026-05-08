@@ -46,6 +46,23 @@ A Python CLI to automate Juniper/JUNOS operations over NETCONF: model-aware upgr
 brew install shigechika/tap/junos-ops
 ```
 
+### Debian / Ubuntu (.deb)
+
+Pre-built packages for Ubuntu 24.04 (Noble) are available on the [GitHub Releases](https://github.com/shigechika/junos-ops/releases) page. The package installs a self-contained Python virtualenv at `/opt/venvs/junos-ops/` with `junos-ops` symlinked to `/usr/bin/`:
+
+```bash
+sudo apt install ./junos-ops_*~noble.deb
+```
+
+### RHEL / Rocky Linux / AlmaLinux (.rpm)
+
+Pre-built packages for RHEL/Rocky/AlmaLinux 9 are available on the [GitHub Releases](https://github.com/shigechika/junos-ops/releases) page. Python 3.12 is required:
+
+```bash
+sudo dnf install python3.12
+sudo rpm -ivh junos-ops-*-1.el9.x86_64.rpm
+```
+
 ### pip
 
 ```bash

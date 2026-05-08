@@ -46,6 +46,23 @@ Juniper/JUNOS デバイスの運用を NETCONF 経由で自動化する Python C
 brew install shigechika/tap/junos-ops
 ```
 
+### Debian / Ubuntu (.deb)
+
+Ubuntu 24.04 (Noble) 向けのパッケージを [GitHub Releases](https://github.com/shigechika/junos-ops/releases) で配布しています。`/opt/venvs/junos-ops/` に自己完結型の Python 仮想環境をインストールし、`/usr/bin/junos-ops` にシンボリックリンクを作成します。
+
+```bash
+sudo apt install ./junos-ops_*~noble.deb
+```
+
+### RHEL / Rocky Linux / AlmaLinux (.rpm)
+
+RHEL/Rocky/AlmaLinux 9 向けのパッケージを [GitHub Releases](https://github.com/shigechika/junos-ops/releases) で配布しています。Python 3.12 が必要です。
+
+```bash
+sudo dnf install python3.12
+sudo rpm -ivh junos-ops-*-1.el9.x86_64.rpm
+```
+
 ### pip
 
 ```bash
