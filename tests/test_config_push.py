@@ -962,3 +962,56 @@ class TestNoConfirm:
         # commit confirmed + commit の2回
         assert mock_cu.commit.call_count == 2
         mock_cu.commit.assert_any_call(confirm=1)
+
+
+class TestNoCommit:
+    """--no-commit オプションのテスト"""
+
+    def test_no_commit_skips_final_commit(self, junos_upgrade, mock_args, mock_config):
+        """--no-commit: commit confirmed のみで最終 commit を送らない"""
+        mock_args.no_commit = True
+        mock_args.confirm_timeout = 1
+        dev = MagicMock()
+        mock_cu = MagicMock()
+        mock_cu.diff.return_value = "[edit]\n+  set system ..."
+        with (
+            patch("junos_ops.upgrade.Config", return_value=mock_cu),
+            patch.object(common, "load_commands", return_value=["set system ntp"]),
+        ):
+            result = junos_upgrade.load_config("test-host", dev, "commands.set")
+        assert result["ok"] is True
+        assert result["commit_mode"] == "no_commit"
+        # commit は1回だけ（confirm= あり）、最終 commit は呼ばれない
+        mock_cu.commit.assert_called_once_with(confirm=1)
+        # ヘルスチェックは実行されない
+        dev.cli.assert_not_called()
+
+    def test_no_commit_message_contains_rollback(self, junos_upgrade, mock_args, mock_config):
+        """--no-commit: steps に auto-rollback の旨が含まれる"""
+        mock_args.no_commit = True
+        mock_args.confirm_timeout = 1
+        dev = MagicMock()
+        mock_cu = MagicMock()
+        mock_cu.diff.return_value = "[edit]\n+  set system ..."
+        with (
+            patch("junos_ops.upgrade.Config", return_value=mock_cu),
+            patch.object(common, "load_commands", return_value=["set system ntp"]),
+        ):
+            result = junos_upgrade.load_config("test-host", dev, "commands.set")
+        messages = " ".join(s.get("message", "") for s in result["steps"])
+        assert "auto-rollback" in messages
+
+    def test_no_commit_confirm_timeout(self, junos_upgrade, mock_args, mock_config):
+        """--no-commit --confirm 2: confirm=2 で commit される"""
+        mock_args.no_commit = True
+        mock_args.confirm_timeout = 2
+        dev = MagicMock()
+        mock_cu = MagicMock()
+        mock_cu.diff.return_value = "[edit]\n+  set system ..."
+        with (
+            patch("junos_ops.upgrade.Config", return_value=mock_cu),
+            patch.object(common, "load_commands", return_value=["set system ntp"]),
+        ):
+            result = junos_upgrade.load_config("test-host", dev, "commands.set")
+        assert result["confirm_timeout"] == 2
+        mock_cu.commit.assert_called_once_with(confirm=2)

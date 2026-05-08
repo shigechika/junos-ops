@@ -1943,6 +1943,9 @@ def load_config(hostname, dev, configfile) -> dict:
         health check -> confirm -> unlock.
     Commit flow (``--no-confirm``):
         lock -> load -> diff -> commit_check -> commit -> unlock.
+    Commit flow (``--no-commit``):
+        lock -> load -> diff -> commit_check -> commit confirmed ->
+        unlock. (JUNOS auto-rolls back after timeout; no health check.)
     On error, rollback + unlock for cleanup.
 
     :return: dict with keys:
@@ -1960,8 +1963,8 @@ def load_config(hostname, dev, configfile) -> dict:
         - ``no_changes`` (bool): True iff ``diff is None`` — shortcut
           for the common happy path.
         - ``commit_mode`` (str): ``"confirmed"`` | ``"no_confirm"`` |
-          ``"dry_run"`` | ``"none"`` (no commit happened, e.g. lock
-          failed or no_changes).
+          ``"no_commit"`` | ``"dry_run"`` | ``"none"`` (no commit
+          happened, e.g. lock failed or no_changes).
         - ``confirm_timeout`` (int | None): confirm timeout in minutes
           for ``commit_mode == "confirmed"``, else None.
         - ``health_check`` (dict): health-check outcome, with keys:
@@ -2062,11 +2065,23 @@ def load_config(hostname, dev, configfile) -> dict:
         _step("commit_check", "\tcommit check passed")
 
         no_confirm = getattr(common.args, "no_confirm", False)
+        no_commit = getattr(common.args, "no_commit", False)
         if no_confirm:
             # Direct commit (skip commit confirmed)
             cu.commit()
             result["commit_mode"] = "no_confirm"
             _step("commit", "\tcommit applied (no confirm)")
+        elif no_commit:
+            # commit confirmed without final commit — JUNOS auto-rolls back
+            confirm_timeout = getattr(common.args, "confirm_timeout", 1)
+            result["confirm_timeout"] = confirm_timeout
+            result["commit_mode"] = "no_commit"
+            cu.commit(confirm=confirm_timeout)
+            _step(
+                "commit_confirmed",
+                f"\tcommit confirmed {confirm_timeout} applied"
+                f" — will auto-rollback in {confirm_timeout} minute(s)",
+            )
         else:
             # commit confirmed (auto-rollback on timer)
             confirm_timeout = getattr(common.args, "confirm_timeout", 1)

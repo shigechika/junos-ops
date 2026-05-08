@@ -258,6 +258,11 @@ def cmd_show(hostname) -> int:
 
 def cmd_config(hostname) -> int:
     """Push set command file to device."""
+    if getattr(common.args, "no_commit", False) and getattr(common.args, "no_confirm", False):
+        display.print_host_block(
+            hostname, "\t--no-commit and --no-confirm are mutually exclusive"
+        )
+        return 1
     dev = _open_connection(hostname)
     if dev is None:
         return 1
@@ -694,6 +699,11 @@ def _run():
         "--no-confirm", dest="no_confirm", action="store_true",
         help="skip commit confirmed and health check, commit directly",
     )
+    p_config.add_argument(
+        "--no-commit", dest="no_commit", action="store_true",
+        help="apply with commit confirmed but skip final commit "
+             "(JUNOS auto-rolls back after --confirm minutes)",
+    )
     p_config.add_argument("specialhosts", metavar="hostname", nargs="*")
 
     # check
@@ -824,6 +834,8 @@ def _run():
         args.rpc_timeout = None
     if not hasattr(args, "no_confirm"):
         args.no_confirm = False
+    if not hasattr(args, "no_commit"):
+        args.no_commit = False
     if not hasattr(args, "check_connect"):
         args.check_connect = False
     if not hasattr(args, "check_local"):

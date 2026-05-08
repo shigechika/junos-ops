@@ -207,7 +207,7 @@ junos-ops <subcommand> [options] [hostname ...]
 | `ls [-l]` | リモートパスのファイル一覧 |
 | `show COMMAND [--retry N]` / `show -f FILE` | 任意の CLI コマンド（またはコマンドファイル）を複数ホストで実行 |
 | `check [--connect\|--local\|--remote\|--all] [--model M]` | Pre-flight チェック: NETCONF 疎通・ローカル/リモート firmware ハッシュ |
-| `config -f FILE` | set コマンドファイルを適用（`--confirm` / `--timeout` / `--no-confirm` / `--health-check` / `--no-health-check` の詳細は [docs/config.md](docs/config.md) を参照） |
+| `config -f FILE` | set コマンドファイルを適用（`--confirm` / `--timeout` / `--no-confirm` / `--no-commit` / `--health-check` / `--no-health-check` の詳細は [docs/config.md](docs/config.md) を参照） |
 | `rsi` | RSI/SCF を並列収集 |
 | （なし） | デバイスファクト（device facts）を表示 |
 
@@ -337,7 +337,7 @@ flowchart TD
 
 `config` サブコマンドは安全なコミットフローを採用しています。`commit confirmed`（自動ロールバックタイマー） → **ヘルスチェック** → `commit`（確定）の順に実行します。ヘルスチェックが失敗した場合、最終 `commit` を送信せず、タイマー満了時に JUNOS が自動的にロールバックします。
 
-ヘルスチェック（`uptime`、ping、CLI コマンド）、commit confirmed フロー、`--no-confirm`、並列実行などの詳細は [docs/config.ja.md](docs/config.ja.md) を参照してください。
+ヘルスチェック（`uptime`、ping、CLI コマンド）、commit confirmed フロー、`--no-confirm`、`--no-commit`、並列実行などの詳細は [docs/config.ja.md](docs/config.ja.md) を参照してください。
 
 ```
 1. dry-run で差分を確認
