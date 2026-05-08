@@ -18,4 +18,4 @@ See Also:
     https://github.com/shigechika/junos-ops
 """
 
-__version__ = "0.21.1"  # x-release-please-version
+__version__ = "0.21.2"  # x-release-please-version
