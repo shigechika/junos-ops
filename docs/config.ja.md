@@ -87,7 +87,7 @@ flowchart TD
 | `--no-health-check` | ヘルスチェックをスキップ |
 | `--timeout N` | RPC タイムアウト（秒、デフォルト: 120、config.ini の `timeout` でも設定可能） |
 | `--no-confirm` | commit confirmed とヘルスチェックをスキップし直接 commit |
-| `--intent-rollback` | commit confirmed を送信するが最終 commit をスキップ（`--confirm` 分後に JUNOS が自動ロールバック） |
+| `--no-commit` | commit confirmed を送信するが最終 commit をスキップ（`--confirm` 分後に JUNOS が自動ロールバック） |
 | `--workers N` | 並列実行数（デフォルト: 1） |
 
 ## ヘルスチェック
@@ -140,7 +140,7 @@ junos-ops config -f commands.set --no-confirm rt1.example.jp
 
 > **注意:** commit confirmed なしでは自動ロールバックの安全ネットがありません。慎重に使用してください。
 
-## 意図的なロールバック（--intent-rollback）
+## 意図的なロールバック（--no-commit）
 
 `commit confirmed N` を送信するが最終 `commit` を意図的にスキップします。`N` 分後（デフォルト: 1分）に JUNOS が自動ロールバックします。
 
@@ -148,7 +148,7 @@ junos-ops config -f commands.set --no-confirm rt1.example.jp
 
 ```bash
 # deactivate syslog; commit confirmed 1 を適用し、1分後に自動ロールバック
-junos-ops config -f bounce-syslog.set --intent-rollback rt1.example.jp
+junos-ops config -f bounce-syslog.set --no-commit rt1.example.jp
 ```
 
 `bounce-syslog.set` の例:
@@ -159,7 +159,7 @@ deactivate system syslog
 設定が 1 分間有効になる間に syslog プロセスが再起動し、その後 JUNOS が自動ロールバックします。
 
 **注意事項:**
-- `--intent-rollback` と `--no-confirm` は同時に指定できません
+- `--no-commit` と `--no-confirm` は同時に指定できません
 - ヘルスチェックは実行しません（ロールバックは意図的なものです）
 - タイムアウトを延ばしたい場合は `--confirm N` で指定してください
 
