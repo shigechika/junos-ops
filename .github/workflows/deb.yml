@@ -1,9 +1,8 @@
 name: Build .deb packages
 
 on:
-  push:
-    tags:
-      - "v*"
+  release:
+    types: [published]
   workflow_dispatch:
     inputs:
       version:
@@ -69,25 +68,8 @@ jobs:
           path: junos-ops_*~${{ matrix.codename }}.deb
           retention-days: 7
 
-      - name: Wait for GitHub Release to exist
-        if: startsWith(github.ref, 'refs/tags/')
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          TAG="${GITHUB_REF_NAME}"
-          for i in $(seq 1 30); do
-            if gh release view "$TAG" >/dev/null 2>&1; then
-              echo "Release $TAG found"
-              exit 0
-            fi
-            echo "Waiting for release $TAG... ($i/30)"
-            sleep 30
-          done
-          echo "Release $TAG not found after 15 minutes, creating it"
-          gh release create "$TAG" --generate-notes
-
       - name: Upload .deb to GitHub Release
-        if: startsWith(github.ref, 'refs/tags/')
+        if: github.event_name == 'release'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
