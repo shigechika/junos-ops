@@ -409,3 +409,218 @@ class TestFormatCheckTable:
         )
         assert out.startswith("hostname")
         assert "connect" in out
+
+    def test_disk_column_shown_when_requested(self):
+        rows = [
+            {
+                "hostname": "rt1",
+                "model": "EX2300-24T",
+                "connect": {"ok": True, "message": "connected"},
+                "local": None,
+                "remote": None,
+                "disk": {"ok": True, "avail_mib": 800, "filesystem": "/var/tmp"},
+            },
+        ]
+        out = display.format_check_table(
+            rows, show_connect=True, show_remote=False, show_disk=True
+        )
+        assert "avail" in out
+        assert "800 MiB" in out
+
+    def test_disk_column_warning_marker(self):
+        rows = [
+            {
+                "hostname": "rt1",
+                "model": "EX2300-24T",
+                "connect": {"ok": True, "message": "connected"},
+                "local": None,
+                "remote": None,
+                "disk": {"ok": True, "avail_mib": 400, "filesystem": "/var/tmp"},
+            },
+        ]
+        out = display.format_check_table(
+            rows, show_connect=True, show_disk=True
+        )
+        assert "!400 MiB" in out
+
+    def test_disk_column_gib_unit(self):
+        rows = [
+            {
+                "hostname": "rt1",
+                "model": "MX240",
+                "connect": {"ok": True, "message": "connected"},
+                "local": None,
+                "remote": None,
+                "disk": {"ok": True, "avail_mib": 2048, "filesystem": "/var/tmp"},
+            },
+        ]
+        out = display.format_check_table(
+            rows, show_connect=True, show_disk=True
+        )
+        assert "2.0 GiB" in out
+
+    def test_disk_column_hidden_when_not_requested(self):
+        rows = [
+            {
+                "hostname": "rt1",
+                "model": "MX5-T",
+                "connect": {"ok": True, "message": "connected"},
+                "local": None,
+                "remote": None,
+                "disk": {"ok": True, "avail_mib": 500, "filesystem": "/var/tmp"},
+            },
+        ]
+        out = display.format_check_table(
+            rows, show_connect=True, show_disk=False
+        )
+        assert "avail" not in out
+        assert "MiB" not in out
+
+    def test_disk_column_dash_on_failure(self):
+        rows = [
+            {
+                "hostname": "rt1",
+                "model": "MX5-T",
+                "connect": {"ok": True, "message": "connected"},
+                "local": None,
+                "remote": None,
+                "disk": {"ok": False, "avail_mib": None, "error": "RPC failed"},
+            },
+        ]
+        out = display.format_check_table(
+            rows, show_connect=True, show_disk=True
+        )
+        assert "avail" in out
+        lines = out.splitlines()
+        data_line = [l for l in lines if "rt1" in l][0]
+        assert "  -  " in data_line or data_line.endswith("  -")
+
+
+# -------------------------------------------------------------------
+# upgrade.get_disk_avail
+# -------------------------------------------------------------------
+
+
+class TestGetDiskAvail:
+    def _make_xml(self, entries):
+        """Build a get-system-storage-information XML with given entries.
+
+        ``entries`` is a list of (mounted_on, avail_blocks) tuples.
+        """
+        from lxml import etree
+
+        root = etree.Element("system-storage-information")
+        for mounted, avail in entries:
+            fs = etree.SubElement(root, "filesystem")
+            etree.SubElement(fs, "mounted-on").text = mounted
+            etree.SubElement(fs, "available-blocks").text = str(avail)
+        return root
+
+    def test_selects_most_specific_mount(self, mock_config):
+        from junos_ops import upgrade
+
+        dev = MagicMock()
+        dev.rpc.get_system_storage_information.return_value = self._make_xml([
+            ("/", 2097152),   # 2 GiB
+            ("/var", 1048576),  # 1 GiB
+            ("/var/tmp", 614400),  # 600 MiB — most specific for rpath=/var/tmp
+        ])
+        result = upgrade.get_disk_avail("test-host", dev)
+        assert result["ok"] is True
+        assert result["filesystem"] == "/var/tmp"
+        # 614400 KiB // 1024 == 600 MiB
+        assert result["avail_mib"] == 600
+
+    def test_falls_back_to_parent_mount(self, mock_config):
+        from junos_ops import upgrade
+
+        dev = MagicMock()
+        dev.rpc.get_system_storage_information.return_value = self._make_xml([
+            ("/", 2097152),   # 2 GiB
+            ("/var", 1048576),  # 1 GiB
+        ])
+        result = upgrade.get_disk_avail("test-host", dev)
+        assert result["ok"] is True
+        assert result["filesystem"] == "/var"
+        assert result["avail_mib"] == 1024  # 1048576 KiB // 1024 == 1024 MiB == 1 GiB
+
+    def test_rpc_error_sets_ok_false(self, mock_config):
+        from junos_ops import upgrade
+
+        dev = MagicMock()
+        dev.rpc.get_system_storage_information.side_effect = RuntimeError("boom")
+        result = upgrade.get_disk_avail("test-host", dev)
+        assert result["ok"] is False
+        assert result["avail_mib"] is None
+        assert "boom" in result["error"]
+
+    def test_check_host_populates_disk(self, mock_config):
+        """_check_host sets result['disk'] when connected."""
+        from junos_ops import upgrade
+
+        common.args = _make_check_args(check_connect=True)
+        mock_dev = MagicMock()
+        disk_result = {"ok": True, "avail_mib": 700, "filesystem": "/var/tmp"}
+        with patch.object(
+            common, "connect",
+            return_value={
+                "hostname": "test-host",
+                "host": "192.0.2.1",
+                "ok": True,
+                "dev": mock_dev,
+                "error": None,
+                "error_message": None,
+            },
+        ), patch.object(
+            cli, "_fetch_model_cheap", return_value="EX2300-24T"
+        ), patch.object(
+            upgrade, "get_disk_avail", return_value=disk_result
+        ) as mock_disk:
+            result = cli._check_host("test-host")
+        assert result["disk"] == disk_result
+        mock_disk.assert_called_once_with("test-host", mock_dev)
+
+    def test_check_host_disk_none_on_connect_fail(self, mock_config):
+        """_check_host leaves result['disk'] as None when connection fails."""
+        common.args = _make_check_args(check_connect=True)
+        with patch.object(
+            common, "connect",
+            return_value={
+                "hostname": "test-host",
+                "host": "192.0.2.1",
+                "ok": False,
+                "dev": None,
+                "error": "ConnectTimeoutError",
+                "error_message": "timeout",
+            },
+        ):
+            result = cli._check_host("test-host")
+        assert result["disk"] is None
+
+    def test_no_matching_filesystem(self, mock_config):
+        """Returns ok=False silently when no mount point covers rpath."""
+        from junos_ops import upgrade
+
+        dev = MagicMock()
+        dev.rpc.get_system_storage_information.return_value = self._make_xml([
+            ("/mnt/other", 1048576),  # 1 GiB, but not a prefix of /var/tmp
+        ])
+        result = upgrade.get_disk_avail("test-host", dev)
+        assert result["ok"] is False
+        assert result["avail_mib"] is None
+        assert result["error"] is None
+
+    def test_path_boundary_no_partial_match(self, mock_config):
+        """A mount at /var/t must not match rpath=/var/tmp."""
+        from junos_ops import upgrade
+
+        dev = MagicMock()
+        dev.rpc.get_system_storage_information.return_value = self._make_xml([
+            ("/", 2097152),    # 2 GiB
+            ("/var/t", 524288),   # 512 MiB — partial prefix, should NOT win
+            ("/var/tmp", 614400),  # 600 MiB — exact match, should win
+        ])
+        result = upgrade.get_disk_avail("test-host", dev)
+        assert result["ok"] is True
+        assert result["filesystem"] == "/var/tmp"
+        assert result["avail_mib"] == 600

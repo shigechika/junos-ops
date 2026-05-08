@@ -371,6 +371,7 @@ def _check_host(hostname) -> dict:
         "model_source": None,
         "connect": None,
         "remote": None,
+        "disk": None,
     }
 
     # Model resolution order: --model > config.ini [host].model > device facts.
@@ -452,6 +453,9 @@ def _check_host(hostname) -> dict:
                     "file": None,
                     "cached": False,
                 }
+
+        if dev is not None:
+            result["disk"] = upgrade.get_disk_avail(hostname, dev)
     finally:
         if dev is not None:
             try:
@@ -898,6 +902,7 @@ def _run():
                 show_connect=common.args.check_connect,
                 show_local=False,
                 show_remote=common.args.check_remote,
+                show_disk=common.args.check_connect or common.args.check_remote,
             )
             for row in rows:
                 if not isinstance(row, dict):
