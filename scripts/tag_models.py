@@ -16,6 +16,12 @@ Usage examples::
 
     # Limit to a specific tag group
     python3 scripts/tag_models.py --config ~/.config/junos-ops/config.ini --tags main
+
+    # Re-tag already-tagged hosts (e.g. after hardware replacement)
+    python3 scripts/tag_models.py --config ~/.config/junos-ops/config.ini --force
+
+    # Dry-run force re-tag for a specific group
+    python3 scripts/tag_models.py --config ~/.config/junos-ops/config.ini --tags main --force --dry-run
 """
 
 import argparse
@@ -92,7 +98,10 @@ def _existing_tags(cfg: configparser.ConfigParser, section: str) -> set[str]:
 
 
 def _target_sections(
-    cfg: configparser.ConfigParser, filter_tags: set[str] | None
+    cfg: configparser.ConfigParser,
+    filter_tags: set[str] | None,
+    *,
+    force: bool = False,
 ) -> list[str]:
     sections = []
     for section in cfg.sections():
@@ -101,8 +110,8 @@ def _target_sections(
         tags = _existing_tags(cfg, section)
         if filter_tags and not (tags & filter_tags):
             continue
-        # Skip hosts that already have a non-role tag (i.e. already model-tagged).
-        if tags - ROLE_TAGS:
+        # Without --force: skip hosts that already have a non-role tag.
+        if not force and tags - ROLE_TAGS:
             continue
         sections.append(section)
     return sections
@@ -126,6 +135,14 @@ def main() -> None:
         "--tags",
         help="Restrict to hosts carrying these tags (comma-separated, e.g. main,backup)",
     )
+    ap.add_argument(
+        "--force",
+        action="store_true",
+        help=(
+            "Re-tag already-tagged hosts too.  Replaces the existing model tag if it "
+            "differs from the detected model; leaves it unchanged if it already matches."
+        ),
+    )
     args = ap.parse_args()
 
     config_path = Path(args.config).expanduser()
@@ -135,10 +152,13 @@ def main() -> None:
     filter_tags = (
         {t.strip() for t in args.tags.split(",") if t.strip()} if args.tags else None
     )
-    targets = _target_sections(cfg, filter_tags)
+    targets = _target_sections(cfg, filter_tags, force=args.force)
 
     if not targets:
-        print("No hosts to process (all already model-tagged or none matched).", file=sys.stderr)
+        if args.force:
+            print("No hosts to process (none matched filter).", file=sys.stderr)
+        else:
+            print("No hosts to process (all already model-tagged, or none matched filter).", file=sys.stderr)
         return
 
     print(f"Targets: {len(targets)} host(s)", file=sys.stderr)
@@ -146,13 +166,28 @@ def main() -> None:
     updates: dict[str, str] = {}
     for section in targets:
         model = _fetch_model(section, cfg)
-        if model:
-            raw = cfg.get(section, "tags", fallback="")
-            current = [t.strip() for t in raw.split(",") if t.strip()]
-            updates[section] = ", ".join(current + [model])
-            print(f"  {section}: {model}", file=sys.stderr)
-        else:
+        if model is None:
             print(f"  {section}: FAILED", file=sys.stderr)
+            continue
+
+        raw = cfg.get(section, "tags", fallback="")
+        current_list = [t.strip() for t in raw.split(",") if t.strip()]
+
+        if args.force:
+            # Rebuild tags as: existing role tags (in order) + detected model.
+            role_tags = [t for t in current_list if t in ROLE_TAGS]
+            existing_model_tags = {t for t in current_list if t not in ROLE_TAGS}
+            if existing_model_tags == {model}:
+                print(f"  {section}: {model} (unchanged)", file=sys.stderr)
+                continue
+            new_tags = ", ".join(role_tags + [model])
+            action = f"replaced {existing_model_tags.pop()!r}" if existing_model_tags else "added"
+            print(f"  {section}: {model} ({action})", file=sys.stderr)
+        else:
+            new_tags = ", ".join(current_list + [model])
+            print(f"  {section}: {model}", file=sys.stderr)
+
+        updates[section] = new_tags
 
     if not updates:
         print("Nothing to update.", file=sys.stderr)
@@ -168,7 +203,7 @@ def main() -> None:
     text = config_path.read_text()
     patched = _patch_config(text, updates)
     config_path.write_text(patched)
-    print(f"\n{len(updates)} tag(s) added to {config_path}", file=sys.stderr)
+    print(f"\n{len(updates)} tag(s) updated in {config_path}", file=sys.stderr)
 
 
 if __name__ == "__main__":
