@@ -155,7 +155,10 @@ def main() -> None:
     targets = _target_sections(cfg, filter_tags, force=args.force)
 
     if not targets:
-        print("No hosts to process (none matched).", file=sys.stderr)
+        if args.force:
+            print("No hosts to process (none matched filter).", file=sys.stderr)
+        else:
+            print("No hosts to process (all already model-tagged, or none matched filter).", file=sys.stderr)
         return
 
     print(f"Targets: {len(targets)} host(s)", file=sys.stderr)
