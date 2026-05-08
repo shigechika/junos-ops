@@ -521,14 +521,14 @@ class TestGetDiskAvail:
 
         dev = MagicMock()
         dev.rpc.get_system_storage_information.return_value = self._make_xml([
-            ("/", 2048000),
-            ("/var", 1048576),
-            ("/var/tmp", 614400),  # most specific for rpath=/var/tmp
+            ("/", 2097152),   # 2 GiB
+            ("/var", 1048576),  # 1 GiB
+            ("/var/tmp", 614400),  # 600 MiB — most specific for rpath=/var/tmp
         ])
         result = upgrade.get_disk_avail("test-host", dev)
         assert result["ok"] is True
         assert result["filesystem"] == "/var/tmp"
-        # 614400 KB // 1024 == 600 MiB
+        # 614400 KiB // 1024 == 600 MiB
         assert result["avail_mib"] == 600
 
     def test_falls_back_to_parent_mount(self, mock_config):
@@ -536,13 +536,13 @@ class TestGetDiskAvail:
 
         dev = MagicMock()
         dev.rpc.get_system_storage_information.return_value = self._make_xml([
-            ("/", 2048000),
-            ("/var", 1024000),
+            ("/", 2097152),   # 2 GiB
+            ("/var", 1048576),  # 1 GiB
         ])
         result = upgrade.get_disk_avail("test-host", dev)
         assert result["ok"] is True
         assert result["filesystem"] == "/var"
-        assert result["avail_mib"] == 1024000 // 1024
+        assert result["avail_mib"] == 1024  # 1048576 KiB // 1024 == 1024 MiB == 1 GiB
 
     def test_rpc_error_sets_ok_false(self, mock_config):
         from junos_ops import upgrade
@@ -603,7 +603,7 @@ class TestGetDiskAvail:
 
         dev = MagicMock()
         dev.rpc.get_system_storage_information.return_value = self._make_xml([
-            ("/mnt/other", 1024000),
+            ("/mnt/other", 1048576),  # 1 GiB, but not a prefix of /var/tmp
         ])
         result = upgrade.get_disk_avail("test-host", dev)
         assert result["ok"] is False
@@ -616,9 +616,9 @@ class TestGetDiskAvail:
 
         dev = MagicMock()
         dev.rpc.get_system_storage_information.return_value = self._make_xml([
-            ("/", 2048000),
-            ("/var/t", 512000),   # partial prefix, should NOT win
-            ("/var/tmp", 614400),  # exact match, should win
+            ("/", 2097152),    # 2 GiB
+            ("/var/t", 524288),   # 512 MiB — partial prefix, should NOT win
+            ("/var/tmp", 614400),  # 600 MiB — exact match, should win
         ])
         result = upgrade.get_disk_avail("test-host", dev)
         assert result["ok"] is True
