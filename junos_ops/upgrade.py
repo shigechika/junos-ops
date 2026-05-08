@@ -1943,7 +1943,7 @@ def load_config(hostname, dev, configfile) -> dict:
         health check -> confirm -> unlock.
     Commit flow (``--no-confirm``):
         lock -> load -> diff -> commit_check -> commit -> unlock.
-    Commit flow (``--no-commit``):
+    Commit flow (``--intent-rollback``):
         lock -> load -> diff -> commit_check -> commit confirmed ->
         unlock. (JUNOS auto-rolls back after timeout; no health check.)
     On error, rollback + unlock for cleanup.
@@ -1963,10 +1963,11 @@ def load_config(hostname, dev, configfile) -> dict:
         - ``no_changes`` (bool): True iff ``diff is None`` — shortcut
           for the common happy path.
         - ``commit_mode`` (str): ``"confirmed"`` | ``"no_confirm"`` |
-          ``"no_commit"`` | ``"dry_run"`` | ``"none"`` (no commit
+          ``"intent_rollback"`` | ``"dry_run"`` | ``"none"`` (no commit
           happened, e.g. lock failed or no_changes).
         - ``confirm_timeout`` (int | None): confirm timeout in minutes
-          for ``commit_mode == "confirmed"``, else None.
+          for ``commit_mode in ("confirmed", "intent_rollback")``,
+          else None.
         - ``health_check`` (dict): health-check outcome, with keys:
 
           * ``ran`` (bool): True iff the health-check phase executed
@@ -2065,17 +2066,17 @@ def load_config(hostname, dev, configfile) -> dict:
         _step("commit_check", "\tcommit check passed")
 
         no_confirm = getattr(common.args, "no_confirm", False)
-        no_commit = getattr(common.args, "no_commit", False)
+        intent_rollback = getattr(common.args, "intent_rollback", False)
         if no_confirm:
             # Direct commit (skip commit confirmed)
             cu.commit()
             result["commit_mode"] = "no_confirm"
             _step("commit", "\tcommit applied (no confirm)")
-        elif no_commit:
+        elif intent_rollback:
             # commit confirmed without final commit — JUNOS auto-rolls back
             confirm_timeout = getattr(common.args, "confirm_timeout", 1)
             result["confirm_timeout"] = confirm_timeout
-            result["commit_mode"] = "no_commit"
+            result["commit_mode"] = "intent_rollback"
             cu.commit(confirm=confirm_timeout)
             _step(
                 "commit_confirmed",
