@@ -22,7 +22,7 @@ jobs:
       contents: write
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
@@ -63,7 +63,7 @@ jobs:
           done
 
       - name: Upload .deb as artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: junos-ops-${{ matrix.codename }}
           path: junos-ops_*~${{ matrix.codename }}.deb

@@ -18,7 +18,7 @@ jobs:
       contents: write
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
@@ -82,7 +82,7 @@ jobs:
             .
 
       - name: Upload .rpm as artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: junos-ops-el9
           path: "${{ github.workspace }}/*.rpm"
