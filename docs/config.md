@@ -87,6 +87,7 @@ This means even if a configuration change breaks NETCONF connectivity, the devic
 | `--no-health-check` | Skip health check after commit confirmed |
 | `--timeout N` | RPC timeout in seconds (default: 120, also configurable via `timeout` in config.ini) |
 | `--no-confirm` | Skip commit confirmed and health check, commit directly |
+| `--intent-rollback` | Apply with commit confirmed but skip final commit (JUNOS auto-rolls back after `--confirm` minutes) |
 | `--workers N` | Parallel execution (default: 1) |
 
 ## Health Check
@@ -138,6 +139,29 @@ junos-ops config -f commands.set --no-confirm rt1.example.jp
 ```
 
 > **Warning:** Without commit confirmed, there is no automatic rollback safety net. Use with caution.
+
+## Intentional Rollback (--intent-rollback)
+
+Apply configuration with `commit confirmed N` but intentionally skip the final `commit`. JUNOS will automatically roll back after `N` minutes (default: 1).
+
+This is useful when a "configuration bounce" is needed to restart a service that does not support `request system processes restart` — for example, the syslog process on some EX3400 devices after a firmware upgrade.
+
+```bash
+# Apply deactivate syslog; commit confirmed 1; then auto-rollback in 1 minute
+junos-ops config -f bounce-syslog.set --intent-rollback rt1.example.jp
+```
+
+Example `bounce-syslog.set`:
+```
+deactivate system syslog
+```
+
+The config will be active for 1 minute (while syslog restarts) then JUNOS rolls it back automatically.
+
+**Notes:**
+- `--intent-rollback` and `--no-confirm` are mutually exclusive
+- No health check is performed (the rollback is intentional)
+- Use `--confirm N` to extend the window beyond 1 minute
 
 ## Parallel Execution
 

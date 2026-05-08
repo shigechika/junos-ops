@@ -962,3 +962,64 @@ class TestNoConfirm:
         # commit confirmed + commit の2回
         assert mock_cu.commit.call_count == 2
         mock_cu.commit.assert_any_call(confirm=1)
+
+
+class TestIntentRollback:
+    """--intent-rollback オプションのテスト"""
+
+    def test_intent_rollback_skips_final_commit(self, junos_upgrade, mock_args, mock_config):
+        """--intent-rollback: commit confirmed のみで最終 commit を送らない"""
+        mock_args.intent_rollback = True
+        mock_args.confirm_timeout = 1
+        dev = MagicMock()
+        mock_cu = MagicMock()
+        mock_cu.diff.return_value = "[edit]\n+  set system ..."
+        with (
+            patch("junos_ops.upgrade.Config", return_value=mock_cu),
+            patch.object(common, "load_commands", return_value=["set system ntp"]),
+        ):
+            result = junos_upgrade.load_config("test-host", dev, "commands.set")
+        assert result["ok"] is True
+        assert result["commit_mode"] == "intent_rollback"
+        # commit は1回だけ（confirm= あり）、最終 commit は呼ばれない
+        mock_cu.commit.assert_called_once_with(confirm=1)
+        # ヘルスチェックは実行されない
+        dev.cli.assert_not_called()
+
+    def test_intent_rollback_message_contains_rollback(self, junos_upgrade, mock_args, mock_config):
+        """--intent-rollback: steps に auto-rollback の旨が含まれる"""
+        mock_args.intent_rollback = True
+        mock_args.confirm_timeout = 1
+        dev = MagicMock()
+        mock_cu = MagicMock()
+        mock_cu.diff.return_value = "[edit]\n+  set system ..."
+        with (
+            patch("junos_ops.upgrade.Config", return_value=mock_cu),
+            patch.object(common, "load_commands", return_value=["set system ntp"]),
+        ):
+            result = junos_upgrade.load_config("test-host", dev, "commands.set")
+        messages = " ".join(s.get("message", "") for s in result["steps"])
+        assert "auto-rollback" in messages
+
+    def test_intent_rollback_confirm_timeout(self, junos_upgrade, mock_args, mock_config):
+        """--intent-rollback --confirm 2: confirm=2 で commit される"""
+        mock_args.intent_rollback = True
+        mock_args.confirm_timeout = 2
+        dev = MagicMock()
+        mock_cu = MagicMock()
+        mock_cu.diff.return_value = "[edit]\n+  set system ..."
+        with (
+            patch("junos_ops.upgrade.Config", return_value=mock_cu),
+            patch.object(common, "load_commands", return_value=["set system ntp"]),
+        ):
+            result = junos_upgrade.load_config("test-host", dev, "commands.set")
+        assert result["confirm_timeout"] == 2
+        mock_cu.commit.assert_called_once_with(confirm=2)
+
+    def test_intent_rollback_and_no_confirm_mutually_exclusive(self, mock_args, mock_config):
+        """--intent-rollback + --no-confirm は同時指定不可（exit code 1）"""
+        mock_args.intent_rollback = True
+        mock_args.no_confirm = True
+        with patch("junos_ops.display.print_host_block"):
+            result = cli.cmd_config("rt1.example.jp")
+        assert result == 1

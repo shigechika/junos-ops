@@ -207,7 +207,7 @@ junos-ops <subcommand> [options] [hostname ...]
 | `ls [-l]` | List files on the remote path |
 | `show COMMAND [--retry N]` / `show -f FILE` | Run an arbitrary CLI command (or file of commands) across devices |
 | `check [--connect\|--local\|--remote\|--all] [--model M]` | Pre-flight checks: NETCONF reachability, local/remote firmware hash |
-| `config -f FILE` | Push a set command file (see [docs/config.md](docs/config.md) for `--confirm`, `--timeout`, `--no-confirm`, `--health-check`, `--no-health-check`) |
+| `config -f FILE` | Push a set command file (see [docs/config.md](docs/config.md) for `--confirm`, `--timeout`, `--no-confirm`, `--intent-rollback`, `--health-check`, `--no-health-check`) |
 | `rsi` | Collect RSI/SCF in parallel |
 | (none) | Show device facts |
 
@@ -337,7 +337,7 @@ flowchart TD
 
 The `config` subcommand uses a safe commit flow: `commit confirmed` (auto-rollback timer) → **health check** → `commit` (permanent). If the health check fails, the final `commit` is withheld and JUNOS automatically rolls back when the timer expires.
 
-See [docs/config.md](docs/config.md) for full details including health check options (`uptime`, ping, CLI commands), commit confirmed flow, `--no-confirm`, and parallel execution.
+See [docs/config.md](docs/config.md) for full details including health check options (`uptime`, ping, CLI commands), commit confirmed flow, `--no-confirm`, `--intent-rollback`, and parallel execution.
 
 ```
 1. Preview changes with dry-run
