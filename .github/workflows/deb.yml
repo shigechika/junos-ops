@@ -15,8 +15,6 @@ jobs:
     strategy:
       matrix:
         include:
-          - os: ubuntu-22.04
-            codename: jammy
           - os: ubuntu-24.04
             codename: noble
     runs-on: ${{ matrix.os }}
@@ -64,6 +62,13 @@ jobs:
             newname=$(echo "$deb" | sed "s/\.deb$/~${{ matrix.codename }}.deb/")
             mv "$deb" "$newname"
           done
+
+      - name: Upload .deb as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: junos-ops-${{ matrix.codename }}
+          path: ../junos-ops_*~${{ matrix.codename }}.deb
+          retention-days: 7
 
       - name: Wait for GitHub Release to exist
         if: startsWith(github.ref, 'refs/tags/')
