@@ -55,18 +55,18 @@ jobs:
       - name: Build .deb package
         run: dpkg-buildpackage -us -uc -b
 
-      - name: Rename .deb with codename suffix
+      - name: Rename .deb with codename suffix and move into workspace
         run: |
           for deb in ../junos-ops_*.deb; do
-            newname=$(echo "$deb" | sed "s/\.deb$/~${{ matrix.codename }}.deb/")
-            mv "$deb" "$newname"
+            newname=$(basename "$deb" .deb)~${{ matrix.codename }}.deb
+            mv "$deb" "${newname}"
           done
 
       - name: Upload .deb as artifact
         uses: actions/upload-artifact@v4
         with:
           name: junos-ops-${{ matrix.codename }}
-          path: ../junos-ops_*~${{ matrix.codename }}.deb
+          path: junos-ops_*~${{ matrix.codename }}.deb
           retention-days: 7
 
       - name: Wait for GitHub Release to exist
@@ -91,4 +91,4 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release upload "${GITHUB_REF_NAME}" ../junos-ops_*~${{ matrix.codename }}.deb --clobber
+          gh release upload "${GITHUB_REF_NAME}" junos-ops_*~${{ matrix.codename }}.deb --clobber
