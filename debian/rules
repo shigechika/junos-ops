@@ -6,6 +6,7 @@ export DH_VIRTUALENV_INSTALL_ROOT=/opt/venvs
 
 override_dh_virtualenv:
 	dh_virtualenv --python /usr/bin/python3 \
+		--builtin-venv \
 		--install-suffix junos-ops \
 		--preinstall "setuptools>=68.0" \
 		--preinstall "pip>=23.0" --pip-tool pip
