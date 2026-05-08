@@ -1,0 +1,5 @@
+junos-ops (0.20.0-1) unstable; urgency=medium
+
+  * Initial .deb packaging with dh-virtualenv
+
+ -- AIKAWA Shigechika <shigechika@users.noreply.github.com>  Thu, 08 May 2026 00:00:00 +0900
