@@ -51,6 +51,7 @@ jobs:
       - name: Build virtualenv
         run: |
           python3.12 -m venv /opt/venvs/junos-ops
+          /opt/venvs/junos-ops/bin/python -m ensurepip --upgrade 2>/dev/null || true
           /opt/venvs/junos-ops/bin/pip install --upgrade pip setuptools
           /opt/venvs/junos-ops/bin/pip install "${GITHUB_WORKSPACE}"
           /opt/venvs/junos-ops/bin/junos-ops --version
@@ -84,7 +85,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: junos-ops-el9
-          path: "*.rpm"
+          path: "${{ github.workspace }}/*.rpm"
           retention-days: 7
 
       - name: Wait for GitHub Release to exist
