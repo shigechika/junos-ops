@@ -43,11 +43,15 @@ else:
         format='%(asctime)s [%(levelname)s] %(message)s',
         handlers=[logging.StreamHandler(sys.stdout)]
     )
-    # ncclient / paramiko / junos-eznc emit every NETCONF and SSH frame
-    # at INFO. Without an explicit logging.ini, our INFO root would drown
-    # the user in protocol traffic, so raise these to WARNING by default.
-    for noisy in ("ncclient", "paramiko", "jnpr.junos"):
-        logging.getLogger(noisy).setLevel(logging.WARNING)
+# ncclient / paramiko / junos-eznc emit every NETCONF and SSH frame at
+# INFO.  Apply WARNING suppression regardless of whether logging.ini was
+# found: when logging.ini sets root=DEBUG but omits these loggers, they
+# inherit DEBUG and flood the terminal.  Only override loggers that have
+# no explicit level (NOTSET) so a deliberate logging.ini entry is honoured.
+for noisy in ("ncclient", "paramiko", "jnpr.junos"):
+    lgr = logging.getLogger(noisy)
+    if lgr.level == logging.NOTSET:
+        lgr.setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 
 from junos_ops import __version__ as version  # noqa: E402
