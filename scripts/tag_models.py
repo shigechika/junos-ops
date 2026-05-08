@@ -26,16 +26,12 @@ import sys
 from pathlib import Path
 
 from jnpr.junos import Device
-from jnpr.junos.exception import (
-    ConnectAuthError,
-    ConnectError,
-    ConnectRefusedError,
-    ConnectTimeoutError,
-    ConnectUnknownHostError,
-)
+from jnpr.junos.exception import ConnectError
 
 # Tags that represent roles, not hardware models.  A host whose existing tags
 # are a subset of ROLE_TAGS has not been model-tagged yet.
+# Keep this set up-to-date when new role tags are added to config.ini;
+# otherwise hosts with unknown role tags will be silently skipped.
 ROLE_TAGS: frozenset[str] = frozenset({"main", "backup", "core", "ydc"})
 
 
@@ -59,18 +55,19 @@ def _fetch_model(section: str, cfg: configparser.ConfigParser) -> str | None:
     try:
         dev = Device(**kwargs)
         dev.open()
-        xml = dev.rpc.get_software_information()
-        model = (xml.findtext(".//product-model") or "").strip()
-        dev.close()
-        return model or None
-    except (
-        ConnectAuthError,
-        ConnectRefusedError,
-        ConnectTimeoutError,
-        ConnectUnknownHostError,
-        ConnectError,
-        Exception,
-    ):
+        try:
+            xml = dev.rpc.get_software_information()
+            model = (xml.findtext(".//product-model") or "").strip()
+            return model or None
+        finally:
+            try:
+                dev.close()
+            except Exception:
+                pass
+    except ConnectError:
+        return None
+    except Exception as e:
+        print(f"  {section}: unexpected error: {e}", file=sys.stderr)
         return None
 
 
@@ -150,7 +147,8 @@ def main() -> None:
     for section in targets:
         model = _fetch_model(section, cfg)
         if model:
-            current = sorted(_existing_tags(cfg, section))
+            raw = cfg.get(section, "tags", fallback="")
+            current = [t.strip() for t in raw.split(",") if t.strip()]
             updates[section] = ", ".join(current + [model])
             print(f"  {section}: {model}", file=sys.stderr)
         else:
