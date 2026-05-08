@@ -16,6 +16,8 @@ jobs:
     container: rockylinux:9
     permissions:
       contents: write
+    env:
+      GH_REPO: ${{ github.repository }}
 
     steps:
       - uses: actions/checkout@v6
@@ -103,7 +105,7 @@ jobs:
             sleep 30
           done
           echo "Release $TAG not found after 15 minutes, creating it"
-          gh release create "$TAG" --generate-notes --repo "${GITHUB_REPOSITORY}"
+          gh release create "$TAG" --generate-notes
 
       - name: Upload .rpm to GitHub Release
         if: startsWith(github.ref, 'refs/tags/')
