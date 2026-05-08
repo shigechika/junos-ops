@@ -520,7 +520,7 @@ def _format_avail(disk: dict | None) -> str:
     """
     if disk is None or not disk.get("ok"):
         return "-"
-    mib = disk.get("avail_mb")
+    mib = disk.get("avail_mib")
     if mib is None:
         return "-"
     if mib >= 1024:

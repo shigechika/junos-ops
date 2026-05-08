@@ -418,7 +418,7 @@ class TestFormatCheckTable:
                 "connect": {"ok": True, "message": "connected"},
                 "local": None,
                 "remote": None,
-                "disk": {"ok": True, "avail_mb": 800, "filesystem": "/var/tmp"},
+                "disk": {"ok": True, "avail_mib": 800, "filesystem": "/var/tmp"},
             },
         ]
         out = display.format_check_table(
@@ -435,7 +435,7 @@ class TestFormatCheckTable:
                 "connect": {"ok": True, "message": "connected"},
                 "local": None,
                 "remote": None,
-                "disk": {"ok": True, "avail_mb": 400, "filesystem": "/var/tmp"},
+                "disk": {"ok": True, "avail_mib": 400, "filesystem": "/var/tmp"},
             },
         ]
         out = display.format_check_table(
@@ -451,7 +451,7 @@ class TestFormatCheckTable:
                 "connect": {"ok": True, "message": "connected"},
                 "local": None,
                 "remote": None,
-                "disk": {"ok": True, "avail_mb": 2048, "filesystem": "/var/tmp"},
+                "disk": {"ok": True, "avail_mib": 2048, "filesystem": "/var/tmp"},
             },
         ]
         out = display.format_check_table(
@@ -467,7 +467,7 @@ class TestFormatCheckTable:
                 "connect": {"ok": True, "message": "connected"},
                 "local": None,
                 "remote": None,
-                "disk": {"ok": True, "avail_mb": 500, "filesystem": "/var/tmp"},
+                "disk": {"ok": True, "avail_mib": 500, "filesystem": "/var/tmp"},
             },
         ]
         out = display.format_check_table(
@@ -484,7 +484,7 @@ class TestFormatCheckTable:
                 "connect": {"ok": True, "message": "connected"},
                 "local": None,
                 "remote": None,
-                "disk": {"ok": False, "avail_mb": None, "error": "RPC failed"},
+                "disk": {"ok": False, "avail_mib": None, "error": "RPC failed"},
             },
         ]
         out = display.format_check_table(
@@ -529,7 +529,7 @@ class TestGetDiskAvail:
         assert result["ok"] is True
         assert result["filesystem"] == "/var/tmp"
         # 614400 KB // 1024 == 600 MiB
-        assert result["avail_mb"] == 600
+        assert result["avail_mib"] == 600
 
     def test_falls_back_to_parent_mount(self, mock_config):
         from junos_ops import upgrade
@@ -542,7 +542,7 @@ class TestGetDiskAvail:
         result = upgrade.get_disk_avail("test-host", dev)
         assert result["ok"] is True
         assert result["filesystem"] == "/var"
-        assert result["avail_mb"] == 1024000 // 1024
+        assert result["avail_mib"] == 1024000 // 1024
 
     def test_rpc_error_sets_ok_false(self, mock_config):
         from junos_ops import upgrade
@@ -551,7 +551,7 @@ class TestGetDiskAvail:
         dev.rpc.get_system_storage_information.side_effect = RuntimeError("boom")
         result = upgrade.get_disk_avail("test-host", dev)
         assert result["ok"] is False
-        assert result["avail_mb"] is None
+        assert result["avail_mib"] is None
         assert "boom" in result["error"]
 
     def test_check_host_populates_disk(self, mock_config):
@@ -560,7 +560,7 @@ class TestGetDiskAvail:
 
         common.args = _make_check_args(check_connect=True)
         mock_dev = MagicMock()
-        disk_result = {"ok": True, "avail_mb": 700, "filesystem": "/var/tmp"}
+        disk_result = {"ok": True, "avail_mib": 700, "filesystem": "/var/tmp"}
         with patch.object(
             common, "connect",
             return_value={
@@ -596,3 +596,31 @@ class TestGetDiskAvail:
         ):
             result = cli._check_host("test-host")
         assert result["disk"] is None
+
+    def test_no_matching_filesystem(self, mock_config):
+        """Returns ok=False silently when no mount point covers rpath."""
+        from junos_ops import upgrade
+
+        dev = MagicMock()
+        dev.rpc.get_system_storage_information.return_value = self._make_xml([
+            ("/mnt/other", 1024000),
+        ])
+        result = upgrade.get_disk_avail("test-host", dev)
+        assert result["ok"] is False
+        assert result["avail_mib"] is None
+        assert result["error"] is None
+
+    def test_path_boundary_no_partial_match(self, mock_config):
+        """A mount at /var/t must not match rpath=/var/tmp."""
+        from junos_ops import upgrade
+
+        dev = MagicMock()
+        dev.rpc.get_system_storage_information.return_value = self._make_xml([
+            ("/", 2048000),
+            ("/var/t", 512000),   # partial prefix, should NOT win
+            ("/var/tmp", 614400),  # exact match, should win
+        ])
+        result = upgrade.get_disk_avail("test-host", dev)
+        assert result["ok"] is True
+        assert result["filesystem"] == "/var/tmp"
+        assert result["avail_mib"] == 600

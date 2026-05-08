@@ -966,16 +966,16 @@ def get_disk_avail(hostname, dev) -> dict:
     :return: dict with keys:
 
         - ``ok`` (bool)
-        - ``avail_mb`` (int | None): available space in MiB (1024-based).
+        - ``avail_mib`` (int | None): available space in MiB (1024-based).
         - ``filesystem`` (str | None): mount point used for the lookup.
         - ``error`` (str | None): exception message on failure.
 
     Does not print.
     """
-    rpath = common.config.get(hostname, "rpath")
+    rpath = common.config.get(hostname, "rpath").rstrip("/")
     result: dict = {
         "ok": False,
-        "avail_mb": None,
+        "avail_mib": None,
         "filesystem": None,
         "error": None,
     }
@@ -987,13 +987,13 @@ def get_disk_avail(hostname, dev) -> dict:
             mounted = (fs.findtext("mounted-on") or "").rstrip("/")
             if not mounted:
                 continue
-            if rpath.startswith(mounted) and len(mounted) > best_len:
+            if (rpath == mounted or rpath.startswith(mounted + "/")) and len(mounted) > best_len:
                 best = fs
                 best_len = len(mounted)
         if best is not None:
             avail_str = (best.findtext("available-blocks") or "").strip()
             if avail_str:
-                result["avail_mb"] = int(avail_str) // 1024
+                result["avail_mib"] = int(avail_str) // 1024
                 result["filesystem"] = (best.findtext("mounted-on") or "").strip()
                 result["ok"] = True
     except Exception as e:
