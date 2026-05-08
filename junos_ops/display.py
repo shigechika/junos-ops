@@ -509,20 +509,42 @@ def _short_connect_status(sub: dict | None) -> str:
     return "ok" if sub.get("ok") else "fail"
 
 
+_DISK_WARN_MIB = 600
+
+
+def _format_avail(disk: dict | None) -> str:
+    """Format ``get_disk_avail`` result as ``NNN MiB`` / ``N.N GiB``.
+
+    Prepends ``!`` when space is below :data:`_DISK_WARN_MIB` MiB.
+    Returns ``-`` when the result is absent or ``ok`` is False.
+    """
+    if disk is None or not disk.get("ok"):
+        return "-"
+    mib = disk.get("avail_mb")
+    if mib is None:
+        return "-"
+    if mib >= 1024:
+        label = f"{mib / 1024:.1f} GiB"
+    else:
+        label = f"{mib} MiB"
+    return f"!{label}" if mib < _DISK_WARN_MIB else label
+
+
 def format_check_table(
     rows: list[dict],
     *,
     show_connect: bool = True,
     show_local: bool = False,
     show_remote: bool = False,
+    show_disk: bool = False,
 ) -> str:
     """Render ``check`` subcommand results as an aligned table.
 
     Each row is the dict returned by the ``check`` worker with keys
     ``hostname``, ``model``, ``model_source``, ``connect``, ``local``,
-    ``remote``. Columns are included based on the ``show_*`` flags so
-    a single-aspect run (e.g. ``check --connect``) does not emit empty
-    columns.
+    ``remote``, ``disk``. Columns are included based on the ``show_*``
+    flags so a single-aspect run (e.g. ``check --connect``) does not
+    emit empty columns.
     """
     headers: list[str] = ["hostname"]
     if show_connect:
@@ -531,6 +553,8 @@ def format_check_table(
         headers.append("local")
     if show_remote:
         headers.append("remote")
+    if show_disk:
+        headers.append("avail")
     headers.extend(["model", "file"])
 
     body: list[list[str]] = []
@@ -542,6 +566,8 @@ def format_check_table(
             line.append(_short_check_status(row.get("local")))
         if show_remote:
             line.append(_short_check_status(row.get("remote")))
+        if show_disk:
+            line.append(_format_avail(row.get("disk")))
         line.append(row.get("model") or "-")
         file_val = None
         for key in ("local", "remote"):
@@ -593,6 +619,7 @@ def print_check_table(
     show_connect: bool = True,
     show_local: bool = False,
     show_remote: bool = False,
+    show_disk: bool = False,
 ) -> None:
     """Print ``check`` subcommand results as an aligned table."""
     _emit(format_check_table(
@@ -600,6 +627,7 @@ def print_check_table(
         show_connect=show_connect,
         show_local=show_local,
         show_remote=show_remote,
+        show_disk=show_disk,
     ))
 
 
