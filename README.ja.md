@@ -198,9 +198,9 @@ junos-ops <subcommand> [options] [hostname ...]
 
 | サブコマンド | 説明 |
 |-------------|------|
-| `upgrade` | コピー＋インストールを一括実行 |
+| `upgrade [--unlink]` | コピー＋インストールを一括実行（`--unlink` は low-flash 機向け、後述） |
 | `copy` | ローカルからリモートへパッケージをコピー |
-| `install` | コピー済みパッケージをインストール |
+| `install [--unlink]` | コピー済みパッケージをインストール（`--unlink` は low-flash 機向け、後述） |
 | `rollback` | 前バージョンにロールバック |
 | `version` | running/planning/pendingバージョンとリブート予定を表示 |
 | `reboot --at YYMMDDHHMM` | 指定日時にリブートをスケジュール |
@@ -581,6 +581,20 @@ show security flow session summary
  'model': 'MX240',
  'version': '18.4R3-S7.2',
  ...}
+```
+
+## 低容量機種での upgrade (`--unlink`)
+
+EX2300/EX3400 のような low-flash 機種（`/dev/gpt/junos` = 1.3GB）で 22.4 系から 23.4 系への major アップグレードを行うと、`software validate package-result: 1` 段階で `ERROR: insufficient space` が出て失敗することがあります。これは PyEZ のデフォルト経路では `request system software add` の `unlink` オプションが完全に効かないためです。
+
+`--unlink` を指定すると CLI 経由で `request system software add <package> unlink` を直接実行し、pkgadd が tgz を install 中に unlink して容量を確保しながら展開します。
+
+```bash
+# low-flash 機種向け
+junos-ops upgrade --unlink ex3400-host.example.jp
+
+# install のみのモードにも適用可能
+junos-ops install --unlink ex3400-host.example.jp
 ```
 
 ## 対応モデル

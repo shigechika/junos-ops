@@ -211,6 +211,19 @@ CI で sdist / wheel のビルドを検証。pyproject.toml の記述ミス（PE
 
 PyPI リリース後、`shigechika/homebrew-tap` の `update-formula.yml` が `repository_dispatch` で自動トリガーされ、Formula 更新 → bottle ビルドまで自動で行われる。
 
+## 低容量機種での upgrade (`--unlink`)
+
+EX2300/EX3400 のような low-flash 機種（`/dev/gpt/junos` = 1.3GB）で JUNOS 22.4 → 23.4 のような major アップグレードを行うと、validation 段階で `ERROR: insufficient space` で失敗することがある。これは PyEZ `SW.install()` のデフォルト動作では `request system software add` の `unlink` オプションが完全には効かないため。
+
+```bash
+# low-flash 機種向け
+junos-ops upgrade --unlink ex3400-host.example.jp
+```
+
+`--unlink` を指定すると `SW.install()` ではなく `dev.cli("request system software add ... unlink")` を直接実行する。pkgadd が tgz を install 中に unlink してくれるため、容量を確保しながら展開できる。
+
+実装: `junos_ops/upgrade.py:_install_via_cli_with_unlink()` を参照。詳細な経緯は memory の `feedback_lowflash_upgrade.md` に記録。
+
 ## 既知の注意事項
 
 - `args`と`config`は`common`モジュールのグローバル変数として管理される
