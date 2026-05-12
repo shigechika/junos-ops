@@ -169,7 +169,7 @@ def install_setup(monkeypatch, mock_args, mock_config, junos_common):
         lambda h, m: "f36cf2d79c3b91eb93d04083169ee06e",
     )
 
-    mock_args.subcommand = "upgrade"
+    mock_args.subcommand = "install"
     # Build a fake dev
     dev = MagicMock()
     dev.facts = {"model": "EX3400-24T"}

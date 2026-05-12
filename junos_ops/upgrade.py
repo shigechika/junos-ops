@@ -455,7 +455,12 @@ def _install_via_cli_with_unlink(hostname, dev, file_path, timeout=2400):
     :return: ``(status: bool, msg: str)``.
     """
     cli_cmd = "request system software add %s unlink" % file_path
-    logger.info("%s: %s", hostname, cli_cmd)
+    logger.info(
+        "%s: %s (no progress callback; pkgadd may take up to %d minutes)",
+        hostname,
+        cli_cmd,
+        timeout // 60,
+    )
 
     original_timeout = dev.timeout
     dev.timeout = timeout
@@ -485,6 +490,8 @@ def _install_via_cli_with_unlink(hostname, dev, file_path, timeout=2400):
 
     lines = output.splitlines()
     if status:
+        # Success: keep the *last* few marker lines — the final
+        # "set will be activated" confirmation is what the operator wants.
         marker_lines = [
             line for line in lines
             if "set will be activated" in line
@@ -492,6 +499,8 @@ def _install_via_cli_with_unlink(hostname, dev, file_path, timeout=2400):
         ]
         msg = "; ".join(marker_lines[-3:]) if marker_lines else "install completed (unlink)"
     else:
+        # Failure: keep the *first* few ERROR lines — the root cause
+        # (e.g. "insufficient space") usually appears before cascading errors.
         error_lines = [line for line in lines if "ERROR" in line]
         if error_lines:
             msg = "; ".join(error_lines[:5])

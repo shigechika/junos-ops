@@ -585,7 +585,7 @@ show security flow session summary
 
 ## 低容量機種での upgrade (`--unlink`)
 
-EX2300/EX3400 のような low-flash 機種（`/dev/gpt/junos` = 1.3GB）で 22.4 系から 23.4 系への major アップグレードを行うと、`software validate package-result: 1` 段階で `ERROR: insufficient space` が出て失敗することがあります。これは PyEZ のデフォルト経路では `request system software add` の `unlink` オプションが完全に効かないためです。
+EX2300/EX3400 のような low-flash 機種（`/dev/gpt/junos` = 1.3GB）で 22.4 系から 23.4 系への major アップグレードを行うと、`software validate package-result: 1` 段階で `ERROR: insufficient space` が出て失敗することがあります。これは PyEZ `SW.install()` が `request system software add` の `unlink` オプションをパラメータとして公開しておらず、デフォルト経路では pkgadd に unlink を指示できないため、元の tgz が展開中ずっと容量を占有するためです。
 
 `--unlink` を指定すると CLI 経由で `request system software add <package> unlink` を直接実行し、pkgadd が tgz を install 中に unlink して容量を確保しながら展開します。
 

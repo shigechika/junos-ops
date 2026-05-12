@@ -213,7 +213,7 @@ PyPI リリース後、`shigechika/homebrew-tap` の `update-formula.yml` が `r
 
 ## 低容量機種での upgrade (`--unlink`)
 
-EX2300/EX3400 のような low-flash 機種（`/dev/gpt/junos` = 1.3GB）で JUNOS 22.4 → 23.4 のような major アップグレードを行うと、validation 段階で `ERROR: insufficient space` で失敗することがある。これは PyEZ `SW.install()` のデフォルト動作では `request system software add` の `unlink` オプションが完全には効かないため。
+EX2300/EX3400 のような low-flash 機種（`/dev/gpt/junos` = 1.3GB）で JUNOS 22.4 → 23.4 のような major アップグレードを行うと、validation 段階で `ERROR: insufficient space` で失敗することがある。これは PyEZ `SW.install()` が `request system software add` の `unlink` オプションをパラメータとして公開しておらず、デフォルト経路では unlink が走らないため。
 
 ```bash
 # low-flash 機種向け

@@ -600,7 +600,7 @@ Use `-F` / `--format {text,json,xml}` to change the output format. `text` is the
 
 ## Upgrading low-flash devices (`--unlink`)
 
-On low-flash devices like EX2300/EX3400 (`/dev/gpt/junos` = 1.3GB), major upgrades such as 22.4 → 23.4 may fail at the validation step with `ERROR: insufficient space`. This is because PyEZ's default install path does not fully propagate the `unlink` option of `request system software add`.
+On low-flash devices like EX2300/EX3400 (`/dev/gpt/junos` = 1.3GB), major upgrades such as 22.4 → 23.4 may fail at the validation step with `ERROR: insufficient space`. This is because PyEZ's `SW.install()` does not expose the `unlink` option of `request system software add` — its default path never asks pkgadd to unlink the source tgz, so the original package occupies space throughout extraction.
 
 Pass `--unlink` to invoke `request system software add <package> unlink` directly via the CLI, so pkgadd unlinks the tgz during installation and frees space as it extracts.
 
