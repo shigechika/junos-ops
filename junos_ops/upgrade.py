@@ -1228,6 +1228,50 @@ def compare_version(left: str, right: str) -> int | None:
     return 0
 
 
+def _pending_from_install_log(hostname, dev) -> str:
+    """Probe pending (staged) version from ``show log install``.
+
+    Used as primary for SRX1500/SRX4600 (SRX_MIDRANGE/HIGHEND) and as
+    fallback for QFX5e host-based platforms (QFX5100/5110/5200) where
+    ``show version`` does not emit a ``Pending:`` line.
+
+    Looks at the last ``<output>`` block and extracts the version from:
+
+    ``upgrade_platform: Staging of /var/tmp/<pkg>-<version>-...tgz completed``
+
+    then verifies ``<package-result>0</package-result>`` in the same block.
+
+    :returns: pending version string, or ``None`` if not found / not successful.
+    """
+    try:
+        rpc = dev.rpc.get_log({"format": "text"}, filename="install")
+    except Exception as e:
+        logger.debug("%s: _pending_from_install_log: get_log failed: %s", hostname, e)
+        return None
+    xml_str = etree.tostring(rpc, encoding="unicode")
+    if xml_str is None:
+        return None
+    # search from last <output> block (entities are encoded in xml_str)
+    start = xml_str.rfind("&lt;output&gt;")
+    region = xml_str[start:] if start != -1 else xml_str
+    m = re.search(
+        r"upgrade_platform: Staging of /var/tmp/.*-(\d{2}\.\d.*\d).*\.tgz completed",
+        region,
+        re.MULTILINE,
+    )
+    if m is None:
+        return None
+    pending = m.group(1).strip()
+    pr = re.search(
+        r"&lt;package-result&gt;(\d)&lt;/package-result&gt;",
+        region,
+        re.MULTILINE,
+    )
+    if pr is not None and int(pr.group(1)) != 0:
+        return None
+    return pending
+
+
 def get_pending_version(hostname, dev) -> str:
     """Get pending (staged) version string.
 
@@ -1244,10 +1288,19 @@ def get_pending_version(hostname, dev) -> str:
         )
         if dev.facts["personality"] == "SWITCH":
             logger.debug("get_pending_version: EX/QFX series")
-            # Pending: 18.4R3-S10
+            # Classic EX/QFX: show version emits "Pending: 18.4R3-S10".
             m = re.search(r"^Pending:\s(.*)$", xml_str, re.MULTILINE)
             if m is not None:
                 pending = m.group(1)
+            else:
+                # QFX5e host-based platforms (QFX5100/5110/5200 running
+                # jinstall-host-...) do not emit a Pending: line. Fall back
+                # to parsing 'show log install'. See feedback-qfx-host-pending.
+                logger.debug(
+                    "get_pending_version: no Pending: line; "
+                    "falling back to install log (QFX host-based?)"
+                )
+                pending = _pending_from_install_log(hostname, dev)
         elif dev.facts["personality"] == "MX":
             logger.debug("get_pending_version: MX series")
             # JUNOS Installation Software [18.4R3-S10]
@@ -1276,40 +1329,9 @@ def get_pending_version(hostname, dev) -> str:
             dev.facts["personality"] == "SRX_MIDRANGE"
             or dev.facts["personality"] == "SRX_HIGHEND"
         ):
-            # SRX1500, SRX4600
+            # SRX1500, SRX4600 — pending is reported only via install log.
             logger.debug("get_pending_version: SRX_MIDRANGE or SRX_HIGHEND series")
-            # show log install
-            # upgrade_platform: Staging of /var/tmp/junos-srxentedge-x86-64-20.4R3.8-linux.tgz completed
-            # &lt;package-result&gt;0&lt;/package-result&gt;
-            try:
-                rpc = dev.rpc.get_log({"format": "text"}, filename="install")
-                xml_str = etree.tostring(rpc, encoding="unicode")
-                logger.debug(
-                    f"get_pending_version: rpc={rpc} type(xml_str)={type(xml_str)} xml_str={xml_str}"
-                )
-                if xml_str is not None:
-                    # search from last <output> block
-                    start = xml_str.rfind("&lt;output&gt;")
-                    m = re.search(
-                        r"upgrade_platform: Staging of /var/tmp/.*-(\d{2}\.\d.*\d).*\.tgz completed",
-                        xml_str[start:],
-                        re.MULTILINE,
-                    )
-                    if m is not None:
-                        pending = m.group(1).strip()
-                    m = re.search(
-                        r"&lt;package-result&gt;(\d)&lt;/package-result&gt;",
-                        xml_str[start:],
-                        re.MULTILINE,
-                    )
-                    if m is not None:
-                        if int(m.group(1)) == 0:
-                            pass
-                        else:
-                            pending = None
-            except Exception as e:
-                logger.error(f"get_pending_version: {e}")
-                return None
+            pending = _pending_from_install_log(hostname, dev)
         else:
             logger.error(f"get_pending_version: unknown personality: {dev.facts}")
             return None
