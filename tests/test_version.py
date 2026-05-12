@@ -344,6 +344,231 @@ class TestShowVersionWithoutFile:
         assert captured.out == ""
 
 
+# --- _pending_from_install_log / get_pending_version ---
+
+
+def _make_install_log_rpc(body_text):
+    """Build an XML reply matching what ``get_log filename=install`` returns.
+
+    The parser relies on ``etree.tostring(rpc, encoding='unicode')`` which
+    HTML-escapes nested tag literals to ``&lt;...&gt;``. We mimic that by
+    putting the raw CLI text (containing literal ``<output>`` /
+    ``<package-result>`` tags) into a single text node so etree escapes
+    them when serializing.
+    """
+    el = etree.Element("file-content")
+    el.text = body_text
+    return el
+
+
+# Last <output> block excerpt from a QFX5110-48S-4C running
+# jinstall-host-qfx-5e (host-based) — captured from kudan-rt 2026-05-12.
+QFX5E_INSTALL_LOG_TAIL = """\
+2026-05-12 12:18:29 JST mgd[59821]: /usr/libexec/ui/package -X update -no-validate /var/tmp/jinstall-host-qfx-5e-x86-64-23.4R2-S7.7-secure-signed.tgz
+<output>
+Verified jinstall-host-qfx-5e-x86-64-23.4R2-S7.7-secure-signed signed by ...
+upgrade_platform: Staging the upgrade package - /var/tmp/jinstall-qfx-5e-junos-23.4R2-S7.7-secure-linux.tgz..
+upgrade_platform: Checksum verified and OK...
+upgrade_platform: Staging of /var/tmp/jinstall-qfx-5e-junos-23.4R2-S7.7-secure-linux.tgz completed
+upgrade_platform: System need *REBOOT* to complete the upgrade
+Host OS upgrade staged. Reboot the system to complete installation!
+
+Install completed
+</output>
+<package-result>0</package-result>
+"""
+
+# SRX1500 install log excerpt (existing SRX_MIDRANGE path — regression).
+SRX_MIDRANGE_INSTALL_LOG_TAIL = """\
+<output>
+upgrade_platform: Staging the upgrade package - /var/tmp/junos-srxentedge-x86-64-20.4R3.8-linux.tgz..
+upgrade_platform: Staging of /var/tmp/junos-srxentedge-x86-64-20.4R3.8-linux.tgz completed
+</output>
+<package-result>0</package-result>
+"""
+
+
+class TestPendingFromInstallLog:
+    """_pending_from_install_log() の直接テスト"""
+
+    def test_qfx_host_based(self, junos_upgrade):
+        dev = MagicMock()
+        dev.rpc.get_log.return_value = _make_install_log_rpc(QFX5E_INSTALL_LOG_TAIL)
+        assert (
+            junos_upgrade._pending_from_install_log("kudan-rt", dev)
+            == "23.4R2-S7.7"
+        )
+
+    def test_srx_midrange(self, junos_upgrade):
+        dev = MagicMock()
+        dev.rpc.get_log.return_value = _make_install_log_rpc(
+            SRX_MIDRANGE_INSTALL_LOG_TAIL
+        )
+        assert (
+            junos_upgrade._pending_from_install_log("srx1", dev) == "20.4R3.8"
+        )
+
+    def test_picks_last_output_block(self, junos_upgrade):
+        """複数の <output> がある場合、最後のブロックの version を返す"""
+        body = (
+            "<output>\n"
+            "upgrade_platform: Staging of /var/tmp/jinstall-qfx-5e-junos-23.4R2-S6.6-secure-linux.tgz completed\n"
+            "</output>\n"
+            "<package-result>0</package-result>\n"
+            + QFX5E_INSTALL_LOG_TAIL
+        )
+        dev = MagicMock()
+        dev.rpc.get_log.return_value = _make_install_log_rpc(body)
+        assert (
+            junos_upgrade._pending_from_install_log("kudan-rt", dev)
+            == "23.4R2-S7.7"
+        )
+
+    def test_package_result_nonzero_returns_none(self, junos_upgrade):
+        body = (
+            "<output>\n"
+            "upgrade_platform: Staging of /var/tmp/jinstall-qfx-5e-junos-23.4R2-S7.7-secure-linux.tgz completed\n"
+            "</output>\n"
+            "<package-result>1</package-result>\n"
+        )
+        dev = MagicMock()
+        dev.rpc.get_log.return_value = _make_install_log_rpc(body)
+        assert junos_upgrade._pending_from_install_log("h", dev) is None
+
+    def test_no_staging_line(self, junos_upgrade):
+        dev = MagicMock()
+        dev.rpc.get_log.return_value = _make_install_log_rpc(
+            "<output>nothing relevant</output>\n"
+        )
+        assert junos_upgrade._pending_from_install_log("h", dev) is None
+
+    def test_rpc_exception_returns_none(self, junos_upgrade):
+        dev = MagicMock()
+        dev.rpc.get_log.side_effect = RuntimeError("boom")
+        assert junos_upgrade._pending_from_install_log("h", dev) is None
+
+    def test_rpc_exception_quiet_true_logs_at_debug(
+        self, junos_upgrade, monkeypatch
+    ):
+        """SWITCH fallback path: quiet=True で RPC 失敗は debug 止まり"""
+        dev = MagicMock()
+        dev.rpc.get_log.side_effect = RuntimeError("boom")
+        debug_calls = MagicMock()
+        warning_calls = MagicMock()
+        monkeypatch.setattr(junos_upgrade.logger, "debug", debug_calls)
+        monkeypatch.setattr(junos_upgrade.logger, "warning", warning_calls)
+        junos_upgrade._pending_from_install_log("h", dev, quiet=True)
+        # one debug call containing the failure message; no warning call.
+        assert any("get_log failed" in str(c) for c in debug_calls.call_args_list)
+        assert not warning_calls.called
+
+    def test_rpc_exception_quiet_false_logs_at_warning(
+        self, junos_upgrade, monkeypatch
+    ):
+        """SRX_MIDRANGE primary path: quiet=False で RPC 失敗は warning"""
+        dev = MagicMock()
+        dev.rpc.get_log.side_effect = RuntimeError("boom")
+        debug_calls = MagicMock()
+        warning_calls = MagicMock()
+        monkeypatch.setattr(junos_upgrade.logger, "debug", debug_calls)
+        monkeypatch.setattr(junos_upgrade.logger, "warning", warning_calls)
+        junos_upgrade._pending_from_install_log("h", dev)
+        assert any("get_log failed" in str(c) for c in warning_calls.call_args_list)
+        # debug may still be called for unrelated trace, but not for the
+        # get_log failure (warning got that one instead).
+        assert not any(
+            "get_log failed" in str(c) for c in debug_calls.call_args_list
+        )
+
+
+class TestGetPendingVersionSwitchFallback:
+    """SWITCH personality: show version に Pending: 行が無いとき install log に fallback"""
+
+    def _make_dev_qfx_host(self):
+        dev = MagicMock()
+        dev.facts = {
+            "hostname": "kudan-rt",
+            "model": "QFX5110-48S-4C",
+            "version": "23.4R2-S6.6",
+            "personality": "SWITCH",
+        }
+        # show version: no Pending: line (QFX5e host-based)
+        sw_info = etree.Element("software-information")
+        etree.SubElement(sw_info, "output").text = (
+            "Hostname: kudan-rt\n"
+            "Model: qfx5110-48s-4c\n"
+            "Junos: 23.4R2-S6.6\n"
+            "JUNOS Host qfx-5e base package [23.4R2-S6.6]\n"
+        )
+        dev.rpc.get_software_information.return_value = sw_info
+        # install log: latest staging is 23.4R2-S7.7
+        dev.rpc.get_log.return_value = _make_install_log_rpc(QFX5E_INSTALL_LOG_TAIL)
+        return dev
+
+    def _make_dev_qfx_classic(self):
+        dev = MagicMock()
+        dev.facts = {
+            "hostname": "sw2",
+            "model": "EX2300-24T",
+            "version": "22.4R3-S6.5",
+            "personality": "SWITCH",
+        }
+        sw_info = etree.Element("software-information")
+        etree.SubElement(sw_info, "output").text = (
+            "Hostname: sw2\nJunos: 22.4R3-S6.5\nPending: 22.4R3-S10\n"
+        )
+        dev.rpc.get_software_information.return_value = sw_info
+        return dev
+
+    def test_qfx_host_falls_back_to_install_log(self, junos_upgrade, mock_args):
+        dev = self._make_dev_qfx_host()
+        assert (
+            junos_upgrade.get_pending_version("kudan-rt", dev) == "23.4R2-S7.7"
+        )
+        # confirm install log was actually consulted
+        assert dev.rpc.get_log.called
+
+    def test_classic_switch_uses_show_version(self, junos_upgrade, mock_args):
+        """Pending: 行があるとき install log は読まれない"""
+        dev = self._make_dev_qfx_classic()
+        assert junos_upgrade.get_pending_version("sw2", dev) == "22.4R3-S10"
+        assert not dev.rpc.get_log.called
+
+    def test_qfx_host_no_pending_at_all(self, junos_upgrade, mock_args):
+        """Pending: 行も install log も空なら None"""
+        dev = self._make_dev_qfx_host()
+        dev.rpc.get_log.return_value = _make_install_log_rpc("<output>idle</output>\n")
+        assert junos_upgrade.get_pending_version("kudan-rt", dev) is None
+
+
+class TestGetPendingVersionSrxMidrange:
+    """SRX_MIDRANGE/HIGHEND の既存挙動が壊れていないことを確認"""
+
+    def _make_dev(self, personality="SRX_MIDRANGE"):
+        dev = MagicMock()
+        dev.facts = {
+            "hostname": "srx1",
+            "model": "SRX1500",
+            "version": "20.4R3.6",
+            "personality": personality,
+        }
+        sw_info = etree.Element("software-information")
+        etree.SubElement(sw_info, "output").text = "Hostname: srx1\nJunos: 20.4R3.6\n"
+        dev.rpc.get_software_information.return_value = sw_info
+        dev.rpc.get_log.return_value = _make_install_log_rpc(
+            SRX_MIDRANGE_INSTALL_LOG_TAIL
+        )
+        return dev
+
+    def test_srx_midrange(self, junos_upgrade, mock_args):
+        dev = self._make_dev(personality="SRX_MIDRANGE")
+        assert junos_upgrade.get_pending_version("srx1", dev) == "20.4R3.8"
+
+    def test_srx_highend(self, junos_upgrade, mock_args):
+        dev = self._make_dev(personality="SRX_HIGHEND")
+        assert junos_upgrade.get_pending_version("srx1", dev) == "20.4R3.8"
+
+
 class TestDisplayPrintVersion:
     """display.print_version() のテスト"""
 
