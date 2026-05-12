@@ -84,3 +84,36 @@ class TestNoSubcommandParsing:
             with pytest.raises(SystemExit) as exc_info:
                 cli.main()
             assert exc_info.value.code == 0
+
+
+class TestUnlinkOption:
+    """--unlink オプションのパーステスト (Phase 1: low-flash device support)"""
+
+    @patch("junos_ops.common.run_parallel", return_value={})
+    @patch("junos_ops.common.get_targets", return_value=["test-host"])
+    @patch("junos_ops.common.read_config", return_value={"ok": True, "path": "config.ini", "sections": ["test-host"], "error": None})
+    def test_upgrade_unlink(self, mock_read, mock_targets, mock_run):
+        """upgrade --unlink で args.unlink=True"""
+        with patch.object(sys, "argv", ["junos-ops", "upgrade", "--unlink", "-c", "config.ini", "host1"]):
+            cli.main()
+        assert cli.common.args.unlink is True
+        assert cli.common.args.subcommand == "upgrade"
+
+    @patch("junos_ops.common.run_parallel", return_value={})
+    @patch("junos_ops.common.get_targets", return_value=["test-host"])
+    @patch("junos_ops.common.read_config", return_value={"ok": True, "path": "config.ini", "sections": ["test-host"], "error": None})
+    def test_install_unlink(self, mock_read, mock_targets, mock_run):
+        """install --unlink で args.unlink=True"""
+        with patch.object(sys, "argv", ["junos-ops", "install", "--unlink", "-c", "config.ini", "host1"]):
+            cli.main()
+        assert cli.common.args.unlink is True
+        assert cli.common.args.subcommand == "install"
+
+    @patch("junos_ops.common.run_parallel", return_value={})
+    @patch("junos_ops.common.get_targets", return_value=["test-host"])
+    @patch("junos_ops.common.read_config", return_value={"ok": True, "path": "config.ini", "sections": ["test-host"], "error": None})
+    def test_upgrade_without_unlink_defaults_false(self, mock_read, mock_targets, mock_run):
+        """upgrade のみ指定時は args.unlink=False（デフォルト）"""
+        with patch.object(sys, "argv", ["junos-ops", "upgrade", "-c", "config.ini", "host1"]):
+            cli.main()
+        assert cli.common.args.unlink is False

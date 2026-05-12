@@ -198,9 +198,9 @@ junos-ops <subcommand> [options] [hostname ...]
 
 | Subcommand | Description |
 |------------|-------------|
-| `upgrade` | Copy and install package |
+| `upgrade [--unlink]` | Copy and install package (`--unlink` for low-flash devices, see below) |
 | `copy` | Copy package from local to remote |
-| `install` | Install a previously copied package |
+| `install [--unlink]` | Install a previously copied package (`--unlink` for low-flash devices, see below) |
 | `rollback` | Rollback to the previous version |
 | `version` | Show running/planning/pending versions and reboot schedule |
 | `reboot --at YYMMDDHHMM` | Schedule a reboot at the specified time |
@@ -596,6 +596,20 @@ Use `-F` / `--format {text,json,xml}` to change the output format. `text` is the
  'model': 'MX240',
  'version': '18.4R3-S7.2',
  ...}
+```
+
+## Upgrading low-flash devices (`--unlink`)
+
+On low-flash devices like EX2300/EX3400 (`/dev/gpt/junos` = 1.3GB), major upgrades such as 22.4 → 23.4 may fail at the validation step with `ERROR: insufficient space`. This is because PyEZ's `SW.install()` does not expose the `unlink` option of `request system software add` — its default path never asks pkgadd to unlink the source tgz, so the original package occupies space throughout extraction.
+
+Pass `--unlink` to invoke `request system software add <package> unlink` directly via the CLI, so pkgadd unlinks the tgz during installation and frees space as it extracts.
+
+```bash
+# For low-flash devices
+junos-ops upgrade --unlink ex3400-host.example.jp
+
+# Same flag is available on the install-only subcommand
+junos-ops install --unlink ex3400-host.example.jp
 ```
 
 ## Supported Models

@@ -593,6 +593,15 @@ def _run():
         "upgrade", parents=[parent], help="copy and install package",
     )
     p_upgrade.add_argument("specialhosts", metavar="hostname", nargs="*")
+    p_upgrade.add_argument(
+        "--unlink",
+        action="store_true",
+        help=(
+            "explicitly pass 'unlink' to 'request system software add'. "
+            "Required for some low-flash devices (EX2300/EX3400) where "
+            "PyEZ default unlink behavior is incomplete."
+        ),
+    )
 
     # copy
     p_copy = subparsers.add_parser(
@@ -605,6 +614,15 @@ def _run():
         "install", parents=[parent], help="install copied package",
     )
     p_install.add_argument("specialhosts", metavar="hostname", nargs="*")
+    p_install.add_argument(
+        "--unlink",
+        action="store_true",
+        help=(
+            "explicitly pass 'unlink' to 'request system software add'. "
+            "Required for some low-flash devices (EX2300/EX3400) where "
+            "PyEZ default unlink behavior is incomplete."
+        ),
+    )
 
     # rollback
     p_rollback = subparsers.add_parser(

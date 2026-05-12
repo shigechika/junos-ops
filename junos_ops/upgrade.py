@@ -439,6 +439,79 @@ def clear_reboot(dev) -> dict:
     return result
 
 
+def _install_via_cli_with_unlink(hostname, dev, file_path, timeout=2400):
+    """Run 'request system software add <file> unlink' via dev.cli().
+
+    Used for low-flash devices (EX2300/EX3400) where PyEZ ``SW.install()``
+    default unlink behavior is incomplete. The CLI form with explicit
+    ``unlink`` makes the JUNOS pkgadd actually free the source tgz during
+    pkgadd, which is essential to fit a 23.4 install into a 1.3GB partition.
+
+    The full CLI output is logged at DEBUG; a short summary suitable for
+    the display layer is returned in ``msg``.
+
+    :param file_path: absolute path on device (e.g., ``/var/tmp/junos-...tgz``).
+    :param timeout: dev_timeout in seconds for the long-running pkgadd RPC.
+    :return: ``(status: bool, msg: str)``.
+    """
+    cli_cmd = "request system software add %s unlink" % file_path
+    logger.info(
+        "%s: %s (no progress callback; pkgadd may take up to %d minutes)",
+        hostname,
+        cli_cmd,
+        timeout // 60,
+    )
+
+    original_timeout = dev.timeout
+    dev.timeout = timeout
+    try:
+        output = dev.cli(cli_cmd, warning=False)
+    except Exception as e:
+        return False, "%s: %s" % (type(e).__name__, e)
+    finally:
+        dev.timeout = original_timeout
+
+    logger.debug("%s: install output:\n%s", hostname, output)
+
+    if not output:
+        return False, "no output from CLI"
+
+    # Success markers from JUNOS pkgadd:
+    #   - "set will be activated at next reboot" (final pending-set confirmation)
+    #   - "Validation succeeded" (validate step passed)
+    # Failure markers:
+    #   - "ERROR:" (insufficient space, signature failure, etc.)
+    has_error = "ERROR:" in output
+    has_success = (
+        "set will be activated at next reboot" in output
+        or "Validation succeeded" in output
+    )
+    status = has_success and not has_error
+
+    lines = output.splitlines()
+    if status:
+        # Success: keep the *last* few marker lines — the final
+        # "set will be activated" confirmation is what the operator wants.
+        marker_lines = [
+            line for line in lines
+            if "set will be activated" in line
+            or "Validation succeeded" in line
+        ]
+        msg = "; ".join(marker_lines[-3:]) if marker_lines else "install completed (unlink)"
+    else:
+        # Failure: keep the *first* few ERROR lines — the root cause
+        # (e.g. "insufficient space") usually appears before cascading errors.
+        error_lines = [line for line in lines if "ERROR" in line]
+        if error_lines:
+            msg = "; ".join(error_lines[:5])
+        elif lines:
+            msg = "install failed (unlink): " + lines[-1]
+        else:
+            msg = "install failed (unlink)"
+
+    return status, msg
+
+
 def install(hostname, dev) -> dict:
     """Install package with pre-flight checks.
 
@@ -462,6 +535,8 @@ def install(hostname, dev) -> dict:
           ``request system configuration rescue save``.
         - ``install_message`` (str | None): message from PyEZ
           ``SW.install`` or the dry-run equivalent.
+        - ``unlink_used`` (bool): True when the CLI ``unlink`` path was
+          taken (set by ``--unlink``).
         - ``steps`` (list[dict]): chronological per-action progress for
           the display layer.
         - ``error`` (str | None): short identifier for the first
@@ -484,6 +559,7 @@ def install(hostname, dev) -> dict:
         "copy_result": None,
         "rescue_save": None,
         "install_message": None,
+        "unlink_used": False,
         "steps": steps,
         "error": None,
     }
@@ -616,27 +692,38 @@ def install(hostname, dev) -> dict:
         steps.append({"action": "sw_install", "ok": True, "dry_run": True, "message": msg})
         return result
 
-    sw = SW(dev)
-    try:
-        status, msg = sw.install(
+    if getattr(common.args, "unlink", False):
+        # Low-flash devices (EX2300/EX3400) need explicit 'unlink' on the
+        # 'request system software add' CLI. PyEZ SW.install() default does
+        # not pass this through. See feedback_lowflash_upgrade.md.
+        file_path = "%s/%s" % (
+            common.config.get(hostname, "rpath"),
             get_model_file(hostname, dev.facts["model"]),
-            remote_path=common.config.get(hostname, "rpath"),
-            progress=True,
-            validate=True,
-            cleanfs=True,
-            no_copy=True,
-            issu=False,
-            nssu=False,
-            timeout=2400,
-            cleanfs_timeout=300,
-            checksum=get_model_hash(hostname, dev.facts["model"]),
-            checksum_timeout=1200,
-            checksum_algorithm=common.config.get(hostname, "hashalgo"),
-            force_copy=common.args.force,
-            all_re=True,
         )
-    finally:
-        del sw
+        status, msg = _install_via_cli_with_unlink(hostname, dev, file_path)
+        result["unlink_used"] = True
+    else:
+        sw = SW(dev)
+        try:
+            status, msg = sw.install(
+                get_model_file(hostname, dev.facts["model"]),
+                remote_path=common.config.get(hostname, "rpath"),
+                progress=True,
+                validate=True,
+                cleanfs=True,
+                no_copy=True,
+                issu=False,
+                nssu=False,
+                timeout=2400,
+                cleanfs_timeout=300,
+                checksum=get_model_hash(hostname, dev.facts["model"]),
+                checksum_timeout=1200,
+                checksum_algorithm=common.config.get(hostname, "hashalgo"),
+                force_copy=common.args.force,
+                all_re=True,
+            )
+        finally:
+            del sw
     logger.debug(f"{msg=}")
     result["install_message"] = msg
     if status:
