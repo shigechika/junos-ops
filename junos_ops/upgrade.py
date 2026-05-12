@@ -1228,7 +1228,7 @@ def compare_version(left: str, right: str) -> int | None:
     return 0
 
 
-def _pending_from_install_log(hostname, dev) -> str:
+def _pending_from_install_log(hostname, dev, *, quiet: bool = False) -> str | None:
     """Probe pending (staged) version from ``show log install``.
 
     Used as primary for SRX1500/SRX4600 (SRX_MIDRANGE/HIGHEND) and as
@@ -1241,12 +1241,18 @@ def _pending_from_install_log(hostname, dev) -> str:
 
     then verifies ``<package-result>0</package-result>`` in the same block.
 
+    :param quiet: when True, RPC failures are logged at DEBUG (used by the
+        SWITCH fallback path, where this is opportunistic and most callers
+        already have a valid result from ``show version``). When False
+        (default, for SRX_MIDRANGE/HIGHEND which depend on this as the
+        primary source), RPC failures are logged at WARNING.
     :returns: pending version string, or ``None`` if not found / not successful.
     """
     try:
         rpc = dev.rpc.get_log({"format": "text"}, filename="install")
     except Exception as e:
-        logger.debug("%s: _pending_from_install_log: get_log failed: %s", hostname, e)
+        log = logger.debug if quiet else logger.warning
+        log("%s: _pending_from_install_log: get_log failed: %s", hostname, e)
         return None
     xml_str = etree.tostring(rpc, encoding="unicode")
     if xml_str is None:
@@ -1295,12 +1301,14 @@ def get_pending_version(hostname, dev) -> str:
             else:
                 # QFX5e host-based platforms (QFX5100/5110/5200 running
                 # jinstall-host-...) do not emit a Pending: line. Fall back
-                # to parsing 'show log install'. See feedback-qfx-host-pending.
+                # to parsing 'show log install'. quiet=True because this
+                # path is opportunistic — classic EX/QFX without any
+                # pending should silently get None, not a warning.
                 logger.debug(
                     "get_pending_version: no Pending: line; "
                     "falling back to install log (QFX host-based?)"
                 )
-                pending = _pending_from_install_log(hostname, dev)
+                pending = _pending_from_install_log(hostname, dev, quiet=True)
         elif dev.facts["personality"] == "MX":
             logger.debug("get_pending_version: MX series")
             # JUNOS Installation Software [18.4R3-S10]

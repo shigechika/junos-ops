@@ -447,6 +447,39 @@ class TestPendingFromInstallLog:
         dev.rpc.get_log.side_effect = RuntimeError("boom")
         assert junos_upgrade._pending_from_install_log("h", dev) is None
 
+    def test_rpc_exception_quiet_true_logs_at_debug(
+        self, junos_upgrade, monkeypatch
+    ):
+        """SWITCH fallback path: quiet=True で RPC 失敗は debug 止まり"""
+        dev = MagicMock()
+        dev.rpc.get_log.side_effect = RuntimeError("boom")
+        debug_calls = MagicMock()
+        warning_calls = MagicMock()
+        monkeypatch.setattr(junos_upgrade.logger, "debug", debug_calls)
+        monkeypatch.setattr(junos_upgrade.logger, "warning", warning_calls)
+        junos_upgrade._pending_from_install_log("h", dev, quiet=True)
+        # one debug call containing the failure message; no warning call.
+        assert any("get_log failed" in str(c) for c in debug_calls.call_args_list)
+        assert not warning_calls.called
+
+    def test_rpc_exception_quiet_false_logs_at_warning(
+        self, junos_upgrade, monkeypatch
+    ):
+        """SRX_MIDRANGE primary path: quiet=False で RPC 失敗は warning"""
+        dev = MagicMock()
+        dev.rpc.get_log.side_effect = RuntimeError("boom")
+        debug_calls = MagicMock()
+        warning_calls = MagicMock()
+        monkeypatch.setattr(junos_upgrade.logger, "debug", debug_calls)
+        monkeypatch.setattr(junos_upgrade.logger, "warning", warning_calls)
+        junos_upgrade._pending_from_install_log("h", dev)
+        assert any("get_log failed" in str(c) for c in warning_calls.call_args_list)
+        # debug may still be called for unrelated trace, but not for the
+        # get_log failure (warning got that one instead).
+        assert not any(
+            "get_log failed" in str(c) for c in debug_calls.call_args_list
+        )
+
 
 class TestGetPendingVersionSwitchFallback:
     """SWITCH personality: show version に Pending: 行が無いとき install log に fallback"""
