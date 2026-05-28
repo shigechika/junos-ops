@@ -368,3 +368,29 @@ class TestCmdRsi:
         mock_block.assert_called_once()
         assert mock_block.call_args[0][0] == "test-host"
         mock_header.assert_not_called()
+
+    def test_cmd_rsi_connect_error_uses_atomic_block(self, junos_common, mock_args, mock_config):
+        """On connect failure, cmd_rsi still emits header + error via print_host_block.
+
+        The error path must use the same atomic block as the success path
+        (not the standalone print_connect_error) so a failed host's output
+        does not interleave with other hosts under --workers.
+        """
+        conn = {
+            "hostname": "test-host",
+            "host": "test-host",
+            "ok": False,
+            "dev": None,
+            "error": "ConnectTimeoutError",
+            "error_message": "Connection timeout: test-host",
+        }
+        with patch.object(rsi.common, "connect", return_value=conn):
+            with patch("junos_ops.display.print_host_block") as mock_block, \
+                    patch("junos_ops.display.print_connect_error") as mock_pce:
+                result = rsi.cmd_rsi("test-host")
+
+        assert result == 1
+        mock_block.assert_called_once()
+        assert mock_block.call_args[0][0] == "test-host"
+        # The standalone (non-atomic) connect-error printer must not be used.
+        mock_pce.assert_not_called()
