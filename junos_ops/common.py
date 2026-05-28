@@ -226,15 +226,12 @@ def get_targets():
 
     # パターン1: --tags なし & hosts なし → 全セクション（現行動作）
     if not tag_groups and not has_hosts:
-        targets = []
-        for i in config.sections():
-            tmp = config.get(i, "host")
-            logger.debug(f"{i=} {tmp=}")
-            if tmp is not None:
-                targets.append(i)
-            else:
-                print(i, "is not found in", args.config)
-                sys.exit(1)
+        # read_config() guarantees every section has a 'host' option (it
+        # sets it to the section name when absent), so the previous None
+        # check / sys.exit branch here was unreachable.
+        targets = list(config.sections())
+        for i in targets:
+            logger.debug(f"{i=} host={config.get(i, 'host')}")
         return targets
 
     # パターン2: --tags なし & hosts あり → 指定ホストのみ（現行動作）
@@ -344,9 +341,15 @@ def run_parallel(func, targets, max_workers=1):
     When max_workers=1, runs serially for backward compatibility.
     """
     if max_workers <= 1:
+        # Mirror the parallel path's error handling: a raising func records
+        # exit code 1 for that target instead of aborting the whole run.
         results = {}
         for target in targets:
-            results[target] = func(target)
+            try:
+                results[target] = func(target)
+            except Exception as e:
+                logger.error(f"{target} generated an exception: {e}")
+                results[target] = 1
         return results
 
     with futures.ThreadPoolExecutor(max_workers=max_workers) as executor:

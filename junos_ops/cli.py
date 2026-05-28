@@ -16,7 +16,6 @@
 """CLI entry point and subcommand routing for junos-ops."""
 
 from jnpr.junos.exception import ConnectClosedError
-from pprint import pprint
 import argparse
 import io
 import sys
@@ -84,8 +83,10 @@ def cmd_facts(hostname) -> int:
     if dev is None:
         return 1
     try:
-        print(f"# {hostname}")
-        pprint(dev.facts)
+        # print_facts emits the header + facts under _print_lock as one
+        # atomic block, so parallel workers (--workers N) cannot interleave
+        # another host's output between this host's header and body.
+        display.print_facts(hostname, dev.facts)
         return 0
     except Exception as e:
         logger.error(f"{hostname}: {e}")
@@ -249,6 +250,9 @@ def cmd_show(hostname) -> int:
             )
         display.print_show(result)
         return 0 if result["ok"] else 1
+    except Exception as e:
+        logger.error(f"{hostname}: {e}")
+        return 1
     finally:
         try:
             dev.close()
@@ -272,7 +276,7 @@ def cmd_config(hostname) -> int:
         if timeout is None:
             try:
                 timeout = int(common.config.get(hostname, "timeout"))
-            except (Exception):
+            except Exception:
                 pass
         if timeout is None:
             timeout = 120
