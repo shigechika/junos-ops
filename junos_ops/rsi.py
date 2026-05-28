@@ -131,7 +131,9 @@ def collect_rsi(hostname, dev) -> dict:
             else "show configuration"
         )
         output_str = dev.cli(scf_cmd)
-        scf_path = f"{rsi_dir}{hostname}.SCF"
+        # os.path.join (not string concat) so RSI_DIR without a trailing
+        # slash (e.g. "/var/log/rsi") does not produce "/var/log/rsihost.SCF".
+        scf_path = os.path.join(rsi_dir, f"{hostname}.SCF")
         body = output_str.strip()
         with open(scf_path, mode="w") as f:
             f.write(body)
@@ -156,7 +158,7 @@ def collect_rsi(hostname, dev) -> dict:
         output_str = etree.tostring(
             rsi_result["rpc"], encoding="unicode", method="text"
         )
-        rsi_path = f"{rsi_dir}{hostname}.RSI"
+        rsi_path = os.path.join(rsi_dir, f"{hostname}.RSI")
         body = output_str.strip()
         with open(rsi_path, mode="w") as f:
             f.write(body)
@@ -176,16 +178,18 @@ def cmd_rsi(hostname) -> int:
     logger.debug(f"cmd_rsi: {hostname} start")
     from junos_ops import display
 
-    display.print_host_header(hostname)
-
+    # Emit the header + body as one atomic block (print_host_block grabs
+    # _print_lock once) so parallel workers (rsi defaults to --workers 20)
+    # cannot interleave another host's output between this host's header
+    # and its body.
     conn = common.connect(hostname)
     if not conn["ok"]:
-        display.print_connect_error(conn)
+        display.print_host_block(hostname, display.format_connect_error(conn))
         return 1
     dev = conn["dev"]
     try:
         result = collect_rsi(hostname, dev)
-        display.print_rsi(result)
+        display.print_host_block(hostname, display.format_rsi(result))
         return 0 if result["ok"] else (2 if result["error"] == "rsi_rpc" else 1)
     finally:
         try:

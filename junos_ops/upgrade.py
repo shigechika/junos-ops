@@ -1217,6 +1217,14 @@ def compare_version(left: str, right: str) -> int | None:
     :return:  1 if left  > right
               0 if left == right
              -1 if left  < right
+
+    .. note::
+        The ``-S`` spin marker is normalised by replacing ``"-S"`` with
+        ``"00"`` before the LooseVersion comparison. This is reliable for
+        real Junos version strings, but because the substitution simply
+        concatenates the release and spin numbers it can misorder
+        contrived inputs (e.g. ``R30-S9`` vs ``R3-S90``). Callers should
+        only feed it genuine Junos version strings.
     """
     logger.debug(f"compare_version: left={left}, right={right}.")
     if left is None or right is None:
@@ -1278,7 +1286,7 @@ def _pending_from_install_log(hostname, dev, *, quiet: bool = False) -> str | No
     return pending
 
 
-def get_pending_version(hostname, dev) -> str:
+def get_pending_version(hostname, dev) -> str | None:
     """Get pending (staged) version string.
 
     :returns:
@@ -1355,7 +1363,7 @@ def get_pending_version(hostname, dev) -> str:
     return pending
 
 
-def get_planning_version(hostname, dev) -> str:
+def get_planning_version(hostname, dev) -> str | None:
     """Extract planning version from package filename."""
     planning = None
     f = get_model_file(hostname, dev.facts["model"])
@@ -1858,7 +1866,10 @@ def reboot(hostname: str, dev, reboot_dt: datetime.datetime) -> dict:
         result["cleared_existing"] = True
     elif xml_str.find("No shutdown/reboot scheduled.") < 0:
         logger.debug("ANY SHUTDWON/REBOOT SCHEDULE EXISTS")
-        match = re.search(r"^(\w+) requested by (\w+) at (.*)$", xml_str, re.MULTILINE)
+        # Username uses \S+ (not \w+) so accounts containing '-', '.', '@'
+        # still match; otherwise an existing schedule would silently fail
+        # to parse here and never get cleared, even with --force.
+        match = re.search(r"^(\w+) requested by (\S+) at (.*)$", xml_str, re.MULTILINE)
         if match and len(match.groups()) == 3:
             dt = datetime.datetime.strptime(match.group(3), "%a %b %d %H:%M:%S %Y")
             existing_msg = f"\t{match.group(1).upper()} SCHEDULE EXISTS AT {dt}"

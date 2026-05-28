@@ -282,6 +282,34 @@ class TestCmdRsi:
         m.assert_any_call("./test-host.SCF", mode="w")
         m.assert_any_call("./test-host.RSI", mode="w")
 
+    def test_rsi_dir_without_trailing_slash(self, junos_common, mock_args, mock_config):
+        """RSI_DIR without a trailing slash still resolves correctly (os.path.join)."""
+        import os
+        mock_config.set("test-host", "RSI_DIR", "/var/log/rsi")
+        mock_dev = MagicMock()
+        mock_dev.cli.return_value = "config"
+        rsi_xml = etree.Element("output")
+        rsi_xml.text = "RSI text"
+        mock_dev.rpc.get_support_information.return_value = rsi_xml
+        mock_dev.facts = {
+            "personality": "MX",
+            "model": "MX204",
+            "model_info": {"MX204": {}},
+            "hostname": "test-host",
+            "srx_cluster": None,
+        }
+
+        m = mock_open()
+        with patch.object(rsi.common, "connect", return_value={"hostname": "test-host", "host": "test-host", "ok": True, "dev": mock_dev, "error": None, "error_message": None}):
+            with patch("builtins.open", m):
+                result = rsi.cmd_rsi("test-host")
+
+        assert result == 0
+        # String concat would give "/var/log/rsitest-host.SCF"; os.path.join
+        # inserts the separator correctly.
+        m.assert_any_call(os.path.join("/var/log/rsi", "test-host.SCF"), mode="w")
+        m.assert_any_call(os.path.join("/var/log/rsi", "test-host.RSI"), mode="w")
+
     def test_rsi_dir_tilde_expansion(self, junos_common, mock_args, mock_config):
         """RSI_DIR の ~ がホームディレクトリに展開される"""
         import os
@@ -308,3 +336,35 @@ class TestCmdRsi:
         expected_dir = os.path.expanduser("~/rsi/")
         m.assert_any_call(f"{expected_dir}test-host.SCF", mode="w")
         m.assert_any_call(f"{expected_dir}test-host.RSI", mode="w")
+
+    def test_cmd_rsi_emits_atomic_block(self, junos_common, mock_args, mock_config):
+        """cmd_rsi emits the header + body via print_host_block.
+
+        rsi defaults to --workers 20, so the header and body must be written
+        as one atomic block (not a standalone print_host_header call) to keep
+        another host's output from interleaving between them.
+        """
+        mock_dev = MagicMock()
+        mock_dev.cli.return_value = "config"
+        rsi_xml = etree.Element("output")
+        rsi_xml.text = "RSI text"
+        mock_dev.rpc.get_support_information.return_value = rsi_xml
+        mock_dev.facts = {
+            "personality": "MX",
+            "model": "MX204",
+            "model_info": {"MX204": {}},
+            "hostname": "test-host",
+            "srx_cluster": None,
+        }
+
+        m = mock_open()
+        with patch.object(rsi.common, "connect", return_value={"hostname": "test-host", "host": "test-host", "ok": True, "dev": mock_dev, "error": None, "error_message": None}):
+            with patch("builtins.open", m):
+                with patch("junos_ops.display.print_host_block") as mock_block, \
+                        patch("junos_ops.display.print_host_header") as mock_header:
+                    result = rsi.cmd_rsi("test-host")
+
+        assert result == 0
+        mock_block.assert_called_once()
+        assert mock_block.call_args[0][0] == "test-host"
+        mock_header.assert_not_called()
