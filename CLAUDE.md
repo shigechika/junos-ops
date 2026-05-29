@@ -229,3 +229,4 @@ junos-ops upgrade --unlink ex3400-host.example.jp
 - `args`と`config`は`common`モジュールのグローバル変数として管理される
 - `config`への書き込みは`config_lock`（threading.Lock）で保護済み
 - `cli.py`の後方互換alias（`copy = upgrade.copy` 等）は将来のバージョンで削除予定
+- 新しいサブコマンドは出力を`display.print_host_block(hostname, body)`（または`print_facts`）で**1ブロックとして atomic に出力**すること。`print_host_header`単独 + 別の`print_*`/`print()`に分けると、`--workers N`並列実行時に他ホストの出力がヘッダと本体の間に割り込む。`cmd_facts`/`cmd_rsi`がこの不具合を抱えており v0.23.1 で修正済み
