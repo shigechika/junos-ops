@@ -222,6 +222,14 @@ def get_targets():
     tags = getattr(args, "tags", None)
     has_hosts = len(args.specialhosts) > 0
 
+    def _fatal(*parts):
+        # Startup/selection errors are diagnostics, not data. Under --json
+        # they must not land on stdout (which carries only JSON), so route
+        # them to stderr; otherwise keep the legacy stdout behaviour.
+        stream = sys.stderr if getattr(args, "json", False) else sys.stdout
+        print(*parts, file=stream)
+        sys.exit(1)
+
     tag_groups = _parse_tag_groups(tags)
 
     # パターン1: --tags なし & hosts なし → 全セクション（現行動作）
@@ -241,8 +249,7 @@ def get_targets():
             if config.has_section(i):
                 tmp = config.get(i, "host")
             else:
-                print(i, "is not found in", args.config)
-                sys.exit(1)
+                _fatal(i, "is not found in", args.config)
             logger.debug(f"{i=} {tmp=}")
             targets.append(i)
         return targets
@@ -254,8 +261,7 @@ def get_targets():
     if tag_groups and not has_hosts:
         targets = _filter_by_tag_groups(tag_groups)
         if not targets:
-            print("no hosts matched tags:", tags)
-            sys.exit(1)
+            _fatal("no hosts matched tags:", tags)
         return targets
 
     # Pattern 4: --tags + hosts -> intersection (tag filter AND name list).
@@ -265,13 +271,11 @@ def get_targets():
     targets = []
     for i in args.specialhosts:
         if not config.has_section(i):
-            print(i, "is not found in", args.config)
-            sys.exit(1)
+            _fatal(i, "is not found in", args.config)
         if i in tag_matched:
             targets.append(i)
     if not targets:
-        print("no hosts matched both tags and names:", tags, args.specialhosts)
-        sys.exit(1)
+        _fatal("no hosts matched both tags and names:", tags, args.specialhosts)
     return targets
 
 

@@ -25,6 +25,7 @@ def mock_args(junos_common):
         debug=False,
         dry_run=False,
         force=False,
+        json=False,
         config="config.ini",
         list_format=None,
         rebootat=None,

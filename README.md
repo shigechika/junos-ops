@@ -25,6 +25,7 @@ A Python CLI to automate Juniper/JUNOS operations over NETCONF: model-aware upgr
 - Tag-based host filtering (`--tags`) for AND-matched multi-site workflows
 - Local firmware directory (`lpath`) with `~` expansion
 - Dry-run mode (`--dry-run`) for pre-flight verification
+- Machine-readable JSON output (`--json`) for piping into jq / monitoring / Ansible
 - Parallel execution via ThreadPoolExecutor (`--workers N`)
 - INI-based host and package management
 
@@ -220,9 +221,25 @@ junos-ops <subcommand> [options] [hostname ...]
 | `-n`, `--dry-run` | Test run (connect and display messages only, no execution) |
 | `-d`, `--debug` | Debug output |
 | `--force` | Force execution regardless of conditions |
+| `--json` | Emit machine-readable JSON instead of human-readable text. One JSON object per host per line (JSONL); logs are routed to stderr so stdout stays pure JSON. Pipe to `jq -s` to slurp into an array. See "JSON Output" below. |
 | `--tags TAG[,TAG...]` | Filter hosts by tags. Comma-separates AND together inside one value; repeating `--tags` ORs groups. Combined with explicit hostnames, the tag filter and hostname list intersect. See "Tag-based Host Filtering" below. |
 | `--workers N` | Parallel workers (default: 1 for upgrade, 20 for rsi) |
 | `--version` | Show program version |
+
+### JSON Output
+
+Pass `--json` to any subcommand to get machine-readable output. Each host emits one JSON object on its own line (JSON Lines / JSONL), which composes cleanly with parallel `--workers N` runs:
+
+```console
+$ junos-ops version --json rt1.example.jp rt2.example.jp
+{"hostname": "rt1.example.jp", "ok": true, "model": "MX240", "running": "22.4R3-S6.5", ...}
+{"hostname": "rt2.example.jp", "ok": true, "model": "EX2300-24T", "running": "22.4R3-S6.5", ...}
+```
+
+- Logs (including `config`'s real-time commit progress) and startup diagnostics (unreadable config, no matching hosts) go to **stderr**, so `2>/dev/null` or piping stdout alone yields valid JSON only. Check the exit code to detect a startup failure (stdout is then empty).
+- A host that fails to connect or errors mid-run still emits a line — `{"hostname": ..., "ok": false, "error": ..., "error_message": ...}` — so a consumer never silently misses a host.
+- Slurp the stream into a single array with `jq -s`: `junos-ops version --json | jq -s '.'`
+- `check --json` tags each line with `"check": "local"` (model-keyed inventory rows) or `"check": "host"` (per-host rows).
 
 ## Workflow
 
