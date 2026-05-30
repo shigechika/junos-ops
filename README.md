@@ -236,7 +236,7 @@ $ junos-ops version --json rt1.example.jp rt2.example.jp
 {"hostname": "rt2.example.jp", "ok": true, "model": "EX2300-24T", "running": "22.4R3-S6.5", ...}
 ```
 
-- Logs (including `config`'s real-time commit progress) go to **stderr**, so `2>/dev/null` or piping stdout alone yields valid JSON only.
+- Logs (including `config`'s real-time commit progress) and startup diagnostics (unreadable config, no matching hosts) go to **stderr**, so `2>/dev/null` or piping stdout alone yields valid JSON only. Check the exit code to detect a startup failure (stdout is then empty).
 - A host that fails to connect or errors mid-run still emits a line — `{"hostname": ..., "ok": false, "error": ..., "error_message": ...}` — so a consumer never silently misses a host.
 - Slurp the stream into a single array with `jq -s`: `junos-ops version --json | jq -s '.'`
 - `check --json` tags each line with `"check": "local"` (model-keyed inventory rows) or `"check": "host"` (per-host rows).

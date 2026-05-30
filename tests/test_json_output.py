@@ -78,6 +78,61 @@ class TestRouteLogsToStderr:
         finally:
             root.removeHandler(h)
 
+    def test_run_wires_rerouting_under_json(self, capsys, monkeypatch):
+        """_run() itself must call the rerouting under --json.
+
+        Drives the full dispatcher via ``check --json --local`` (no device
+        needed) so removing the ``_route_logs_to_stderr()`` call from _run
+        is caught here, not only by a manual smoke test.
+        """
+        root = logging.getLogger()
+        console = logging.StreamHandler(sys.stdout)
+        root.addHandler(console)
+        monkeypatch.setattr(
+            sys, "argv", ["junos-ops", "check", "--json", "--local"]
+        )
+        try:
+            cli._run()
+        finally:
+            root.removeHandler(console)
+        # The production wiring moved our stdout-attached handler to stderr.
+        assert console.stream is sys.stderr
+        # stdout carries only JSON lines.
+        for ln in capsys.readouterr().out.splitlines():
+            if ln.strip():
+                json.loads(ln)
+
+
+class TestGetTargetsJsonFatal:
+    """get_targets startup errors stay off stdout under --json."""
+
+    def test_unknown_host_diagnostic_goes_to_stderr(
+        self, capsys, mock_args, mock_config
+    ):
+        import pytest
+
+        mock_args.json = True
+        mock_args.specialhosts = ["no-such-host"]
+        with pytest.raises(SystemExit) as exc:
+            common.get_targets()
+        assert exc.value.code == 1
+        captured = capsys.readouterr()
+        # stdout must stay pure JSON (here: empty); the diagnostic is on stderr.
+        assert captured.out == ""
+        assert "no-such-host" in captured.err
+
+    def test_unknown_host_diagnostic_on_stdout_without_json(
+        self, capsys, mock_args, mock_config
+    ):
+        import pytest
+
+        mock_args.json = False
+        mock_args.specialhosts = ["no-such-host"]
+        with pytest.raises(SystemExit):
+            common.get_targets()
+        # Legacy behaviour preserved: human mode still prints to stdout.
+        assert "no-such-host" in capsys.readouterr().out
+
 
 class TestCmdJsonOutput:
     """cmd_* honour --json and keep stdout machine-parseable."""

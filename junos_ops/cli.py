@@ -993,7 +993,11 @@ def _run():
 
     cfg_result = common.read_config()
     if not cfg_result["ok"]:
-        display.print_read_config_error(cfg_result)
+        if _json_mode():
+            # Startup error → diagnostic on stderr so stdout stays pure JSON.
+            print(display.format_read_config_error(cfg_result), file=sys.stderr)
+        else:
+            display.print_read_config_error(cfg_result)
         sys.exit(1)
 
     targets = common.get_targets()

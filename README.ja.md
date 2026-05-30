@@ -236,7 +236,7 @@ $ junos-ops version --json rt1.example.jp rt2.example.jp
 {"hostname": "rt2.example.jp", "ok": true, "model": "EX2300-24T", "running": "22.4R3-S6.5", ...}
 ```
 
-- ログ（`config` のコミット進捗を含む）は **stderr** に出力されるため、`2>/dev/null` や stdout のみのパイプで純粋な JSON だけが得られます。
+- ログ（`config` のコミット進捗を含む）および起動時の診断（設定ファイル読込失敗、対象ホスト 0 件）は **stderr** に出力されるため、`2>/dev/null` や stdout のみのパイプで純粋な JSON だけが得られます。起動失敗は終了コードで判定してください（その場合 stdout は空）。
 - 接続失敗や実行中エラーのホストも 1 行を出力します（`{"hostname": ..., "ok": false, "error": ..., "error_message": ...}`）。consumer がホストの取りこぼしに気づけます。
 - `jq -s` で 1 つの配列に集約: `junos-ops version --json | jq -s '.'`
 - `check --json` は各行に `"check": "local"`（model 単位のインベントリ行）または `"check": "host"`（ホスト単位の行）を付与します。
