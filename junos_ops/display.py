@@ -71,6 +71,42 @@ def _emit(text: str) -> None:
 # -------------------------------------------------------------------
 
 
+def format_json_obj(obj) -> str:
+    """Serialize ``obj`` to a single-line JSON string.
+
+    ``default=str`` is the safety net for values core dicts may carry
+    that are not natively JSON-serializable (lxml elements, datetimes,
+    PyEZ version tuples). ``ensure_ascii=False`` keeps non-ASCII text
+    (e.g. config diffs) readable rather than escaped.
+    """
+    return json.dumps(obj, default=str, ensure_ascii=False)
+
+
+def print_json_obj(obj) -> None:
+    """Emit ``obj`` as one atomic JSON line under the print lock."""
+    _emit(format_json_obj(obj))
+
+
+def format_json(hostname: str, result) -> str:
+    """Serialize a per-host core result to a single JSON line.
+
+    The host is surfaced as a top-level ``hostname`` key so a JSONL
+    consumer can attribute each line without external state. A dict
+    result is merged in (its own ``hostname``, if any, carries the same
+    value); a non-dict result is wrapped under a ``result`` key.
+    """
+    if isinstance(result, dict):
+        payload = {"hostname": hostname, **result}
+    else:
+        payload = {"hostname": hostname, "result": result}
+    return format_json_obj(payload)
+
+
+def print_json(hostname: str, result) -> None:
+    """Emit a per-host core result as one atomic JSON line."""
+    _emit(format_json(hostname, result))
+
+
 def format_host_header(hostname: str) -> str:
     """Return the ``# hostname`` header line (no trailing newline)."""
     return f"# {hostname}"

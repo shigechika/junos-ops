@@ -25,6 +25,7 @@ Juniper/JUNOS デバイスの運用を NETCONF 経由で自動化する Python C
 - `--tags` によるタグベースのホストフィルタ（AND マッチ）
 - ローカルファームウェア置き場（`lpath`、`~` 展開対応）
 - ドライランモード（`--dry-run`）で事前確認
+- 機械可読な JSON 出力（`--json`）で jq / 監視 / Ansible 連携
 - ThreadPoolExecutor による並列実行（`--workers N`）
 - 設定ファイル（INI 形式）によるホスト・パッケージ管理
 
@@ -220,9 +221,25 @@ junos-ops <subcommand> [options] [hostname ...]
 | `-n`, `--dry-run` | テスト実行（接続とメッセージ出力のみ、実行しない） |
 | `-d`, `--debug` | デバッグ出力 |
 | `--force` | 条件を無視して強制実行 |
+| `--json` | 人間向けテキストの代わりに機械可読 JSON を出力。ホストごとに 1 行の JSON オブジェクト（JSONL）。ログは stderr に退避されるため stdout は純粋な JSON のみ。`jq -s` で配列に slurp 可能。詳細は「JSON 出力」セクション参照 |
 | `--tags TAG[,TAG...]` | タグでホストをフィルタ。カンマ区切りは 1 グループ内の AND、`--tags` の繰り返しはグループ間 OR。ホスト名併記時はタグフィルタと積集合。詳細は「タグベースのホストフィルタリング」セクション参照 |
 | `--workers N` | 並列実行数（デフォルト: upgrade系=1, rsi=20） |
 | `--version` | プログラムバージョン表示 |
+
+### JSON 出力
+
+任意のサブコマンドに `--json` を付けると機械可読出力が得られます。ホストごとに 1 行の JSON オブジェクト（JSON Lines / JSONL）を出力するため、`--workers N` での並列実行とも自然に組み合わせられます。
+
+```console
+$ junos-ops version --json rt1.example.jp rt2.example.jp
+{"hostname": "rt1.example.jp", "ok": true, "model": "MX240", "running": "22.4R3-S6.5", ...}
+{"hostname": "rt2.example.jp", "ok": true, "model": "EX2300-24T", "running": "22.4R3-S6.5", ...}
+```
+
+- ログ（`config` のコミット進捗を含む）は **stderr** に出力されるため、`2>/dev/null` や stdout のみのパイプで純粋な JSON だけが得られます。
+- 接続失敗や実行中エラーのホストも 1 行を出力します（`{"hostname": ..., "ok": false, "error": ..., "error_message": ...}`）。consumer がホストの取りこぼしに気づけます。
+- `jq -s` で 1 つの配列に集約: `junos-ops version --json | jq -s '.'`
+- `check --json` は各行に `"check": "local"`（model 単位のインベントリ行）または `"check": "host"`（ホスト単位の行）を付与します。
 
 ## ワークフロー
 

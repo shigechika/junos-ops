@@ -83,6 +83,7 @@ LICENSE
 
 ### display.py — 表示層
 - `print_version()`, `print_copy()`, `print_install()`, `print_rollback()`, `print_reboot()`, `print_reinstall()`, `print_load_config()`, `print_list_remote()`, `print_dry_run()`, `print_rsi()`, `print_show()`, `print_connect_error()`, `print_read_config_error()`, `print_host_header()`, `print_host_footer()` — core が返す dict を人間向けに整形
+- `format_json(hostname, result)` / `print_json(hostname, result)` — core dict を `{"hostname": ..., **result}` の 1 行 JSON にシリアライズ（`--json` 用）。`format_json_obj(obj)` / `print_json_obj(obj)` は hostname を注入せず obj をそのまま出す（`check` の model 単位 row 用）。`json.dumps(..., default=str, ensure_ascii=False)` で lxml/datetime 等の非シリアライズ値も str fallback、非 ASCII はそのまま
 - `_print_lock` (`threading.Lock`) でマルチワーカー時の出力インターリーブを防止
 - junos-mcp など非 CLI 利用者は display を import しなければ stdout 出力ゼロ
 
@@ -104,7 +105,9 @@ LICENSE
 - `main()` — argparse サブコマンド定義、ディスパッチ
 - `cmd_upgrade()`, `cmd_copy()`, `cmd_install()`, `cmd_rollback()`, `cmd_version()`, `cmd_reboot()`, `cmd_ls()`, `cmd_show()`, `cmd_config()`, `cmd_facts()` — サブコマンド用エントリ関数（connect → header → core(dict) → display）
 - `_check_host(hostname)` — `check` サブコマンド用ワーカー。int ではなく dict を返し、`main()` で結果を集約して `display.print_check_table` にテーブル出力。モデル解決順: `--model` > `config.ini [host].model` > `dev.facts["model"]`
-- `_open_connection()` — NETCONF 接続＋エラー時の display 出力ヘルパー
+- `_open_connection()` — NETCONF 接続＋エラー時の display 出力ヘルパー（`--json` 時は connect エラーを JSON で出す）
+- `--json` グローバルオプション: 各 `cmd_*` は `_emit_result(hostname, result, formatter)` で「`--json` なら `display.print_json`、通常は `display.print_host_block(formatter(result))`」を分岐。失敗ホストは `_emit_exception` が `{"ok": false, "error", "error_message"}` の JSON 行を出す（JSONL consumer が行欠落で気づけないのを防ぐ）。出力は host ごと 1 行の JSONL（`run_parallel` で並列のため top-level 配列は作らない。`jq -s` で slurp）
+- `_route_logs_to_stderr()` — `--json` 時に root logger の stdout 向け StreamHandler を stderr へ移す。`logging.ini` の consoleHandler も fallback の basicConfig も stdout に出力するため、これをやらないと `load_config` の `logger.info` 進捗等が JSON を汚す。`_run()` で `common.args` 設定直後に呼ぶ
 
 ## CLI設計
 
@@ -124,7 +127,7 @@ junos-ops [hostname ...]                   # サブコマンド省略 → device
 junos-ops --version                        # プログラムバージョン
 ```
 
-共通オプション: `--config` (`-c`), `--dry-run` (`-n`), `-d`, `--force`, `--workers N`, `--tags TAG,...`
+共通オプション: `--config` (`-c`), `--dry-run` (`-n`), `-d`, `--force`, `--workers N`, `--tags TAG,...`, `--json`（機械可読 JSONL 出力。ログは stderr へ退避）
 
 ## 開発環境セットアップ
 
@@ -228,5 +231,4 @@ junos-ops upgrade --unlink ex3400-host.example.jp
 
 - `args`と`config`は`common`モジュールのグローバル変数として管理される
 - `config`への書き込みは`config_lock`（threading.Lock）で保護済み
-- `cli.py`の後方互換alias（`copy = upgrade.copy` 等）は将来のバージョンで削除予定
 - 新しいサブコマンドは出力を`display.print_host_block(hostname, body)`（または`print_facts`）で**1ブロックとして atomic に出力**すること。`print_host_header`単独 + 別の`print_*`/`print()`に分けると、`--workers N`並列実行時に他ホストの出力がヘッダと本体の間に割り込む。`cmd_facts`/`cmd_rsi`がこの不具合を抱えており v0.23.1 で修正済み

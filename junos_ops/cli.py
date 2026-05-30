@@ -64,6 +64,53 @@ from junos_ops import show  # noqa: E402
 # --- サブコマンド用エントリ関数 ---
 
 
+def _json_mode() -> bool:
+    """Return True when ``--json`` machine-readable output is requested."""
+    return getattr(common.args, "json", False)
+
+
+def _route_logs_to_stderr() -> None:
+    """Redirect any stdout-bound logging StreamHandler to stderr.
+
+    Under ``--json`` stdout must carry only JSON lines, but both the
+    shipped logging.ini console handler and the basicConfig fallback
+    write log records to stdout — and ``load_config`` streams progress
+    via ``logger.info``. Moving those handlers to stderr keeps logs as
+    diagnostics while stdout stays machine-parseable. A file handler's
+    stream is not ``sys.stdout`` so it is left untouched.
+    """
+    for h in logging.getLogger().handlers:
+        if isinstance(h, logging.StreamHandler) and getattr(h, "stream", None) is sys.stdout:
+            h.setStream(sys.stderr)
+
+
+def _emit_result(hostname: str, result: dict, formatter) -> None:
+    """Emit a core result as a JSON line (``--json``) or formatted text.
+
+    ``formatter`` is the matching ``display.format_*`` callable used for
+    the human-readable path.
+    """
+    if _json_mode():
+        display.print_json(hostname, result)
+    else:
+        display.print_host_block(hostname, formatter(result))
+
+
+def _emit_exception(hostname: str, exc: Exception) -> None:
+    """Report a worker-level exception as JSON (``--json``) or a log record.
+
+    In JSON mode a failed host emits an explicit error object so a JSONL
+    consumer sees a record rather than a silently missing line.
+    """
+    if _json_mode():
+        display.print_json(
+            hostname,
+            {"ok": False, "error": type(exc).__name__, "error_message": str(exc)},
+        )
+    else:
+        logger.error(f"{hostname}: {exc}")
+
+
 def _open_connection(hostname: str):
     """Open a NETCONF connection and render any error via the display layer.
 
@@ -72,7 +119,18 @@ def _open_connection(hostname: str):
     """
     conn = common.connect(hostname)
     if not conn["ok"]:
-        display.print_host_block(hostname, display.format_connect_error(conn))
+        if _json_mode():
+            display.print_json(
+                hostname,
+                {
+                    "ok": False,
+                    "phase": "connect",
+                    "error": conn.get("error"),
+                    "error_message": conn.get("error_message"),
+                },
+            )
+        else:
+            display.print_host_block(hostname, display.format_connect_error(conn))
         return None
     return conn["dev"]
 
@@ -83,13 +141,16 @@ def cmd_facts(hostname) -> int:
     if dev is None:
         return 1
     try:
-        # print_facts emits the header + facts under _print_lock as one
-        # atomic block, so parallel workers (--workers N) cannot interleave
-        # another host's output between this host's header and body.
-        display.print_facts(hostname, dev.facts)
+        if _json_mode():
+            display.print_json(hostname, dict(dev.facts))
+        else:
+            # print_facts emits the header + facts under _print_lock as one
+            # atomic block, so parallel workers (--workers N) cannot interleave
+            # another host's output between this host's header and body.
+            display.print_facts(hostname, dev.facts)
         return 0
     except Exception as e:
-        logger.error(f"{hostname}: {e}")
+        _emit_exception(hostname, e)
         return 1
     finally:
         try:
@@ -105,10 +166,10 @@ def cmd_upgrade(hostname) -> int:
         return 1
     try:
         result = upgrade.install(hostname, dev)
-        display.print_host_block(hostname, display.format_install(result))
+        _emit_result(hostname, result, display.format_install)
         return 0 if result.get("ok") else 1
     except Exception as e:
-        logger.error(f"{hostname}: {e}")
+        _emit_exception(hostname, e)
         return 1
     finally:
         try:
@@ -124,10 +185,10 @@ def cmd_copy(hostname) -> int:
         return 1
     try:
         result = upgrade.copy(hostname, dev)
-        display.print_host_block(hostname, display.format_copy(result))
+        _emit_result(hostname, result, display.format_copy)
         return 0 if result.get("ok") else 1
     except Exception as e:
-        logger.error(f"{hostname}: {e}")
+        _emit_exception(hostname, e)
         return 1
     finally:
         try:
@@ -143,10 +204,10 @@ def cmd_install(hostname) -> int:
         return 1
     try:
         result = upgrade.install(hostname, dev)
-        display.print_host_block(hostname, display.format_install(result))
+        _emit_result(hostname, result, display.format_install)
         return 0 if result.get("ok") else 1
     except Exception as e:
-        logger.error(f"{hostname}: {e}")
+        _emit_exception(hostname, e)
         return 1
     finally:
         try:
@@ -162,12 +223,22 @@ def cmd_rollback(hostname) -> int:
         return 1
     try:
         pending = upgrade.get_pending_version(hostname, dev)
-        lines = [f"rollback: pending version is {pending}"]
         if pending is None:
-            lines.append("rollback: skip")
-            display.print_host_block(hostname, "\n".join(lines))
+            if _json_mode():
+                display.print_json(
+                    hostname, {"ok": True, "pending": None, "skipped": True}
+                )
+            else:
+                display.print_host_block(
+                    hostname,
+                    "rollback: pending version is None\nrollback: skip",
+                )
             return 0
         result = upgrade.rollback(hostname, dev)
+        if _json_mode():
+            display.print_json(hostname, {"pending": pending, **result})
+            return 0 if result.get("ok") else 1
+        lines = [f"rollback: pending version is {pending}"]
         rb = display.format_rollback(result)
         if rb:
             lines.append(rb)
@@ -176,7 +247,7 @@ def cmd_rollback(hostname) -> int:
         display.print_host_block(hostname, "\n".join(lines))
         return 0 if result.get("ok") else 1
     except Exception as e:
-        logger.error(f"{hostname}: {e}")
+        _emit_exception(hostname, e)
         return 1
     finally:
         try:
@@ -192,10 +263,10 @@ def cmd_version(hostname) -> int:
         return 1
     try:
         result = upgrade.show_version(hostname, dev)
-        display.print_host_block(hostname, display.format_version(result))
+        _emit_result(hostname, result, display.format_version)
         return 0
     except Exception as e:
-        logger.error(f"{hostname}: {e}")
+        _emit_exception(hostname, e)
         return 1
     finally:
         try:
@@ -211,10 +282,10 @@ def cmd_reboot(hostname) -> int:
         return 1
     try:
         result = upgrade.reboot(hostname, dev, common.args.rebootat)
-        display.print_host_block(hostname, display.format_reboot(result))
+        _emit_result(hostname, result, display.format_reboot)
         return result.get("code", 1)
     except Exception as e:
-        logger.error(f"{hostname}: {e}")
+        _emit_exception(hostname, e)
         return 1
     finally:
         try:
@@ -248,10 +319,13 @@ def cmd_show(hostname) -> int:
                 retry=retry,
                 hostname=hostname,
             )
-        display.print_show(result)
+        if _json_mode():
+            display.print_json(hostname, result)
+        else:
+            display.print_show(result)
         return 0 if result["ok"] else 1
     except Exception as e:
-        logger.error(f"{hostname}: {e}")
+        _emit_exception(hostname, e)
         return 1
     finally:
         try:
@@ -263,9 +337,13 @@ def cmd_show(hostname) -> int:
 def cmd_config(hostname) -> int:
     """Push set command file to device."""
     if getattr(common.args, "no_commit", False) and getattr(common.args, "no_confirm", False):
-        display.print_host_block(
-            hostname, "\t--no-commit and --no-confirm are mutually exclusive"
-        )
+        msg = "--no-commit and --no-confirm are mutually exclusive"
+        if _json_mode():
+            display.print_json(
+                hostname, {"ok": False, "error": "MutuallyExclusiveArgs", "error_message": msg}
+            )
+        else:
+            display.print_host_block(hostname, f"\t{msg}")
         return 1
     dev = _open_connection(hostname)
     if dev is None:
@@ -282,10 +360,10 @@ def cmd_config(hostname) -> int:
             timeout = 120
         dev.timeout = timeout
         result = upgrade.load_config(hostname, dev, common.args.configfile)
-        display.print_host_block(hostname, display.format_load_config(result))
+        _emit_result(hostname, result, display.format_load_config)
         return 0 if result.get("ok") else 1
     except Exception as e:
-        logger.error(f"{hostname}: {e}")
+        _emit_exception(hostname, e)
         return 1
     finally:
         try:
@@ -532,10 +610,10 @@ def cmd_ls(hostname) -> int:
         return 1
     try:
         result = upgrade.list_remote_path(hostname, dev)
-        display.print_host_block(hostname, display.format_list_remote(result))
+        _emit_result(hostname, result, display.format_list_remote)
         return 0
     except Exception as e:
-        logger.error(f"{hostname}: {e}")
+        _emit_exception(hostname, e)
         return 1
     finally:
         try:
@@ -569,6 +647,14 @@ def _run():
         help="connect and message output. No execute.",
     )
     parent.add_argument("-d", "--debug", action="store_true", help="debug output")
+    parent.add_argument(
+        "--json", action="store_true",
+        help=(
+            "emit machine-readable JSON instead of human-readable text "
+            "(one JSON object per host per line; pipe to `jq -s` to slurp). "
+            "Logs are redirected to stderr so stdout stays pure JSON."
+        ),
+    )
     parent.add_argument(
         "--force", action="store_true", help="force execute",
     )
@@ -828,6 +914,8 @@ def _run():
             args.subcommand = None
 
     # 後方互換属性の設定
+    if not hasattr(args, "json"):
+        args.json = False
     if not hasattr(args, "list_format"):
         args.list_format = None
     if not hasattr(args, "rebootat"):
@@ -897,6 +985,10 @@ def _run():
     if common.args.config is None:
         common.args.config = common.get_default_config()
 
+    # --json: stdout must carry only JSON, so move log records to stderr.
+    if _json_mode():
+        _route_logs_to_stderr()
+
     logger.debug("start")
 
     cfg_result = common.read_config()
@@ -918,30 +1010,43 @@ def _run():
     if args.subcommand == "check":
         rc = 0
 
+        json_mode = _json_mode()
+
         # --local: staging server 側のファームウェア棚卸し（ホスト非依存）
         if common.args.check_local:
             inventory = _check_local_inventory()
-            display.print_check_local_inventory(inventory)
+            if json_mode:
+                # Inventory rows are model-keyed, not host-keyed; emit each
+                # as-is (it already carries a "model" field).
+                for row in inventory:
+                    display.print_json_obj({"check": "local", **row})
+            else:
+                display.print_check_local_inventory(inventory)
             for row in inventory:
                 if row.get("status") in ("bad", "missing", "error"):
                     rc = 1
 
         # --connect / --remote: ホスト単位でチェック
         if common.args.check_connect or common.args.check_remote:
-            if common.args.check_local:
+            if common.args.check_local and not json_mode:
                 # 2 つ目のテーブルの前にブランク行
                 print("")
             results = _run_check_with_progress(
                 targets, max_workers=common.args.workers
             )
             rows = [results[t] for t in targets if t in results]
-            display.print_check_table(
-                rows,
-                show_connect=common.args.check_connect,
-                show_local=False,
-                show_remote=common.args.check_remote,
-                show_disk=common.args.check_connect or common.args.check_remote,
-            )
+            if json_mode:
+                # Per-host rows already carry "hostname"; emit each as a line.
+                for row in rows:
+                    display.print_json_obj({"check": "host", **row})
+            else:
+                display.print_check_table(
+                    rows,
+                    show_connect=common.args.check_connect,
+                    show_local=False,
+                    show_remote=common.args.check_remote,
+                    show_disk=common.args.check_connect or common.args.check_remote,
+                )
             for row in rows:
                 if not isinstance(row, dict):
                     rc = 1

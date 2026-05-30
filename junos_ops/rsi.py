@@ -182,14 +182,29 @@ def cmd_rsi(hostname) -> int:
     # _print_lock once) so parallel workers (rsi defaults to --workers 20)
     # cannot interleave another host's output between this host's header
     # and its body.
+    json_mode = getattr(common.args, "json", False)
     conn = common.connect(hostname)
     if not conn["ok"]:
-        display.print_host_block(hostname, display.format_connect_error(conn))
+        if json_mode:
+            display.print_json(
+                hostname,
+                {
+                    "ok": False,
+                    "phase": "connect",
+                    "error": conn.get("error"),
+                    "error_message": conn.get("error_message"),
+                },
+            )
+        else:
+            display.print_host_block(hostname, display.format_connect_error(conn))
         return 1
     dev = conn["dev"]
     try:
         result = collect_rsi(hostname, dev)
-        display.print_host_block(hostname, display.format_rsi(result))
+        if json_mode:
+            display.print_json(hostname, result)
+        else:
+            display.print_host_block(hostname, display.format_rsi(result))
         return 0 if result["ok"] else (2 if result["error"] == "rsi_rpc" else 1)
     finally:
         try:
