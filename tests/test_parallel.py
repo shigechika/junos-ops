@@ -318,23 +318,56 @@ class TestGetTargetsWithExcludeTags:
         targets = junos_common.get_targets()
         assert targets == ["rt1.example.jp", "rt2.example.jp", "sw2.example.jp"]
 
-    def test_exclude_all_exits(self, junos_common, mock_args, mock_config_with_tags):
-        """If --exclude-tags removes every host, exit with sys.exit."""
+    def test_tagless_host_survives_exclude(
+        self, junos_common, mock_args, mock_config_with_tags
+    ):
+        """Hosts with no tags are never matched by --exclude-tags."""
         junos_common.args.specialhosts = []
         junos_common.args.tags = None
-        # All four hosts get dropped: core matches rt1/rt2, access matches sw1,
-        # and sw2 has no tags; combine to cover sw2 too.
+        # core matches rt1/rt2, access matches sw1, but sw2 has no tags so
+        # it cannot be a superset of any exclude group and stays.
         junos_common.args.exclude_tags = ["core", "access"]
-        # sw2 has no tags so survives -- check that path first.
         targets = junos_common.get_targets()
         assert targets == ["sw2.example.jp"]
+
+    def test_exclude_only_drops_everything_exits(
+        self, junos_common, mock_args, mock_config_with_tags
+    ):
+        """Pattern 1: --exclude-tags only that removes every host -> sys.exit."""
+        junos_common.args.specialhosts = []
+        junos_common.args.tags = None
+        # Tag the tagless host so every section gets dropped.
+        junos_common.config.set("sw2.example.jp", "tags", "drop")
+        junos_common.args.exclude_tags = ["core", "access", "drop"]
+        with pytest.raises(SystemExit):
+            junos_common.get_targets()
+
+    def test_exclude_with_hosts_drops_all_exits(
+        self, junos_common, mock_args, mock_config_with_tags
+    ):
+        """Pattern 2: hosts + --exclude-tags that drops every named host -> sys.exit."""
+        junos_common.args.specialhosts = ["sw1.example.jp"]
+        junos_common.args.tags = None
+        junos_common.args.exclude_tags = "access"
+        with pytest.raises(SystemExit):
+            junos_common.get_targets()
 
     def test_exclude_with_tags_empty_exits(
         self, junos_common, mock_args, mock_config_with_tags
     ):
-        """--tags + --exclude-tags that leaves nothing -> sys.exit."""
+        """Pattern 3: --tags + --exclude-tags that leaves nothing -> sys.exit."""
         junos_common.args.specialhosts = []
         junos_common.args.tags = "core"
+        junos_common.args.exclude_tags = "core"
+        with pytest.raises(SystemExit):
+            junos_common.get_targets()
+
+    def test_exclude_with_tags_and_hosts_empty_exits(
+        self, junos_common, mock_args, mock_config_with_tags
+    ):
+        """Pattern 4: --tags + hosts + --exclude-tags that leaves nothing -> sys.exit."""
+        junos_common.args.specialhosts = ["rt1.example.jp"]
+        junos_common.args.tags = "tokyo"
         junos_common.args.exclude_tags = "core"
         with pytest.raises(SystemExit):
             junos_common.get_targets()

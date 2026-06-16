@@ -233,7 +233,8 @@ def get_targets():
 
     tag_groups = _parse_tag_groups(tags)
     exclude_groups = _parse_tag_groups(exclude_tags)
-    excluded = set(_filter_by_tag_groups(exclude_groups)) if exclude_groups else set()
+    # _filter_by_tag_groups([]) returns [] so set() is empty; no ternary needed.
+    excluded = set(_filter_by_tag_groups(exclude_groups))
 
     def _drop_excluded(hosts):
         if not excluded:
@@ -252,7 +253,11 @@ def get_targets():
             _fatal("no hosts left after --exclude-tags:", exclude_tags)
         return targets
 
-    # パターン2: --tags なし & hosts あり → 指定ホストのみ（現行動作）
+    # パターン2: --tags なし & hosts あり → 指定ホストのみ（現行動作）。
+    # Explicitly named hosts are still subject to --exclude-tags: the
+    # operator opted into "from these names, drop the ones matching X
+    # tag" by passing both, so this is the requested behavior, not an
+    # over-reach.
     if not tag_groups and has_hosts:
         targets = []
         for i in args.specialhosts:
