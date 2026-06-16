@@ -272,7 +272,12 @@ class TestCheckLocalInventory:
         assert all(call.args[0] == "DEFAULT" for call in mock_chk.call_args_list)
 
     def test_model_filter(self, mock_config):
-        """--model X restricts inventory to the requested model only."""
+        """--model X restricts inventory to the requested model only.
+
+        The model name is normalized to lowercase so the rendered model
+        column matches the default listing (configparser lowercases keys
+        and the firmware lookup is case-insensitive).
+        """
         common.args = _make_check_args(check_local=True, check_model="EX2300-24T")
         with patch.object(
             junos_upgrade_mod,
@@ -280,8 +285,9 @@ class TestCheckLocalInventory:
             return_value={"status": "ok", "file": "pkg", "cached": False},
         ) as mock_chk:
             rows = cli._check_local_inventory()
-        mock_chk.assert_called_once_with("DEFAULT", "EX2300-24T")
+        mock_chk.assert_called_once_with("DEFAULT", "ex2300-24t")
         assert len(rows) == 1
+        assert rows[0]["model"] == "ex2300-24t"
 
 
 def _make_model_tags_config():
@@ -449,6 +455,20 @@ class TestCheckLocalInventoryModelTags:
             cli._check_local_inventory()
         models = sorted(c.args[1] for c in mock_chk.call_args_list)
         assert models == ["ex2300-24t", "ex3400-24t", "mx240", "srx345"]
+
+    def test_model_case_matches_default_listing(self, junos_common):
+        """--model EX2300-24T renders the same label as the default listing."""
+        common.config = _make_model_tags_config()
+        # Default listing label for this model.
+        common.args = _make_check_args(check_local=True)
+        with self._patched_check():
+            default_rows = cli._check_local_inventory()
+        default_label = next(r["model"] for r in default_rows if r["model"] == "ex2300-24t")
+        # Same model via uppercase --model must produce the identical label.
+        common.args = _make_check_args(check_local=True, check_model="EX2300-24T")
+        with self._patched_check():
+            model_rows = cli._check_local_inventory()
+        assert [r["model"] for r in model_rows] == [default_label]
 
 
 class TestCheckLocalInventoryFormat:

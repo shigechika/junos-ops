@@ -580,7 +580,12 @@ def _check_local_inventory() -> list[dict]:
     exclude_tags = getattr(common.args, "exclude_tags", None)
 
     if filter_model:
-        models = [filter_model]
+        # iter_configured_models() yields lowercase names (configparser
+        # lowercases keys), and the firmware lookup is case-insensitive
+        # too. Normalize the --model value so the rendered model column
+        # matches the default listing instead of echoing the user's
+        # casing (e.g. EX2300-24T vs ex2300-24t for the same model).
+        models = [filter_model.lower()]
     else:
         models = upgrade.iter_configured_models()
 
@@ -856,7 +861,7 @@ def _run():
     p_check = subparsers.add_parser(
         "check",
         parents=[parent],
-        help="pre-flight checks (NETCONF reachability, local/remote firmware hash)",
+        help="pre-flight checks (NETCONF reachability, local/remote firmware checksum)",
     )
     p_check.add_argument(
         "--connect", dest="check_connect", action="store_true",

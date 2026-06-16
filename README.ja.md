@@ -18,7 +18,7 @@ Juniper/JUNOS デバイスの運用を NETCONF 経由で自動化する Python C
 - ロールバック対応（MX/EX/SRX モデル別処理）
 - スケジュールリブート（ファームウェアインストール後の config 変更を自動検出し、必要なら再インストール）
 - RSI（request support information）/ SCF（show configuration | display set）の並列収集
-- Pre-flight `check` サブコマンド: NETCONF 疎通・ローカル firmware ハッシュ（デバイス接続不要）・リモート firmware ハッシュを 1 コマンドで統合表示
+- Pre-flight `check` サブコマンド: NETCONF 疎通・ローカル firmware チェックサム（デバイス接続不要）・リモート firmware チェックサムを 1 コマンドで統合表示
 - 任意の CLI コマンドを複数ホストで実行（`show` サブコマンド、`RpcTimeoutError` 自動リトライ対応）
 - `config` での設定投入（commit confirmed + コミット後ヘルスチェック: ping / `uptime` NETCONF プローブ / 任意の CLI コマンド）
 - Jinja2 テンプレートによるホスト別設定生成（[詳細](docs/template.md#日本語版)）
@@ -207,7 +207,7 @@ junos-ops <subcommand> [options] [hostname ...]
 | `reboot --at YYMMDDHHMM` | 指定日時にリブートをスケジュール |
 | `ls [-l]` | リモートパスのファイル一覧 |
 | `show COMMAND [--retry N]` / `show -f FILE` | 任意の CLI コマンド（またはコマンドファイル）を複数ホストで実行 |
-| `check [--connect\|--local\|--remote\|--all] [--model M]` | Pre-flight チェック: NETCONF 疎通・ローカル/リモート firmware ハッシュ |
+| `check [--connect\|--local\|--remote\|--all] [--model M]` | Pre-flight チェック: NETCONF 疎通・ローカル/リモート firmware チェックサム |
 | `config -f FILE` | set コマンドファイルを適用（`--confirm` / `--timeout` / `--no-confirm` / `--no-commit` / `--health-check` / `--no-health-check` の詳細は [docs/config.md](docs/config.md) を参照） |
 | `rsi` | RSI/SCF を並列収集 |
 | （なし） | デバイスファクト（device facts）を表示 |
@@ -453,7 +453,7 @@ rt1.example.jp: software validate package-result: 0
 
 ### check（Pre-flight 検証）
 
-NETCONF 疎通、ローカル/リモートの firmware ハッシュを 1 コマンドで一括検証します。1 件でも失敗すると終了コードが非ゼロになります。フラグ未指定時のデフォルトは `--connect` のみ。
+NETCONF 疎通、ローカル/リモートの firmware チェックサムを 1 コマンドで一括検証します。1 件でも失敗すると終了コードが非ゼロになります。フラグ未指定時のデフォルトは `--connect` のみ。
 
 `--local` は **インベントリモード** で、ホスト名は無視されます。`config.ini` に記載された `<model>.file` / `<model>.hash` のペアを列挙してステージングサーバー上のファイルを検証するので、NETCONF 接続は一切不要です:
 
