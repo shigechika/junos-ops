@@ -480,7 +480,7 @@ class TestCheckLocalInventoryFormat:
         # local_file column is dropped.
         assert "local_file" not in out
         assert "ok(cached)" in out
-        assert "missing" in out  # status column shows it
+        assert "missing" in out  # checksum column shows it
         # 'missing' has no detail line (status + file column already convey it).
         assert "mx5-t:" not in out
 
@@ -572,7 +572,7 @@ class TestFormatCheckTable:
             rows, show_connect=True, show_local=True, show_remote=True
         )
         assert "ok(cached)" in out
-        assert "missing" in out  # status column shows it
+        assert "missing" in out  # checksum column shows it
         assert "jinstall-ppc.tgz" in out
         # 'missing' alone no longer triggers a detail line (redundant).
         assert "rt2: remote:" not in out

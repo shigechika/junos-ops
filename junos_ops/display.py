@@ -671,13 +671,14 @@ def format_check_local_inventory(rows: list[dict]) -> str:
     """Render ``check --local`` inventory results (one row per model).
 
     ``rows`` come from :func:`cli._check_local_inventory`. Columns:
-    ``model`` / ``file`` / ``status``. When any row resolves its
-    firmware under a non-empty ``lpath`` directory, that prefix is
-    shown once above the table (``lpath: /path``) instead of being
-    duplicated into every row. Failure detail messages (bad / missing
-    / error) are appended below.
+    ``model`` / ``file`` / ``checksum`` (the checksum-verification
+    result; the underlying dict field is still named ``status``). When
+    any row resolves its firmware under a non-empty ``lpath``
+    directory, that prefix is shown once above the table
+    (``lpath: /path``) instead of being duplicated into every row.
+    Failure detail messages (bad / missing / error) are appended below.
     """
-    headers = ["model", "file", "status"]
+    headers = ["model", "file", "checksum"]
     body: list[list[str]] = []
     for r in rows:
         status = r.get("status", "-")

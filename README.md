@@ -481,12 +481,13 @@ Unified pre-flight checks across NETCONF reachability and firmware hashes. Exit 
 
 ```
 % junos-ops check --local
-model            file                                                        status      local_file
----------------  ----------------------------------------------------------  ----------  ----------------------------------------------------------------------
-ex2300-24t       junos-arm-32-23.4R2-S7.4.tgz                                ok          /opt/firmware/junos-arm-32-23.4R2-S7.4.tgz
-ex3400-24t       junos-arm-32-23.4R2-S7.4.tgz                                ok(cached)  /opt/firmware/junos-arm-32-23.4R2-S7.4.tgz
-ex4300-32f       jinstall-ex-4300-21.4R3-S12.2-signed.tgz                    ok          /opt/firmware/jinstall-ex-4300-21.4R3-S12.2-signed.tgz
-mx5-t            jinstall-ppc-21.2R3-S8.5-signed.tgz                         missing     /opt/firmware/jinstall-ppc-21.2R3-S8.5-signed.tgz
+lpath: /opt/firmware
+model            file                                                        checksum
+---------------  ----------------------------------------------------------  ----------
+ex2300-24t       junos-arm-32-23.4R2-S7.4.tgz                                ok
+ex3400-24t       junos-arm-32-23.4R2-S7.4.tgz                                ok(cached)
+ex4300-32f       jinstall-ex-4300-21.4R3-S12.2-signed.tgz                    ok
+mx5-t            jinstall-ppc-21.2R3-S8.5-signed.tgz                         missing
 
   mx5-t: - local package: /opt/firmware/jinstall-ppc-21.2R3-S8.5-signed.tgz is not found.
 ```
