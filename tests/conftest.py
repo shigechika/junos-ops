@@ -36,6 +36,7 @@ def mock_args(junos_common):
         show_command=None,
         showfile=None,
         tags=None,
+        exclude_tags=None,
         retry=0,
         rpc_timeout=None,
         no_confirm=False,

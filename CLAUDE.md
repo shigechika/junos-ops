@@ -56,7 +56,7 @@ LICENSE
 - `_get_host_tags()` — ホストセクションのタグを set で返す
 - `_parse_tag_groups()` — `--tags` CLI 値（list / str / None）を set のリストに正規化
 - `_filter_by_tag_groups()` — タグのグループで絞り込み（グループ内 AND、グループ間 OR）
-- `get_targets()` — ターゲットホストリスト決定（`--tags` は `action="append"`。ホスト名併記時はタグフィルタ ∩ 名前リスト）
+- `get_targets()` — ターゲットホストリスト決定（`--tags` は `action="append"`。ホスト名併記時はタグフィルタ ∩ 名前リスト。`--exclude-tags` は `--tags` 同文法・`action="append"` で最終段の除外フィルタとして適用、単独利用可、全除外時は `_fatal` で sys.exit）
 - `run_parallel()` — ThreadPoolExecutorラッパー（max_workers=1でシリアル実行）
 
 ### upgrade.py — パッケージ操作（すべて dict を返す）
@@ -127,7 +127,7 @@ junos-ops [hostname ...]                   # サブコマンド省略 → device
 junos-ops --version                        # プログラムバージョン
 ```
 
-共通オプション: `--config` (`-c`), `--dry-run` (`-n`), `-d`, `--force`, `--workers N`, `--tags TAG,...`, `--json`（機械可読 JSONL 出力。ログは stderr へ退避）
+共通オプション: `--config` (`-c`), `--dry-run` (`-n`), `-d`, `--force`, `--workers N`, `--tags TAG,...`, `--exclude-tags TAG,...`, `--json`（機械可読 JSONL 出力。ログは stderr へ退避）
 
 ## 開発環境セットアップ
 

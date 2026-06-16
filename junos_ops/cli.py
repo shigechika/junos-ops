@@ -670,6 +670,16 @@ def _run():
             "groups: --tags a,b --tags c = (a AND b) OR c."
         ),
     )
+    parent.add_argument(
+        "--exclude-tags", type=str, default=None, action="append",
+        dest="exclude_tags",
+        help=(
+            "exclude hosts whose tags match. Same AND/OR grammar as --tags "
+            "(comma = AND within a group, repeat to OR groups). Applied "
+            "after --tags. Usable on its own to drop a subset from the "
+            "default 'all hosts' selection: --exclude-tags srx345."
+        ),
+    )
 
     parser = argparse.ArgumentParser(
         description="junos-ops: Juniper Networks デバイス管理ツール",
@@ -938,6 +948,8 @@ def _run():
         args.show_format = "text"
     if not hasattr(args, "tags"):
         args.tags = None
+    if not hasattr(args, "exclude_tags"):
+        args.exclude_tags = None
     if not hasattr(args, "retry"):
         args.retry = 0
     if not hasattr(args, "rpc_timeout"):
