@@ -223,6 +223,7 @@ junos-ops <subcommand> [options] [hostname ...]
 | `--force` | 条件を無視して強制実行 |
 | `--json` | 人間向けテキストの代わりに機械可読 JSON を出力。ホストごとに 1 行の JSON オブジェクト（JSONL）。ログは stderr に退避されるため stdout は純粋な JSON のみ。`jq -s` で配列に slurp 可能。詳細は「JSON 出力」セクション参照 |
 | `--tags TAG[,TAG...]` | タグでホストをフィルタ。カンマ区切りは 1 グループ内の AND、`--tags` の繰り返しはグループ間 OR。ホスト名併記時はタグフィルタと積集合。詳細は「タグベースのホストフィルタリング」セクション参照 |
+| `--exclude-tags TAG[,TAG...]` | タグに一致するホストを除外。文法は `--tags` と同じ（カンマ区切り＝グループ内 AND、繰り返し＝グループ間 OR）。`--tags` 適用後にかかり、単独でも利用可（デフォルトの「全ホスト」集合から差し引く） |
 | `--workers N` | 並列実行数（デフォルト: upgrade系=1, rsi=20） |
 | `--version` | プログラムバージョン表示 |
 
@@ -395,6 +396,27 @@ junos-ops version --tags tokyo,core --tags access
 
 # backup タグを持つホストのうち、指定した 2 台だけを対象にする（タグフィルタ ∩ 名前リスト）
 junos-ops copy --tags backup rt1.example.jp rt2.example.jp
+```
+
+#### `--exclude-tags` で除外する
+
+`--exclude-tags` は `--tags` と同じ文法でホストを「落とす」フィルタです。`--tags` とホスト名による絞り込みが終わったあとに最終段として適用されます。
+
+- `--exclude-tags a,b` は `a` と `b` を**両方**持つホストだけ落とします（グループ内 AND）。
+- 繰り返し指定するとグループ間 OR になり、`--exclude-tags a --exclude-tags b` は `a` または `b` を持つホストを落とします。
+- `--exclude-tags` は単独利用も可能です。`--tags` やホスト名指定が無いときはデフォルトの「全セクション」集合から差し引きます。
+- すべてのホストが除外された場合は黙って no-op せずエラー終了します。
+
+```
+# main タグ持ちのうち SRX345 以外
+junos-ops check --remote --tags main --exclude-tags srx345
+
+# lab タグ以外の全ホスト
+junos-ops version --exclude-tags lab
+
+# main タグ持ちから SRX345 と EOL 機種を両方落とす（OR で除外）
+junos-ops check --remote --tags main \
+                --exclude-tags srx345 --exclude-tags eol
 ```
 
 ## 実行例

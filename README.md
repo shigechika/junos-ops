@@ -223,6 +223,7 @@ junos-ops <subcommand> [options] [hostname ...]
 | `--force` | Force execution regardless of conditions |
 | `--json` | Emit machine-readable JSON instead of human-readable text. One JSON object per host per line (JSONL); logs are routed to stderr so stdout stays pure JSON. Pipe to `jq -s` to slurp into an array. See "JSON Output" below. |
 | `--tags TAG[,TAG...]` | Filter hosts by tags. Comma-separates AND together inside one value; repeating `--tags` ORs groups. Combined with explicit hostnames, the tag filter and hostname list intersect. See "Tag-based Host Filtering" below. |
+| `--exclude-tags TAG[,TAG...]` | Drop hosts whose tags match. Same AND/OR grammar as `--tags` (comma = AND within a group, repeat to OR groups). Applied after `--tags`; usable standalone to subtract a subset from the default "all hosts" selection. |
 | `--workers N` | Parallel workers (default: 1 for upgrade, 20 for rsi) |
 | `--version` | Show program version |
 
@@ -410,6 +411,34 @@ junos-ops version --tags tokyo,core --tags access
 # Among "backup"-tagged hosts, target only these two (tag filter +
 # hostname list = intersection)
 junos-ops copy --tags backup rt1.example.jp rt2.example.jp
+```
+
+#### Excluding hosts with `--exclude-tags`
+
+`--exclude-tags` removes hosts from the selection using the same
+grammar as `--tags`. It runs **after** `--tags` and the hostname
+intersection, so it acts as a final "drop these" pass.
+
+- `--exclude-tags a,b` drops hosts tagged with *both* `a` and `b`
+  (AND within a group).
+- Repeating the flag ORs groups, so
+  `--exclude-tags a --exclude-tags b` drops hosts tagged with `a`
+  *or* `b`.
+- `--exclude-tags` may be used on its own; without `--tags` or a
+  hostname list it subtracts from the default "all sections" set.
+- If every candidate host is dropped, junos-ops exits with an error
+  instead of silently no-op'ing.
+
+```
+# All hosts tagged "main" except SRX345 boxes
+junos-ops check --remote --tags main --exclude-tags srx345
+
+# Run against every host except the lab tier
+junos-ops version --exclude-tags lab
+
+# Drop SRX345 OR EOL hosts from the main set
+junos-ops check --remote --tags main \
+                --exclude-tags srx345 --exclude-tags eol
 ```
 
 ## Examples

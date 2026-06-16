@@ -220,6 +220,7 @@ def _parse_tag_groups(tags) -> list[set[str]]:
 def get_targets():
     """Return target host list from CLI args, tags, or config sections."""
     tags = getattr(args, "tags", None)
+    exclude_tags = getattr(args, "exclude_tags", None)
     has_hosts = len(args.specialhosts) > 0
 
     def _fatal(*parts):
@@ -231,18 +232,32 @@ def get_targets():
         sys.exit(1)
 
     tag_groups = _parse_tag_groups(tags)
+    exclude_groups = _parse_tag_groups(exclude_tags)
+    # _filter_by_tag_groups([]) returns [] so set() is empty; no ternary needed.
+    excluded = set(_filter_by_tag_groups(exclude_groups))
+
+    def _drop_excluded(hosts):
+        if not excluded:
+            return hosts
+        return [h for h in hosts if h not in excluded]
 
     # パターン1: --tags なし & hosts なし → 全セクション（現行動作）
     if not tag_groups and not has_hosts:
         # read_config() guarantees every section has a 'host' option (it
         # sets it to the section name when absent), so the previous None
         # check / sys.exit branch here was unreachable.
-        targets = list(config.sections())
+        targets = _drop_excluded(list(config.sections()))
         for i in targets:
             logger.debug(f"{i=} host={config.get(i, 'host')}")
+        if exclude_groups and not targets:
+            _fatal("no hosts left after --exclude-tags:", exclude_tags)
         return targets
 
-    # パターン2: --tags なし & hosts あり → 指定ホストのみ（現行動作）
+    # パターン2: --tags なし & hosts あり → 指定ホストのみ（現行動作）。
+    # Explicitly named hosts are still subject to --exclude-tags: the
+    # operator opted into "from these names, drop the ones matching X
+    # tag" by passing both, so this is the requested behavior, not an
+    # over-reach.
     if not tag_groups and has_hosts:
         targets = []
         for i in args.specialhosts:
@@ -252,6 +267,12 @@ def get_targets():
                 _fatal(i, "is not found in", args.config)
             logger.debug(f"{i=} {tmp=}")
             targets.append(i)
+        targets = _drop_excluded(targets)
+        if exclude_groups and not targets:
+            _fatal(
+                "no hosts left after --exclude-tags:",
+                exclude_tags, args.specialhosts,
+            )
         return targets
 
     # Pattern 3: --tags only -> union of each group's AND match.
@@ -259,8 +280,13 @@ def get_targets():
     # --tags occurrences OR together. Example: --tags a,b --tags c
     # matches hosts with (a AND b) OR c.
     if tag_groups and not has_hosts:
-        targets = _filter_by_tag_groups(tag_groups)
+        targets = _drop_excluded(_filter_by_tag_groups(tag_groups))
         if not targets:
+            if exclude_groups:
+                _fatal(
+                    "no hosts left after --tags and --exclude-tags:",
+                    tags, exclude_tags,
+                )
             _fatal("no hosts matched tags:", tags)
         return targets
 
@@ -274,7 +300,13 @@ def get_targets():
             _fatal(i, "is not found in", args.config)
         if i in tag_matched:
             targets.append(i)
+    targets = _drop_excluded(targets)
     if not targets:
+        if exclude_groups:
+            _fatal(
+                "no hosts left after --tags, --exclude-tags and names:",
+                tags, exclude_tags, args.specialhosts,
+            )
         _fatal("no hosts matched both tags and names:", tags, args.specialhosts)
     return targets
 

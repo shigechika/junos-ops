@@ -247,3 +247,127 @@ class TestGetTargetsWithTags:
         junos_common.args.tags = "access"
         targets = junos_common.get_targets()
         assert targets == ["sw1.example.jp"]
+
+
+class TestGetTargetsWithExcludeTags:
+    """Tests for --exclude-tags filtering in get_targets()."""
+
+    def test_exclude_only_drops_tag(self, junos_common, mock_args, mock_config_with_tags):
+        """--exclude-tags only: drop matching hosts from the all-sections default."""
+        junos_common.args.specialhosts = []
+        junos_common.args.tags = None
+        junos_common.args.exclude_tags = "access"
+        targets = junos_common.get_targets()
+        # sw1 has access; everyone else stays. sw2 has no tags so it stays.
+        assert targets == ["rt1.example.jp", "rt2.example.jp", "sw2.example.jp"]
+
+    def test_exclude_only_no_match_keeps_all(
+        self, junos_common, mock_args, mock_config_with_tags
+    ):
+        """--exclude-tags with no matching host leaves the selection untouched."""
+        junos_common.args.specialhosts = []
+        junos_common.args.tags = None
+        junos_common.args.exclude_tags = "nonexistent"
+        targets = junos_common.get_targets()
+        assert targets == [
+            "rt1.example.jp", "rt2.example.jp",
+            "sw1.example.jp", "sw2.example.jp",
+        ]
+
+    def test_exclude_with_tags(self, junos_common, mock_args, mock_config_with_tags):
+        """--tags core --exclude-tags osaka: keep core hosts minus osaka."""
+        junos_common.args.specialhosts = []
+        junos_common.args.tags = "core"
+        junos_common.args.exclude_tags = "osaka"
+        targets = junos_common.get_targets()
+        # core matches rt1 and rt2; rt2 has osaka -> dropped.
+        assert targets == ["rt1.example.jp"]
+
+    def test_exclude_with_hosts(self, junos_common, mock_args, mock_config_with_tags):
+        """hosts + --exclude-tags drops listed hosts that match the exclude group."""
+        junos_common.args.specialhosts = ["rt1.example.jp", "sw1.example.jp"]
+        junos_common.args.tags = None
+        junos_common.args.exclude_tags = "access"
+        targets = junos_common.get_targets()
+        # sw1 has access -> dropped. rt1 stays.
+        assert targets == ["rt1.example.jp"]
+
+    def test_exclude_and_within_group(self, junos_common, mock_args, mock_config_with_tags):
+        """--exclude-tags tokyo,core: only drop hosts with BOTH tokyo AND core."""
+        junos_common.args.specialhosts = []
+        junos_common.args.tags = None
+        junos_common.args.exclude_tags = "tokyo,core"
+        targets = junos_common.get_targets()
+        # Only rt1 has both -> dropped. sw1 has tokyo only, so it stays.
+        assert targets == ["rt2.example.jp", "sw1.example.jp", "sw2.example.jp"]
+
+    def test_exclude_repeated_or(self, junos_common, mock_args, mock_config_with_tags):
+        """--exclude-tags a --exclude-tags b: OR across groups."""
+        junos_common.args.specialhosts = []
+        junos_common.args.tags = None
+        junos_common.args.exclude_tags = ["access", "osaka"]
+        targets = junos_common.get_targets()
+        # access -> sw1; osaka -> rt2.
+        assert targets == ["rt1.example.jp", "sw2.example.jp"]
+
+    def test_exclude_case_insensitive(self, junos_common, mock_args, mock_config_with_tags):
+        """--exclude-tags is case-insensitive like --tags."""
+        junos_common.args.specialhosts = []
+        junos_common.args.tags = None
+        junos_common.args.exclude_tags = "ACCESS"
+        targets = junos_common.get_targets()
+        assert targets == ["rt1.example.jp", "rt2.example.jp", "sw2.example.jp"]
+
+    def test_tagless_host_survives_exclude(
+        self, junos_common, mock_args, mock_config_with_tags
+    ):
+        """Hosts with no tags are never matched by --exclude-tags."""
+        junos_common.args.specialhosts = []
+        junos_common.args.tags = None
+        # core matches rt1/rt2, access matches sw1, but sw2 has no tags so
+        # it cannot be a superset of any exclude group and stays.
+        junos_common.args.exclude_tags = ["core", "access"]
+        targets = junos_common.get_targets()
+        assert targets == ["sw2.example.jp"]
+
+    def test_exclude_only_drops_everything_exits(
+        self, junos_common, mock_args, mock_config_with_tags
+    ):
+        """Pattern 1: --exclude-tags only that removes every host -> sys.exit."""
+        junos_common.args.specialhosts = []
+        junos_common.args.tags = None
+        # Tag the tagless host so every section gets dropped.
+        junos_common.config.set("sw2.example.jp", "tags", "drop")
+        junos_common.args.exclude_tags = ["core", "access", "drop"]
+        with pytest.raises(SystemExit):
+            junos_common.get_targets()
+
+    def test_exclude_with_hosts_drops_all_exits(
+        self, junos_common, mock_args, mock_config_with_tags
+    ):
+        """Pattern 2: hosts + --exclude-tags that drops every named host -> sys.exit."""
+        junos_common.args.specialhosts = ["sw1.example.jp"]
+        junos_common.args.tags = None
+        junos_common.args.exclude_tags = "access"
+        with pytest.raises(SystemExit):
+            junos_common.get_targets()
+
+    def test_exclude_with_tags_empty_exits(
+        self, junos_common, mock_args, mock_config_with_tags
+    ):
+        """Pattern 3: --tags + --exclude-tags that leaves nothing -> sys.exit."""
+        junos_common.args.specialhosts = []
+        junos_common.args.tags = "core"
+        junos_common.args.exclude_tags = "core"
+        with pytest.raises(SystemExit):
+            junos_common.get_targets()
+
+    def test_exclude_with_tags_and_hosts_empty_exits(
+        self, junos_common, mock_args, mock_config_with_tags
+    ):
+        """Pattern 4: --tags + hosts + --exclude-tags that leaves nothing -> sys.exit."""
+        junos_common.args.specialhosts = ["rt1.example.jp"]
+        junos_common.args.tags = "tokyo"
+        junos_common.args.exclude_tags = "core"
+        with pytest.raises(SystemExit):
+            junos_common.get_targets()
