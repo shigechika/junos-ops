@@ -117,3 +117,49 @@ class TestUnlinkOption:
         with patch.object(sys, "argv", ["junos-ops", "upgrade", "-c", "config.ini", "host1"]):
             cli.main()
         assert cli.common.args.unlink is False
+
+
+class TestCheckLocalHostSelectorSkip:
+    """`check --local` (host-independent) must skip the host selector.
+
+    Exercises the ``local_only_check`` branch in ``_run()`` end-to-end
+    via ``cli.main()`` so the skip logic itself is covered, not just the
+    inventory filter that ``_check_local_inventory`` performs.
+    """
+
+    @patch("junos_ops.cli._check_local_inventory", return_value=[])
+    @patch("junos_ops.common.get_targets")
+    @patch("junos_ops.common.read_config", return_value={"ok": True, "path": "config.ini", "sections": ["test-host"], "error": None})
+    @patch("junos_ops.common.get_default_config", return_value="config.ini")
+    def test_local_only_skips_get_targets(
+        self, mock_default, mock_read, mock_targets, mock_inv, capsys
+    ):
+        """`check --local --tags X` must not call get_targets (no host filter)."""
+        with patch.object(
+            sys, "argv",
+            ["junos-ops", "check", "--local", "--tags", "ex2300-24t", "-c", "config.ini"],
+        ):
+            cli.main()
+        # The model selector is carried by --tags; the host selector that
+        # would otherwise sys.exit on "no hosts matched tags" is skipped.
+        mock_targets.assert_not_called()
+        mock_inv.assert_called_once()
+        # --tags reached args for _check_local_inventory to read.
+        assert cli.common.args.tags == ["ex2300-24t"]
+
+    @patch("junos_ops.cli._check_local_inventory", return_value=[])
+    @patch("junos_ops.cli._run_check_with_progress", return_value={})
+    @patch("junos_ops.common.get_targets", return_value=[])
+    @patch("junos_ops.common.read_config", return_value={"ok": True, "path": "config.ini", "sections": ["test-host"], "error": None})
+    @patch("junos_ops.common.get_default_config", return_value="config.ini")
+    def test_local_plus_connect_keeps_host_selector(
+        self, mock_default, mock_read, mock_targets, mock_progress, mock_inv, capsys
+    ):
+        """`check --local --connect` keeps get_targets for the per-host part."""
+        with patch.object(
+            sys, "argv",
+            ["junos-ops", "check", "--local", "--connect", "-c", "config.ini"],
+        ):
+            cli.main()
+        mock_targets.assert_called_once()
+        mock_inv.assert_called_once()

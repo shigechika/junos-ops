@@ -525,6 +525,12 @@ For `--local`-only runs, host-side `--tags` (the per-host tag selector) is
 the model selector described above. Mixing `--local` with `--connect` /
 `--remote` keeps the host selector active for the per-host part.
 
+> **Note on `--all` (or `--local --connect`/`--remote`):** a single `--tags`
+> value filters *both* tables at once — the inventory table by `<model>.tags`
+> (and model name) and the per-host table by host tags. The two tag namespaces
+> are independent, so keep their names aligned (e.g. a `main` model tag and a
+> `main` host tag) if you want `--all --tags main` to scope both consistently.
+
 `--connect` / `--remote` (and `--all`) are **per-host** and use the specified hostnames (or every host in `config.ini`, optionally filtered by `--tags`). `--remote` doubles as a "did the SCP copy fully land" check between `copy` and `install`:
 
 ```
