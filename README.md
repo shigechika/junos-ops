@@ -18,7 +18,7 @@ A Python CLI to automate Juniper/JUNOS operations over NETCONF: model-aware upgr
 - Rollback support (model-specific handling for MX/EX/SRX)
 - Scheduled reboot with automatic config-drift detection and re-install
 - Parallel RSI (request support information) / SCF (show configuration | display set) collection
-- Pre-flight `check` subcommand: NETCONF reachability, local firmware hash (device-less), and remote firmware hash in one unified table
+- Pre-flight `check` subcommand: NETCONF reachability, local firmware checksum (device-less), and remote firmware checksum in one unified table
 - Arbitrary CLI command execution across hosts (`show`) with `RpcTimeoutError` retry
 - Configuration push with `commit confirmed` safety and post-commit health checks (ping, `uptime` NETCONF probe, or any CLI command)
 - Jinja2 template support for per-host configuration generation ([details](docs/template.md))
@@ -207,7 +207,7 @@ junos-ops <subcommand> [options] [hostname ...]
 | `reboot --at YYMMDDHHMM` | Schedule a reboot at the specified time |
 | `ls [-l]` | List files on the remote path |
 | `show COMMAND [--retry N]` / `show -f FILE` | Run an arbitrary CLI command (or file of commands) across devices |
-| `check [--connect\|--local\|--remote\|--all] [--model M]` | Pre-flight checks: NETCONF reachability, local/remote firmware hash |
+| `check [--connect\|--local\|--remote\|--all] [--model M]` | Pre-flight checks: NETCONF reachability, local/remote firmware checksum |
 | `config -f FILE` | Push a set command file (see [docs/config.md](docs/config.md) for `--confirm`, `--timeout`, `--no-confirm`, `--no-commit`, `--health-check`, `--no-health-check`) |
 | `rsi` | Collect RSI/SCF in parallel |
 | (none) | Show device facts |
@@ -475,7 +475,7 @@ rt1.example.jp: software validate package-result: 0
 
 ### check (pre-flight verification)
 
-Unified pre-flight checks across NETCONF reachability and firmware hashes. Exit code is non-zero if any check fails. Default (no flag) runs `--connect` only.
+Unified pre-flight checks across NETCONF reachability and firmware checksums. Exit code is non-zero if any check fails. Default (no flag) runs `--connect` only.
 
 `--local` is **inventory-mode** and ignores hostnames — it iterates every `<model>.file` / `<model>.hash` pair in `config.ini` and verifies the files on the staging server. No NETCONF required:
 
