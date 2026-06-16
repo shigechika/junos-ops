@@ -560,17 +560,45 @@ def _check_host(hostname) -> dict:
 def _check_local_inventory() -> list[dict]:
     """Inventory-mode ``check --local``: iterate model→file map in ``config.ini``.
 
-    Ignores hostnames entirely — the local firmware map is an attribute
-    of the staging server, not the devices. Verifies each model's
-    ``<model>.file`` against its ``<model>.hash``, filtered by
-    ``--model`` if supplied. Uses ``"DEFAULT"`` as the config section
-    so DEFAULT-level ``lpath`` / ``hashalgo`` apply.
+    Hostnames are ignored — the local firmware map is an attribute of
+    the staging server, not the devices. Verifies each model's
+    ``<model>.file`` against its ``<model>.hash`` using ``"DEFAULT"``
+    as the config section so DEFAULT-level ``lpath`` / ``hashalgo``
+    apply.
+
+    Model selectors compose as: ``--model`` (single name), ``--tags``
+    / ``--exclude-tags`` (group-AND / OR over ``<model>.tags`` + the
+    model name itself), and all of them intersect. ``--tags
+    ex2300-24t`` matches by model name even when ``ex2300-24t.tags``
+    is unset; ``--tags main`` requires ``<model>.tags`` to mention
+    ``main``. When the resulting set is empty we log it via
+    ``logger.info`` so the operator knows *why* zero rows came back
+    instead of guessing.
     """
     filter_model = getattr(common.args, "check_model", None)
+    tags = getattr(common.args, "tags", None)
+    exclude_tags = getattr(common.args, "exclude_tags", None)
+
     if filter_model:
         models = [filter_model]
     else:
         models = upgrade.iter_configured_models()
+
+    tag_groups = common._parse_tag_groups(tags)
+    exclude_groups = common._parse_tag_groups(exclude_tags)
+
+    if tag_groups:
+        models = common._filter_models_by_tag_groups(models, tag_groups)
+    if exclude_groups:
+        dropped = set(common._filter_models_by_tag_groups(models, exclude_groups))
+        models = [m for m in models if m not in dropped]
+
+    if (tag_groups or exclude_groups or filter_model) and not models:
+        logger.info(
+            "check --local: no models matched after filtering "
+            "(--model=%s --tags=%s --exclude-tags=%s)",
+            filter_model, tags, exclude_tags,
+        )
 
     rows: list[dict] = []
     for model in models:
@@ -1012,7 +1040,21 @@ def _run():
             display.print_read_config_error(cfg_result)
         sys.exit(1)
 
-    targets = common.get_targets()
+    # check --local is host-independent (staging-server inventory). When
+    # --connect / --remote are not also requested, skip the host
+    # selector so that --tags / --exclude-tags can carry the *model*
+    # filter for --local without get_targets() bailing on "no hosts
+    # matched tags".
+    local_only_check = (
+        args.subcommand == "check"
+        and getattr(common.args, "check_local", False)
+        and not getattr(common.args, "check_connect", False)
+        and not getattr(common.args, "check_remote", False)
+    )
+    if local_only_check:
+        targets = []
+    else:
+        targets = common.get_targets()
 
     # workers のデフォルト値設定
     if common.args.workers is None:

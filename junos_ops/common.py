@@ -197,6 +197,44 @@ def _filter_by_tag_groups(tag_groups: list[set[str]]) -> list[str]:
     return matched
 
 
+def _get_model_tags(model: str) -> set[str]:
+    """Return the set of tags declared for ``<model>.tags`` in DEFAULT.
+
+    Empty when the key is absent, so plain ``<model>.file`` /
+    ``<model>.hash`` configs work unchanged. Lowercased to mirror
+    :func:`_get_host_tags`.
+    """
+    raw = config.get("DEFAULT", f"{model}.tags", fallback="")
+    if not raw.strip():
+        return set()
+    return {t.strip().lower() for t in raw.split(",")}
+
+
+def _filter_models_by_tag_groups(
+    models: list[str], tag_groups: list[set[str]]
+) -> list[str]:
+    """Return models that match any of the tag groups.
+
+    Each element of ``tag_groups`` is a set of required selectors. A
+    model matches a group when every selector in the group is either
+    the model's own name or a member of its ``<model>.tags`` set
+    (AND within a group). The result is the union across groups (OR
+    across groups). Input model order is preserved.
+
+    This lets ``--tags ex2300-24t`` and ``--tags main`` both work
+    against the same flag, without forcing every model recipe to
+    declare ``<model>.tags = <model-name>`` explicitly.
+    """
+    matched: list[str] = []
+    for model in models:
+        selectors = {model.lower()} | _get_model_tags(model)
+        for group in tag_groups:
+            if group <= selectors:
+                matched.append(model)
+                break
+    return matched
+
+
 def _parse_tag_groups(tags) -> list[set[str]]:
     """Normalize the ``--tags`` CLI value into a list of tag sets.
 

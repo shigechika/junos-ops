@@ -14,6 +14,7 @@ Covers three surfaces:
 """
 
 import argparse
+import configparser
 import hashlib
 import os
 import tempfile
@@ -102,8 +103,10 @@ def _make_check_args(**overrides):
         debug=False,
         dry_run=False,
         force=False,
+        json=False,
         config="config.ini",
         tags=None,
+        exclude_tags=None,
         workers=1,
         specialhosts=[],
         check_connect=False,
@@ -279,6 +282,177 @@ class TestCheckLocalInventory:
             rows = cli._check_local_inventory()
         mock_chk.assert_called_once_with("DEFAULT", "EX2300-24T")
         assert len(rows) == 1
+
+
+def _make_model_tags_config():
+    """Build a DEFAULT-only config with several models and <model>.tags."""
+    cfg = configparser.ConfigParser(allow_no_value=True)
+    cfg.read_dict(
+        {
+            "DEFAULT": {
+                "id": "u", "pw": "p", "sshkey": "k",
+                "port": "830", "hashalgo": "md5", "rpath": "/var/tmp",
+                "ex2300-24t.file": "junos-arm-32.tgz",
+                "ex2300-24t.hash": "h1",
+                "ex2300-24t.tags": "main, edge",
+                "ex3400-24t.file": "junos-arm-32-ex3400.tgz",
+                "ex3400-24t.hash": "h2",
+                "ex3400-24t.tags": "main, edge",
+                "mx240.file": "jinstall-mx.tgz",
+                "mx240.hash": "h3",
+                "mx240.tags": "backbone",
+                "srx345.file": "junos-srxsme.tgz",
+                "srx345.hash": "h4",
+                # srx345 intentionally has no <model>.tags so we can test
+                # the "model-name-only" match path.
+            },
+        }
+    )
+    return cfg
+
+
+class TestCheckLocalInventoryModelTags:
+    """check --local filtering via --tags / --exclude-tags against <model>.tags."""
+
+    def _patched_check(self):
+        return patch.object(
+            junos_upgrade_mod,
+            "check_local_package_by_model",
+            side_effect=lambda h, m: {
+                "file": f"pkg-{m}.tgz",
+                "local_file": f"/fw/pkg-{m}.tgz",
+                "status": "ok",
+                "cached": False,
+                "actual_hash": "x",
+                "expected_hash": "x",
+                "message": "",
+                "error": None,
+            },
+        )
+
+    def test_model_name_match(self, junos_common):
+        """--tags <model-name> matches even when <model>.tags is unset."""
+        common.config = _make_model_tags_config()
+        common.args = _make_check_args(check_local=True, tags="srx345")
+        with self._patched_check() as mock_chk:
+            rows = cli._check_local_inventory()
+        models = [c.args[1] for c in mock_chk.call_args_list]
+        assert models == ["srx345"]
+        assert len(rows) == 1
+
+    def test_model_tag_match(self, junos_common):
+        """--tags <group-name> matches models whose <model>.tags contains it."""
+        common.config = _make_model_tags_config()
+        common.args = _make_check_args(check_local=True, tags="main")
+        with self._patched_check() as mock_chk:
+            cli._check_local_inventory()
+        models = sorted(c.args[1] for c in mock_chk.call_args_list)
+        # ex2300-24t and ex3400-24t carry "main"; mx240/srx345 do not.
+        assert models == ["ex2300-24t", "ex3400-24t"]
+
+    def test_and_within_group(self, junos_common):
+        """--tags main,backbone is AND: no model has both -> empty."""
+        common.config = _make_model_tags_config()
+        common.args = _make_check_args(
+            check_local=True, tags="main,backbone",
+        )
+        with self._patched_check() as mock_chk:
+            cli._check_local_inventory()
+        assert mock_chk.call_count == 0
+
+    def test_or_across_groups(self, junos_common):
+        """--tags main --tags backbone is OR across groups."""
+        common.config = _make_model_tags_config()
+        common.args = _make_check_args(
+            check_local=True, tags=["main", "backbone"],
+        )
+        with self._patched_check() as mock_chk:
+            cli._check_local_inventory()
+        models = sorted(c.args[1] for c in mock_chk.call_args_list)
+        assert models == ["ex2300-24t", "ex3400-24t", "mx240"]
+
+    def test_mixed_model_name_and_tag(self, junos_common):
+        """Model-name and tag selectors compose under OR-across-groups."""
+        common.config = _make_model_tags_config()
+        common.args = _make_check_args(
+            check_local=True, tags=["srx345", "backbone"],
+        )
+        with self._patched_check() as mock_chk:
+            cli._check_local_inventory()
+        models = sorted(c.args[1] for c in mock_chk.call_args_list)
+        # srx345 by model name + mx240 by tag "backbone".
+        assert models == ["mx240", "srx345"]
+
+    def test_case_insensitive(self, junos_common):
+        """--tags / <model>.tags / model names all fold to lowercase."""
+        common.config = _make_model_tags_config()
+        common.args = _make_check_args(check_local=True, tags="MAIN")
+        with self._patched_check() as mock_chk:
+            cli._check_local_inventory()
+        models = sorted(c.args[1] for c in mock_chk.call_args_list)
+        assert models == ["ex2300-24t", "ex3400-24t"]
+
+    def test_exclude_tags_drops_models(self, junos_common):
+        """--exclude-tags subtracts models from the post-tags result."""
+        common.config = _make_model_tags_config()
+        common.args = _make_check_args(
+            check_local=True, tags="main", exclude_tags="ex3400-24t",
+        )
+        with self._patched_check() as mock_chk:
+            cli._check_local_inventory()
+        models = [c.args[1] for c in mock_chk.call_args_list]
+        # main matches ex2300-24t and ex3400-24t; exclude drops ex3400-24t.
+        assert models == ["ex2300-24t"]
+
+    def test_exclude_only(self, junos_common):
+        """--exclude-tags on its own subtracts from the full inventory."""
+        common.config = _make_model_tags_config()
+        common.args = _make_check_args(
+            check_local=True, exclude_tags="backbone",
+        )
+        with self._patched_check() as mock_chk:
+            cli._check_local_inventory()
+        models = sorted(c.args[1] for c in mock_chk.call_args_list)
+        # backbone drops mx240; the rest stay.
+        assert models == ["ex2300-24t", "ex3400-24t", "srx345"]
+
+    def test_model_filter_intersects(self, junos_common):
+        """--model X and --tags Y intersect (only emit X if Y also matches)."""
+        common.config = _make_model_tags_config()
+        common.args = _make_check_args(
+            check_local=True, check_model="ex2300-24t", tags="main",
+        )
+        with self._patched_check() as mock_chk:
+            rows = cli._check_local_inventory()
+        models = [c.args[1] for c in mock_chk.call_args_list]
+        assert models == ["ex2300-24t"]
+        assert len(rows) == 1
+
+    def test_no_match_logs(self, junos_common, caplog):
+        """Empty filter result logs *why* so operators don't guess."""
+        common.config = _make_model_tags_config()
+        common.args = _make_check_args(check_local=True, tags="nonexistent")
+        with self._patched_check() as mock_chk:
+            with caplog.at_level("INFO", logger="junos_ops.cli"):
+                rows = cli._check_local_inventory()
+        assert mock_chk.call_count == 0
+        assert rows == []
+        assert any(
+            "no models matched after filtering" in m for m in caplog.messages
+        )
+
+    def test_default_no_filter_emits_all(self, junos_common):
+        """Without --tags / --exclude-tags / --model the full inventory is emitted."""
+        common.config = _make_model_tags_config()
+        common.args = _make_check_args(check_local=True)
+        with self._patched_check() as mock_chk:
+            cli._check_local_inventory()
+        models = sorted(c.args[1] for c in mock_chk.call_args_list)
+        assert models == ["ex2300-24t", "ex3400-24t", "mx240", "srx345"]
+
+
+class TestCheckLocalInventoryFormat:
+    """display.format_check_local_inventory rendering tests."""
 
     def test_format_inventory_with_lpath_header(self):
         """Shared lpath is shown once above the table, not repeated per row."""
