@@ -604,6 +604,16 @@ def _check_local_inventory() -> list[dict]:
         if filter_model:
             host_models &= {filter_model.lower()}
 
+        # An empty intersection (e.g. --model SRX345 --tags lab where lab
+        # hosts only use EX2300) would otherwise produce a silent 0-row
+        # table. Log it so the operator knows *why* there's nothing.
+        if not host_models and not unmapped:
+            logger.info(
+                "check --local: no models matched after filtering "
+                "(--tags=%s --exclude-tags=%s --model=%s hostnames=%s)",
+                tags, exclude_tags, filter_model, common.args.specialhosts,
+            )
+
         models = sorted(host_models)
         for host in unmapped:
             rows.append({

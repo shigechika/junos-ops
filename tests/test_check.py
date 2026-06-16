@@ -351,7 +351,7 @@ class TestCheckLocalInventoryHostFilter:
         assert unmapped[0]["hostname"] == "rt-no-model"
 
     def test_tags_excludes_drops_model(self, junos_common):
-        """--tags main --exclude-tags srx345 by host name? use tag-based exclude."""
+        """--tags main --exclude-tags drop: drop-tagged host removes its model."""
         common.config = _make_inventory_config()
         # Tag-based exclude: tag srx host so we can drop it via exclude-tags.
         common.config.set("rt-srx345", "tags", "main, drop")
@@ -386,18 +386,23 @@ class TestCheckLocalInventoryHostFilter:
         models = [c.args[1] for c in mock_chk.call_args_list]
         assert models == ["ex2300-24t"]
 
-    def test_model_filter_outside_tag_set_is_empty(self, junos_common):
-        """--model M not in the host-filtered set yields zero rows (no error)."""
+    def test_model_filter_outside_tag_set_is_empty(self, junos_common, caplog):
+        """--model M not in the host-filtered set yields zero rows + an info log."""
         common.config = _make_inventory_config()
         # Only lab has rt-lab (ex2300). Ask for SRX345 -> empty intersection.
         common.args = _make_check_args(
             check_local=True, tags="lab", check_model="SRX345",
         )
         with self._patched_check() as mock_chk:
-            rows = cli._check_local_inventory()
+            with caplog.at_level("INFO", logger="junos_ops.cli"):
+                rows = cli._check_local_inventory()
         assert mock_chk.call_count == 0
         # No model rows; lab host has model so no unmapped either.
         assert rows == []
+        # Operator gets told *why* zero rows came back instead of guessing.
+        assert any(
+            "no models matched after filtering" in m for m in caplog.messages
+        )
 
     def test_unmapped_host_emits_row(self, junos_common):
         """Selected host without [host].model surfaces an unmapped inventory row."""
