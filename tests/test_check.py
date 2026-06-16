@@ -481,7 +481,7 @@ class TestCheckLocalInventoryFormat:
         assert "local_file" not in out
         assert "ok(cached)" in out
         assert "missing" in out  # checksum column shows it
-        # 'missing' has no detail line (status + file column already convey it).
+        # 'missing' has no detail line (checksum + file column already convey it).
         assert "mx5-t:" not in out
 
     def test_format_inventory_without_lpath(self):

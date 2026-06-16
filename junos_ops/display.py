@@ -717,7 +717,7 @@ def format_check_local_inventory(rows: list[dict]) -> str:
     lines.extend(_fmt_row(r) for r in body)
 
     # ``missing`` rows are already self-explanatory from the file +
-    # status columns; only ``bad`` / ``error`` carry information not
+    # checksum columns; only ``bad`` / ``error`` carry information not
     # already in the table, so reserve detail lines for those.
     detail_lines: list[str] = []
     for r in rows:
