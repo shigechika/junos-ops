@@ -469,14 +469,34 @@ mx5-t            jinstall-ppc-21.2R3-S8.5-signed.tgz                         mis
   mx5-t: - local package: /opt/firmware/jinstall-ppc-21.2R3-S8.5-signed.tgz is not found.
 ```
 
-`--model M` で特定モデルだけに絞り込むことも可能です。
+`--model M` で特定モデルだけに絞り込むことも可能です。複数モデルを一括で扱いたい場合は、`config.ini` の DEFAULT セクションに `<model>.tags = ...` を書いておき、`--tags`（および `--exclude-tags`）で絞り込めます。文法はホスト用の `--tags` と同じ（カンマ＝グループ内 AND、繰り返し＝グループ間 OR）ですが、セレクタは model 名そのもの **または** `<model>.tags` のいずれかに一致すれば採用されます。ホストの `tags` とは別空間で扱われます:
 
-デフォルトの `--local` はホスト名や `--tags` を無視しますが、`--tags` / `--exclude-tags` / 明示ホスト名のいずれかが指定された場合は **フィルタ付きインベントリモード** に切り替わります。CLI 共通のセレクタで対象ホストを絞り込み、各ホストの `[host].model` キーを集めてモデル集合を作り、その集合に属するモデルの recipe だけを出力します。`--model` と --tags/ホストフィルタは積集合で適用されます。`config.ini` に `model = ...` が無いホストは NETCONF 無しでは解決できないため、行頭に `unmapped` として並びます（`[host].model` を追記するか、`--connect` / `--remote` に切り替えてください）。
+```ini
+[DEFAULT]
+ex2300-24t.file = junos-arm-32-23.4R2-S7.4.tgz
+ex2300-24t.hash = ...
+ex2300-24t.tags = main, edge       # optional model tags
+mx240.file       = ...
+mx240.tags       = backbone
+```
 
 ```
-# main タグ付きホストが使っているモデルだけを inventory チェック
+# 単一モデル — model 名一致だけで動くので <model>.tags は不要
+% junos-ops check --local --tags ex2300-24t
+
+# main タグ付き model 群 — <model>.tags を見る
 % junos-ops check --local --tags main
+
+# model 名とタググループの OR
+% junos-ops check --local --tags srx345 --tags backbone
+
+# 結果から特定 model を落とす
+% junos-ops check --local --tags main --exclude-tags ex3400-24t
 ```
+
+`--local` 単独実行時は **ホスト側の `--tags`（ホストタグセレクタ）は適用されません**。`--local` はホスト非依存なので、`--tags` は上記の model セレクタに読み替えられます。`--local` を `--connect` / `--remote` と併用すると、後者のホスト単位処理では従来通りホストタグでの絞り込みが効きます。
+
+> **`--all`（または `--local --connect`/`--remote`）での注意:** 1 つの `--tags` 値が両方のテーブルを同時に絞ります。インベントリ表は `<model>.tags`（および model 名）で、ホスト別表はホストタグで、です。2 つのタグ空間は独立しているので、`--all --tags main` で両方を一貫して絞りたいなら、model タグの `main` とホストタグの `main` の命名を揃えておいてください。
 
 `--connect` / `--remote`（および `--all`）は **ホスト単位** で、指定されたホスト（または `config.ini` 内の全ホスト、`--tags` でフィルタ可能）に対して動作します。`--remote` は `copy` 完了後・`install` 前の「SCP が最後まで落ちたか」確認としても使えます:
 

@@ -491,14 +491,45 @@ mx5-t            jinstall-ppc-21.2R3-S8.5-signed.tgz                         mis
   mx5-t: - local package: /opt/firmware/jinstall-ppc-21.2R3-S8.5-signed.tgz is not found.
 ```
 
-Use `--model M` to restrict the inventory to a single model.
+Use `--model M` to restrict the inventory to a single model. For multi-model
+selection, attach `<model>.tags = ...` to the relevant rows in `config.ini` and
+use `--tags` (and optionally `--exclude-tags`) — the same AND/OR grammar as
+host-side `--tags` applies, but selectors are matched against the model name
+*and* the model's `<model>.tags` set, not against host tags:
 
-By default `--local` ignores hostnames and `--tags`. When you do pass `--tags`, `--exclude-tags`, or explicit hostnames, `--local` switches into **filtered inventory** mode: the selected hosts are resolved via the same selector as the rest of the CLI, each host's `[host].model` key is collected into a set, and only inventory rows for those models are emitted. `--model` and the tag/host filter intersect. Hosts without a `model = ...` line in `config.ini` cannot be mapped without NETCONF, so they show up as `unmapped` rows reminding you to either add the key or fall back to `--connect` / `--remote`.
+```ini
+[DEFAULT]
+ex2300-24t.file = junos-arm-32-23.4R2-S7.4.tgz
+ex2300-24t.hash = ...
+ex2300-24t.tags = main, edge       # optional model tags
+mx240.file       = ...
+mx240.tags       = backbone
+```
 
 ```
-# Inventory limited to the models actually used by "main"-tagged hosts
+# Single model — matches by name, no <model>.tags needed
+% junos-ops check --local --tags ex2300-24t
+
+# "main"-tagged models — uses <model>.tags
 % junos-ops check --local --tags main
+
+# Multi-selection: model name + tag groups OR together
+% junos-ops check --local --tags srx345 --tags backbone
+
+# Drop a model from the result
+% junos-ops check --local --tags main --exclude-tags ex3400-24t
 ```
+
+For `--local`-only runs, host-side `--tags` (the per-host tag selector) is
+*not* applied — `--local` is host-independent, so `--tags` reinterprets as
+the model selector described above. Mixing `--local` with `--connect` /
+`--remote` keeps the host selector active for the per-host part.
+
+> **Note on `--all` (or `--local --connect`/`--remote`):** a single `--tags`
+> value filters *both* tables at once — the inventory table by `<model>.tags`
+> (and model name) and the per-host table by host tags. The two tag namespaces
+> are independent, so keep their names aligned (e.g. a `main` model tag and a
+> `main` host tag) if you want `--all --tags main` to scope both consistently.
 
 `--connect` / `--remote` (and `--all`) are **per-host** and use the specified hostnames (or every host in `config.ini`, optionally filtered by `--tags`). `--remote` doubles as a "did the SCP copy fully land" check between `copy` and `install`:
 

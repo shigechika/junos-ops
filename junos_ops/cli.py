@@ -560,84 +560,47 @@ def _check_host(hostname) -> dict:
 def _check_local_inventory() -> list[dict]:
     """Inventory-mode ``check --local``: iterate model→file map in ``config.ini``.
 
-    Default behavior (no ``--tags`` / ``--exclude-tags`` / hostnames):
-    walk every ``<model>.file`` in DEFAULT — the local firmware map is
-    an attribute of the staging server, not the devices. Verifies each
-    model's ``<model>.file`` against its ``<model>.hash``, filtered by
-    ``--model`` if supplied.
+    Hostnames are ignored — the local firmware map is an attribute of
+    the staging server, not the devices. Verifies each model's
+    ``<model>.file`` against its ``<model>.hash`` using ``"DEFAULT"``
+    as the config section so DEFAULT-level ``lpath`` / ``hashalgo``
+    apply.
 
-    Filter mode (``--tags`` / ``--exclude-tags`` / hostnames given):
-    delegate host selection to :func:`common.get_targets`, then resolve
-    each selected host's ``[host].model`` option (lowercased) into a
-    set of models. Only models in that set are emitted. Hosts without
-    a configured ``model`` cannot be mapped without NETCONF, so they
-    are reported via an inventory row with ``status="unmapped"`` (one
-    row per host) instead of silently dropped — the operator can
-    decide whether to add a ``model = ...`` line or fall through to
-    ``--connect``/``--remote``.
-
-    ``--model`` and the tag/hostname filter intersect: only models
-    present in both shortlists are emitted.
-
-    Uses ``"DEFAULT"`` as the config section so DEFAULT-level
-    ``lpath`` / ``hashalgo`` apply.
+    Model selectors compose as: ``--model`` (single name), ``--tags``
+    / ``--exclude-tags`` (group-AND / OR over ``<model>.tags`` + the
+    model name itself), and all of them intersect. ``--tags
+    ex2300-24t`` matches by model name even when ``ex2300-24t.tags``
+    is unset; ``--tags main`` requires ``<model>.tags`` to mention
+    ``main``. When the resulting set is empty we log it via
+    ``logger.info`` so the operator knows *why* zero rows came back
+    instead of guessing.
     """
     filter_model = getattr(common.args, "check_model", None)
-
     tags = getattr(common.args, "tags", None)
     exclude_tags = getattr(common.args, "exclude_tags", None)
-    has_hosts = len(common.args.specialhosts) > 0
-    use_host_filter = bool(tags or exclude_tags or has_hosts)
+
+    if filter_model:
+        models = [filter_model]
+    else:
+        models = upgrade.iter_configured_models()
+
+    tag_groups = common._parse_tag_groups(tags)
+    exclude_groups = common._parse_tag_groups(exclude_tags)
+
+    if tag_groups:
+        models = common._filter_models_by_tag_groups(models, tag_groups)
+    if exclude_groups:
+        dropped = set(common._filter_models_by_tag_groups(models, exclude_groups))
+        models = [m for m in models if m not in dropped]
+
+    if (tag_groups or exclude_groups or filter_model) and not models:
+        logger.info(
+            "check --local: no models matched after filtering "
+            "(--model=%s --tags=%s --exclude-tags=%s)",
+            filter_model, tags, exclude_tags,
+        )
 
     rows: list[dict] = []
-    if use_host_filter:
-        targets = common.get_targets()
-        host_models: set[str] = set()
-        unmapped: list[str] = []
-        for host in targets:
-            model = common.config.get(host, "model", fallback="").strip().lower()
-            if model:
-                host_models.add(model)
-            else:
-                unmapped.append(host)
-
-        if filter_model:
-            host_models &= {filter_model.lower()}
-
-        # An empty intersection (e.g. --model SRX345 --tags lab where lab
-        # hosts only use EX2300) would otherwise produce a silent 0-row
-        # table. Log it so the operator knows *why* there's nothing.
-        if not host_models and not unmapped:
-            logger.info(
-                "check --local: no models matched after filtering "
-                "(--tags=%s --exclude-tags=%s --model=%s hostnames=%s)",
-                tags, exclude_tags, filter_model, common.args.specialhosts,
-            )
-
-        models = sorted(host_models)
-        for host in unmapped:
-            rows.append({
-                "model": None,
-                "file": None,
-                "local_file": None,
-                "status": "unmapped",
-                "cached": False,
-                "actual_hash": None,
-                "expected_hash": None,
-                "message": (
-                    f"host {host}: no [{host}].model in config.ini; "
-                    "cannot resolve firmware without NETCONF "
-                    "(use --connect/--remote, or add a model = ... line)"
-                ),
-                "error": None,
-                "hostname": host,
-            })
-    else:
-        if filter_model:
-            models = [filter_model]
-        else:
-            models = upgrade.iter_configured_models()
-
     for model in models:
         try:
             result = upgrade.check_local_package_by_model("DEFAULT", model)
@@ -1077,7 +1040,21 @@ def _run():
             display.print_read_config_error(cfg_result)
         sys.exit(1)
 
-    targets = common.get_targets()
+    # check --local is host-independent (staging-server inventory). When
+    # --connect / --remote are not also requested, skip the host
+    # selector so that --tags / --exclude-tags can carry the *model*
+    # filter for --local without get_targets() bailing on "no hosts
+    # matched tags".
+    local_only_check = (
+        args.subcommand == "check"
+        and getattr(common.args, "check_local", False)
+        and not getattr(common.args, "check_connect", False)
+        and not getattr(common.args, "check_remote", False)
+    )
+    if local_only_check:
+        targets = []
+    else:
+        targets = common.get_targets()
 
     # workers のデフォルト値設定
     if common.args.workers is None:
@@ -1104,9 +1081,6 @@ def _run():
             else:
                 display.print_check_local_inventory(inventory)
             for row in inventory:
-                # ``unmapped`` is not a firmware-staging failure; it is
-                # a config gap surfaced for the operator. Don't fail rc
-                # for it — only real bad/missing/error rows escalate.
                 if row.get("status") in ("bad", "missing", "error"):
                     rc = 1
 

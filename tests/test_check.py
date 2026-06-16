@@ -284,8 +284,8 @@ class TestCheckLocalInventory:
         assert len(rows) == 1
 
 
-def _make_inventory_config():
-    """Build a config with model-tagged hosts for inventory-filter tests."""
+def _make_model_tags_config():
+    """Build a DEFAULT-only config with several models and <model>.tags."""
     cfg = configparser.ConfigParser(allow_no_value=True)
     cfg.read_dict(
         {
@@ -294,31 +294,25 @@ def _make_inventory_config():
                 "port": "830", "hashalgo": "md5", "rpath": "/var/tmp",
                 "ex2300-24t.file": "junos-arm-32.tgz",
                 "ex2300-24t.hash": "h1",
+                "ex2300-24t.tags": "main, edge",
                 "ex3400-24t.file": "junos-arm-32-ex3400.tgz",
                 "ex3400-24t.hash": "h2",
+                "ex3400-24t.tags": "main, edge",
+                "mx240.file": "jinstall-mx.tgz",
+                "mx240.hash": "h3",
+                "mx240.tags": "backbone",
                 "srx345.file": "junos-srxsme.tgz",
-                "srx345.hash": "h3",
+                "srx345.hash": "h4",
+                # srx345 intentionally has no <model>.tags so we can test
+                # the "model-name-only" match path.
             },
-            "rt-ex2300": {
-                "host": "rt-ex2300", "tags": "main", "model": "EX2300-24T",
-            },
-            "rt-ex3400": {
-                "host": "rt-ex3400", "tags": "main", "model": "EX3400-24T",
-            },
-            "rt-srx345": {
-                "host": "rt-srx345", "tags": "main", "model": "SRX345",
-            },
-            "rt-lab": {
-                "host": "rt-lab", "tags": "lab", "model": "EX2300-24T",
-            },
-            "rt-no-model": {"host": "rt-no-model", "tags": "main"},
         }
     )
     return cfg
 
 
-class TestCheckLocalInventoryHostFilter:
-    """check --local in filter mode (--tags / --exclude-tags / hostnames)."""
+class TestCheckLocalInventoryModelTags:
+    """check --local filtering via --tags / --exclude-tags against <model>.tags."""
 
     def _patched_check(self):
         return patch.object(
@@ -336,97 +330,129 @@ class TestCheckLocalInventoryHostFilter:
             },
         )
 
-    def test_tags_filter_restricts_to_host_models(self, junos_common):
-        """--tags main: inventory limited to models used by main hosts."""
-        common.config = _make_inventory_config()
-        common.args = _make_check_args(check_local=True, tags="main")
+    def test_model_name_match(self, junos_common):
+        """--tags <model-name> matches even when <model>.tags is unset."""
+        common.config = _make_model_tags_config()
+        common.args = _make_check_args(check_local=True, tags="srx345")
         with self._patched_check() as mock_chk:
             rows = cli._check_local_inventory()
         models = [c.args[1] for c in mock_chk.call_args_list]
-        # main hosts: rt-ex2300, rt-ex3400, rt-srx345, rt-no-model.
-        # rt-no-model has no [host].model -> unmapped row, model dropped.
-        assert sorted(models) == ["ex2300-24t", "ex3400-24t", "srx345"]
-        unmapped = [r for r in rows if r["status"] == "unmapped"]
-        assert len(unmapped) == 1
-        assert unmapped[0]["hostname"] == "rt-no-model"
+        assert models == ["srx345"]
+        assert len(rows) == 1
 
-    def test_tags_excludes_drops_model(self, junos_common):
-        """--tags main --exclude-tags drop: drop-tagged host removes its model."""
-        common.config = _make_inventory_config()
-        # Tag-based exclude: tag srx host so we can drop it via exclude-tags.
-        common.config.set("rt-srx345", "tags", "main, drop")
+    def test_model_tag_match(self, junos_common):
+        """--tags <group-name> matches models whose <model>.tags contains it."""
+        common.config = _make_model_tags_config()
+        common.args = _make_check_args(check_local=True, tags="main")
+        with self._patched_check() as mock_chk:
+            cli._check_local_inventory()
+        models = sorted(c.args[1] for c in mock_chk.call_args_list)
+        # ex2300-24t and ex3400-24t carry "main"; mx240/srx345 do not.
+        assert models == ["ex2300-24t", "ex3400-24t"]
+
+    def test_and_within_group(self, junos_common):
+        """--tags main,backbone is AND: no model has both -> empty."""
+        common.config = _make_model_tags_config()
         common.args = _make_check_args(
-            check_local=True, tags="main", exclude_tags="drop",
+            check_local=True, tags="main,backbone",
+        )
+        with self._patched_check() as mock_chk:
+            cli._check_local_inventory()
+        assert mock_chk.call_count == 0
+
+    def test_or_across_groups(self, junos_common):
+        """--tags main --tags backbone is OR across groups."""
+        common.config = _make_model_tags_config()
+        common.args = _make_check_args(
+            check_local=True, tags=["main", "backbone"],
+        )
+        with self._patched_check() as mock_chk:
+            cli._check_local_inventory()
+        models = sorted(c.args[1] for c in mock_chk.call_args_list)
+        assert models == ["ex2300-24t", "ex3400-24t", "mx240"]
+
+    def test_mixed_model_name_and_tag(self, junos_common):
+        """Model-name and tag selectors compose under OR-across-groups."""
+        common.config = _make_model_tags_config()
+        common.args = _make_check_args(
+            check_local=True, tags=["srx345", "backbone"],
+        )
+        with self._patched_check() as mock_chk:
+            cli._check_local_inventory()
+        models = sorted(c.args[1] for c in mock_chk.call_args_list)
+        # srx345 by model name + mx240 by tag "backbone".
+        assert models == ["mx240", "srx345"]
+
+    def test_case_insensitive(self, junos_common):
+        """--tags / <model>.tags / model names all fold to lowercase."""
+        common.config = _make_model_tags_config()
+        common.args = _make_check_args(check_local=True, tags="MAIN")
+        with self._patched_check() as mock_chk:
+            cli._check_local_inventory()
+        models = sorted(c.args[1] for c in mock_chk.call_args_list)
+        assert models == ["ex2300-24t", "ex3400-24t"]
+
+    def test_exclude_tags_drops_models(self, junos_common):
+        """--exclude-tags subtracts models from the post-tags result."""
+        common.config = _make_model_tags_config()
+        common.args = _make_check_args(
+            check_local=True, tags="main", exclude_tags="ex3400-24t",
         )
         with self._patched_check() as mock_chk:
             cli._check_local_inventory()
         models = [c.args[1] for c in mock_chk.call_args_list]
-        assert "srx345" not in models
-        assert sorted(models) == ["ex2300-24t", "ex3400-24t"]
-
-    def test_hostnames_filter(self, junos_common):
-        """Explicit hostnames also narrow the inventory."""
-        common.config = _make_inventory_config()
-        common.args = _make_check_args(
-            check_local=True, specialhosts=["rt-ex2300"],
-        )
-        with self._patched_check() as mock_chk:
-            cli._check_local_inventory()
-        models = [c.args[1] for c in mock_chk.call_args_list]
+        # main matches ex2300-24t and ex3400-24t; exclude drops ex3400-24t.
         assert models == ["ex2300-24t"]
 
-    def test_model_and_tag_intersect(self, junos_common):
-        """--model X --tags main: intersection (only if X is in main hosts)."""
-        common.config = _make_inventory_config()
+    def test_exclude_only(self, junos_common):
+        """--exclude-tags on its own subtracts from the full inventory."""
+        common.config = _make_model_tags_config()
         common.args = _make_check_args(
-            check_local=True, tags="main", check_model="EX2300-24T",
+            check_local=True, exclude_tags="backbone",
         )
         with self._patched_check() as mock_chk:
             cli._check_local_inventory()
+        models = sorted(c.args[1] for c in mock_chk.call_args_list)
+        # backbone drops mx240; the rest stay.
+        assert models == ["ex2300-24t", "ex3400-24t", "srx345"]
+
+    def test_model_filter_intersects(self, junos_common):
+        """--model X and --tags Y intersect (only emit X if Y also matches)."""
+        common.config = _make_model_tags_config()
+        common.args = _make_check_args(
+            check_local=True, check_model="ex2300-24t", tags="main",
+        )
+        with self._patched_check() as mock_chk:
+            rows = cli._check_local_inventory()
         models = [c.args[1] for c in mock_chk.call_args_list]
         assert models == ["ex2300-24t"]
+        assert len(rows) == 1
 
-    def test_model_filter_outside_tag_set_is_empty(self, junos_common, caplog):
-        """--model M not in the host-filtered set yields zero rows + an info log."""
-        common.config = _make_inventory_config()
-        # Only lab has rt-lab (ex2300). Ask for SRX345 -> empty intersection.
-        common.args = _make_check_args(
-            check_local=True, tags="lab", check_model="SRX345",
-        )
+    def test_no_match_logs(self, junos_common, caplog):
+        """Empty filter result logs *why* so operators don't guess."""
+        common.config = _make_model_tags_config()
+        common.args = _make_check_args(check_local=True, tags="nonexistent")
         with self._patched_check() as mock_chk:
             with caplog.at_level("INFO", logger="junos_ops.cli"):
                 rows = cli._check_local_inventory()
         assert mock_chk.call_count == 0
-        # No model rows; lab host has model so no unmapped either.
         assert rows == []
-        # Operator gets told *why* zero rows came back instead of guessing.
         assert any(
             "no models matched after filtering" in m for m in caplog.messages
         )
 
-    def test_unmapped_host_emits_row(self, junos_common):
-        """Selected host without [host].model surfaces an unmapped inventory row."""
-        common.config = _make_inventory_config()
-        common.args = _make_check_args(
-            check_local=True, specialhosts=["rt-no-model"],
-        )
-        with self._patched_check():
-            rows = cli._check_local_inventory()
-        # No model resolvable -> only the unmapped row.
-        assert len(rows) == 1
-        assert rows[0]["status"] == "unmapped"
-        assert rows[0]["hostname"] == "rt-no-model"
-
-    def test_default_mode_unchanged(self, junos_common):
-        """No filter: existing behaviour (every <model>.file in DEFAULT)."""
-        common.config = _make_inventory_config()
+    def test_default_no_filter_emits_all(self, junos_common):
+        """Without --tags / --exclude-tags / --model the full inventory is emitted."""
+        common.config = _make_model_tags_config()
         common.args = _make_check_args(check_local=True)
         with self._patched_check() as mock_chk:
             cli._check_local_inventory()
         models = sorted(c.args[1] for c in mock_chk.call_args_list)
-        # All three configured models, including srx345 which no main host
-        # is wearing in the filtered scenarios above.
-        assert models == ["ex2300-24t", "ex3400-24t", "srx345"]
+        assert models == ["ex2300-24t", "ex3400-24t", "mx240", "srx345"]
+
+
+class TestCheckLocalInventoryFormat:
+    """display.format_check_local_inventory rendering tests."""
 
     def test_format_inventory_with_lpath_header(self):
         """Shared lpath is shown once above the table, not repeated per row."""
