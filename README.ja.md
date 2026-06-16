@@ -471,13 +471,6 @@ mx5-t            jinstall-ppc-21.2R3-S8.5-signed.tgz                         mis
 
 `--model M` で特定モデルだけに絞り込むことも可能です。
 
-デフォルトの `--local` はホスト名や `--tags` を無視しますが、`--tags` / `--exclude-tags` / 明示ホスト名のいずれかが指定された場合は **フィルタ付きインベントリモード** に切り替わります。CLI 共通のセレクタで対象ホストを絞り込み、各ホストの `[host].model` キーを集めてモデル集合を作り、その集合に属するモデルの recipe だけを出力します。`--model` と --tags/ホストフィルタは積集合で適用されます。`config.ini` に `model = ...` が無いホストは NETCONF 無しでは解決できないため、行頭に `unmapped` として並びます（`[host].model` を追記するか、`--connect` / `--remote` に切り替えてください）。
-
-```
-# main タグ付きホストが使っているモデルだけを inventory チェック
-% junos-ops check --local --tags main
-```
-
 `--connect` / `--remote`（および `--all`）は **ホスト単位** で、指定されたホスト（または `config.ini` 内の全ホスト、`--tags` でフィルタ可能）に対して動作します。`--remote` は `copy` 完了後・`install` 前の「SCP が最後まで落ちたか」確認としても使えます:
 
 ```

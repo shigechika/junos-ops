@@ -105,7 +105,6 @@ LICENSE
 - `main()` — argparse サブコマンド定義、ディスパッチ
 - `cmd_upgrade()`, `cmd_copy()`, `cmd_install()`, `cmd_rollback()`, `cmd_version()`, `cmd_reboot()`, `cmd_ls()`, `cmd_show()`, `cmd_config()`, `cmd_facts()` — サブコマンド用エントリ関数（connect → header → core(dict) → display）
 - `_check_host(hostname)` — `check` サブコマンド用ワーカー。int ではなく dict を返し、`main()` で結果を集約して `display.print_check_table` にテーブル出力。モデル解決順: `--model` > `config.ini [host].model` > `dev.facts["model"]`
-- `_check_local_inventory()` — `check --local` 用ワーカー。デフォルトは config.ini DEFAULT の `<model>.file` 全列挙。`--tags` / `--exclude-tags` / hostnames のいずれかが指定されると filtered mode に切り替わり、`common.get_targets()` で選んだホストの `[host].model` を集めたモデル集合だけを対象に絞る（`--model` とは積集合）。`[host].model` が無いホストは NETCONF 無しでは解決不能なため `status="unmapped"` の行を 1 件ずつ追加し、rc には影響させない
 - `_open_connection()` — NETCONF 接続＋エラー時の display 出力ヘルパー（`--json` 時は connect エラーを JSON で出す）
 - `--json` グローバルオプション: 各 `cmd_*` は `_emit_result(hostname, result, formatter)` で「`--json` なら `display.print_json`、通常は `display.print_host_block(formatter(result))`」を分岐。失敗ホストは `_emit_exception` が `{"ok": false, "error", "error_message"}` の JSON 行を出す（JSONL consumer が行欠落で気づけないのを防ぐ）。出力は host ごと 1 行の JSONL（`run_parallel` で並列のため top-level 配列は作らない。`jq -s` で slurp）
 - `_route_logs_to_stderr()` — `--json` 時に root logger の stdout 向け StreamHandler を stderr へ移す。`logging.ini` の consoleHandler も fallback の basicConfig も stdout に出力するため、これをやらないと `load_config` の `logger.info` 進捗等が JSON を汚す。`_run()` で `common.args` 設定直後に呼ぶ
