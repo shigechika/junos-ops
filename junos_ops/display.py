@@ -683,6 +683,13 @@ def format_check_local_inventory(rows: list[dict]) -> str:
         status = r.get("status", "-")
         if status == "ok" and r.get("cached"):
             status = "ok(cached)"
+        # ``unmapped`` rows come from host-filter mode when a selected
+        # host has no ``[host].model``; show the hostname in place of
+        # the model column so the table stays self-explanatory.
+        if status == "unmapped":
+            label = f"({r.get('hostname')})" if r.get("hostname") else "-"
+            body.append([label, "-", "unmapped"])
+            continue
         body.append([
             r.get("model") or "-",
             r.get("file") or "-",
@@ -723,6 +730,9 @@ def format_check_local_inventory(rows: list[dict]) -> str:
         if r.get("status") in ("bad", "error"):
             msg = (r.get("message") or "").lstrip()
             detail_lines.append(f"  {r.get('model')}: {msg}")
+        elif r.get("status") == "unmapped":
+            msg = (r.get("message") or "").lstrip()
+            detail_lines.append(f"  {r.get('hostname')}: {msg}")
     if detail_lines:
         lines.append("")
         lines.extend(detail_lines)

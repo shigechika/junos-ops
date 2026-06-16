@@ -493,6 +493,13 @@ mx5-t            jinstall-ppc-21.2R3-S8.5-signed.tgz                         mis
 
 Use `--model M` to restrict the inventory to a single model.
 
+By default `--local` ignores hostnames and `--tags`. When you do pass `--tags`, `--exclude-tags`, or explicit hostnames, `--local` switches into **filtered inventory** mode: the selected hosts are resolved via the same selector as the rest of the CLI, each host's `[host].model` key is collected into a set, and only inventory rows for those models are emitted. `--model` and the tag/host filter intersect. Hosts without a `model = ...` line in `config.ini` cannot be mapped without NETCONF, so they show up as `unmapped` rows reminding you to either add the key or fall back to `--connect` / `--remote`.
+
+```
+# Inventory limited to the models actually used by "main"-tagged hosts
+% junos-ops check --local --tags main
+```
+
 `--connect` / `--remote` (and `--all`) are **per-host** and use the specified hostnames (or every host in `config.ini`, optionally filtered by `--tags`). `--remote` doubles as a "did the SCP copy fully land" check between `copy` and `install`:
 
 ```
