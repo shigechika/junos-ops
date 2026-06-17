@@ -398,6 +398,32 @@ def print_reboot(result: dict) -> None:
 
 
 # -------------------------------------------------------------------
+# snapshot
+# -------------------------------------------------------------------
+
+
+def format_snapshot(result: dict) -> str:
+    """Return ``snapshot.create_snapshot`` result as a text block.
+
+    Emits any ``steps`` messages (e.g. an inconclusive alternate-media
+    guard note) followed by the final ``message``.
+    """
+    parts: list[str] = []
+    steps = _steps_text(result)
+    if steps:
+        parts.append(steps)
+    msg = result.get("message")
+    if msg:
+        parts.append(msg)
+    return "\n".join(parts)
+
+
+def print_snapshot(result: dict) -> None:
+    """Print ``snapshot.create_snapshot`` result."""
+    _emit(format_snapshot(result))
+
+
+# -------------------------------------------------------------------
 # dry_run / list_remote / rsi
 # -------------------------------------------------------------------
 

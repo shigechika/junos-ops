@@ -17,6 +17,7 @@ A Python CLI to automate Juniper/JUNOS operations over NETCONF: model-aware upgr
 - Pre-install package validation
 - Rollback support (model-specific handling for MX/EX/SRX)
 - Scheduled reboot with automatic config-drift detection and re-install
+- On-demand recovery snapshot (`snapshot`) to sync the alternate boot media (MX-focused), with an alternate-media safety guard
 - Parallel RSI (request support information) / SCF (show configuration | display set) collection
 - Pre-flight `check` subcommand: NETCONF reachability, local firmware checksum (device-less), and remote firmware checksum in one unified table
 - Arbitrary CLI command execution across hosts (`show`) with `RpcTimeoutError` retry
@@ -205,6 +206,7 @@ junos-ops <subcommand> [options] [hostname ...]
 | `rollback` | Rollback to the previous version |
 | `version` | Show running/planning/pending versions and reboot schedule |
 | `reboot --at YYMMDDHHMM` | Schedule a reboot at the specified time |
+| `snapshot [--force]` | Create a recovery snapshot (`request system snapshot`) to sync the alternate boot media; MX-focused. Refuses if the device is running on its alternate media unless `--force`. See [snapshot](#snapshot-sync-the-alternate-boot-media) below |
 | `ls [-l]` | List files on the remote path |
 | `show COMMAND [--retry N]` / `show -f FILE` | Run an arbitrary CLI command (or file of commands) across devices |
 | `check [--connect\|--local\|--remote\|--all] [--model M]` | Pre-flight checks: NETCONF reachability, local/remote firmware checksum |
@@ -567,6 +569,42 @@ When `--connect` / `--remote` need to resolve a model and it was not supplied vi
 # rt1.example.jp
 	Shutdown at Fri Jun 13 05:00:00 2025. [pid 97978]
 ```
+
+### snapshot (sync the alternate boot media)
+
+```
+% junos-ops snapshot rt1.example.jp
+# rt1.example.jp
+	snapshot: 'request system snapshot' completed
+```
+
+Runs `request system snapshot` to copy the running system (root + config) onto
+the **alternate (backup) boot media**.
+
+A JUNOS upgrade only rewrites the currently-running media; the alternate is not
+refreshed automatically and drifts over time ("fossil alternate"). If the
+primary later fails to boot, the device falls back to that stale alternate and
+may come up non-routable. Taking a snapshot — before a risky change, or
+periodically — keeps the alternate current so the fallback is safe.
+
+- **MX is the primary target** (both fixed-config MX5/MX80 dual-eUSB and
+  RE/disk-based MX240/480), where this problem actually bites.
+- **EX/QFX (SWITCH)** are supported, but EX2300/EX3400 are chronically tight on
+  free disk and the recovery snapshot may not fit; an out-of-space failure is
+  reported as a clean, non-fatal skip rather than an error.
+- **Branch SRX (SRX300/320/340/345/380)** are supported but **low priority** —
+  they keep the alternate slice in sync during normal upgrades, so an explicit
+  snapshot is usually unnecessary (uses `request system snapshot slice alternate`).
+- Other platforms (vmhost MX such as MX204/MX10003, mid/high-end SRX, HA
+  clusters, vMX/vSRX, Junos Evolved, unknown) are **skipped** (non-fatal) — no
+  command is issued on hardware whose snapshot behaviour is not verified.
+
+**Safety guard:** `snapshot` refuses to run on a device that appears to be
+running on its alternate media (which would clone a possibly-stale system onto
+the primary). Override with `--force` only when you are sure the running image
+is the one you want to propagate. The on-device detection of the alternate-media
+state is best-effort and may report "inconclusive" (the snapshot then proceeds
+with a warning).
 
 ### config (push set command file)
 
