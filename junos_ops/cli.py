@@ -57,6 +57,7 @@ from junos_ops import __version__ as version  # noqa: E402
 from junos_ops import common  # noqa: E402
 from junos_ops import display  # noqa: E402
 from junos_ops import upgrade  # noqa: E402
+from junos_ops import snapshot  # noqa: E402
 from junos_ops import rsi  # noqa: E402
 from junos_ops import show  # noqa: E402
 
@@ -284,6 +285,25 @@ def cmd_reboot(hostname) -> int:
         result = upgrade.reboot(hostname, dev, common.args.rebootat)
         _emit_result(hostname, result, display.format_reboot)
         return result.get("code", 1)
+    except Exception as e:
+        _emit_exception(hostname, e)
+        return 1
+    finally:
+        try:
+            dev.close()
+        except (ConnectClosedError, Exception):
+            pass
+
+
+def cmd_snapshot(hostname) -> int:
+    """Create a recovery snapshot (request system snapshot)."""
+    dev = _open_connection(hostname)
+    if dev is None:
+        return 1
+    try:
+        result = snapshot.create_snapshot(hostname, dev)
+        _emit_result(hostname, result, display.format_snapshot)
+        return 0 if result.get("ok") else 1
     except Exception as e:
         _emit_exception(hostname, e)
         return 1
@@ -780,6 +800,17 @@ def _run():
     )
     p_reboot.add_argument("specialhosts", metavar="hostname", nargs="*")
 
+    # snapshot
+    p_snapshot = subparsers.add_parser(
+        "snapshot", parents=[parent],
+        help=(
+            "create a recovery snapshot (request system snapshot) to sync the "
+            "alternate boot media; MX-focused. Refuses if running on the "
+            "alternate media unless --force."
+        ),
+    )
+    p_snapshot.add_argument("specialhosts", metavar="hostname", nargs="*")
+
     # ls
     p_ls = subparsers.add_parser(
         "ls", parents=[parent], help="list remote files",
@@ -1132,6 +1163,7 @@ def _run():
         "rollback": cmd_rollback,
         "version": cmd_version,
         "reboot": cmd_reboot,
+        "snapshot": cmd_snapshot,
         "ls": cmd_ls,
         "show": cmd_show,
         "config": cmd_config,
