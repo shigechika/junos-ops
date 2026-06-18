@@ -562,6 +562,8 @@ When `--connect` / `--remote` need to resolve a model and it was not supplied vi
   rt2.example.jp.RSI done
 ```
 
+The output directory comes from `RSI_DIR` in config.ini, but `--rsi-dir DIR` overrides it per run (default: current directory).
+
 ### reboot (scheduled reboot)
 
 ```

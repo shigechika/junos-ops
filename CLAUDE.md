@@ -26,7 +26,9 @@ junos_ops/
 ├── common.py       # 共通機能（設定読込、接続管理、ターゲット決定、並列実行）
 ├── upgrade.py      # upgrade系機能（コピー、インストール、ロールバック、バージョン管理）
 ├── show.py         # show サブコマンド core（run_cli / run_cli_batch、text|json|xml）
-└── rsi.py          # RSI/SCF収集機能
+├── snapshot.py     # snapshot サブコマンド core（request system snapshot、代替メディア判定）
+├── rsi.py          # RSI/SCF収集機能
+└── display.py      # 表示層（core が返す dict を人間向け整形 / JSON シリアライズ）
 tests/
 ├── conftest.py     # pytest フィクスチャ
 ├── test_config.py  # 設定読込・モデル取得・ハッシュキャッシュのテスト
@@ -36,7 +38,15 @@ tests/
 ├── test_reboot.py      # reboot・config変更検出・snapshot削除のテスト
 ├── test_config_push.py # config サブコマンド（load_config）のテスト
 ├── test_show.py        # show サブコマンドのテスト
+├── test_snapshot.py    # snapshot サブコマンド（create_snapshot・代替メディア判定）のテスト
 ├── test_rsi.py     # RSI/SCF収集のテスト
+├── test_check.py       # check サブコマンド（local/remote/connect inventory）のテスト
+├── test_display.py     # display 層（format_*/print_*/JSON）のテスト
+├── test_install.py     # install フローのテスト
+├── test_unlink.py      # --unlink 経路（CLI 直接実行）のテスト
+├── test_json_output.py # --json JSONL 出力のテスト
+├── test_list_remote.py # ls サブコマンドのテスト
+├── test_package_checks.py # ローカル/リモート firmware checksum 検証のテスト
 └── test_cli_parse.py   # CLI引数パース・サブコマンドなし実行のテスト
 pyproject.toml      # パッケージメタデータ、エントリポイント
 config.ini          # 設定ファイル（設定例）
@@ -84,7 +94,7 @@ LICENSE
 - すべての core 関数は stdout に print しない。人間向け整形は `display` 層が担う。
 
 ### display.py — 表示層
-- `print_version()`, `print_copy()`, `print_install()`, `print_rollback()`, `print_reboot()`, `print_reinstall()`, `print_load_config()`, `print_list_remote()`, `print_dry_run()`, `print_rsi()`, `print_show()`, `print_connect_error()`, `print_read_config_error()`, `print_host_header()`, `print_host_footer()` — core が返す dict を人間向けに整形
+- `print_version()`, `print_copy()`, `print_install()`, `print_rollback()`, `print_reboot()`, `print_reinstall()`, `print_load_config()`, `print_list_remote()`, `print_dry_run()`, `print_rsi()`, `print_show()`, `print_snapshot()`, `print_connect_error()`, `print_read_config_error()`, `print_host_header()`, `print_host_footer()` — core が返す dict を人間向けに整形（`format_snapshot()` 等の `format_*` が整形ロジック本体）
 - `format_json(hostname, result)` / `print_json(hostname, result)` — core dict を `{"hostname": ..., **result}` の 1 行 JSON にシリアライズ（`--json` 用）。`format_json_obj(obj)` / `print_json_obj(obj)` は hostname を注入せず obj をそのまま出す（`check` の model 単位 row 用）。`json.dumps(..., default=str, ensure_ascii=False)` で lxml/datetime 等の非シリアライズ値も str fallback、非 ASCII はそのまま
 - `_print_lock` (`threading.Lock`) でマルチワーカー時の出力インターリーブを防止
 - junos-mcp など非 CLI 利用者は display を import しなければ stdout 出力ゼロ
@@ -96,6 +106,13 @@ LICENSE
 - `VALID_FORMATS` — `("text", "json", "xml")`
 - Caveat: NETCONF は `json` / `xml` 取得時に `| match` / `| last` / `| count` などのパイプ段を落とす。フィルタしたいときは `text` かつシェル側で加工
 
+### snapshot.py — snapshot サブコマンド core（すべて dict を返す）
+- 用途: `request system snapshot` で稼働中システム（root ＋ config）を**代替（バックアップ）ブートメディア**へ同期。アップグレードは稼働中メディアしか書き換えず代替面が「化石化」するため、フォールバック時の安全性を担保する。MX 中心
+- `create_snapshot(hostname, dev)` — core（dict: hostname/ok/dry_run/message/error/steps、no-op 時は `skipped` も）。`dev.facts["personality"]` で機種分類し、`_SNAPSHOT_RPC_ARGS` に無い personality（vmhost MX / mid-high SRX / HA / vMX/vSRX / Evolved / 不明）は **非致命的スキップ**。EX/QFX の out-of-space も `_is_out_of_space()` 判定で clean skip
+- `running_on_alternate_media(dev)` — 代替メディア稼働判定（`True`/`False`/`None`=判定不能）。ベストエフォート
+- **安全ガード:** 代替メディア稼働中（`on_alt is True`）かつ `--force` 無しなら `error="running_on_alternate_media"` で拒否（古いシステムをプライマリへ複製するのを防ぐ）。`None`（判定不能）は警告付きで続行
+- `_SNAPSHOT_RPC_ARGS` / `_SNAPSHOT_LABEL` — personality → RPC 引数・表示ラベルのマッピング（Branch SRX は `slice alternate`）
+
 ### rsi.py — RSI/SCF収集
 - RSI = request support information
 - SCF = show configuration | display set
@@ -105,7 +122,7 @@ LICENSE
 
 ### cli.py — サブコマンドルーティング
 - `main()` — argparse サブコマンド定義、ディスパッチ
-- `cmd_upgrade()`, `cmd_copy()`, `cmd_install()`, `cmd_rollback()`, `cmd_version()`, `cmd_reboot()`, `cmd_ls()`, `cmd_show()`, `cmd_config()`, `cmd_facts()` — サブコマンド用エントリ関数（connect → header → core(dict) → display）
+- `cmd_upgrade()`, `cmd_copy()`, `cmd_install()`, `cmd_rollback()`, `cmd_version()`, `cmd_reboot()`, `cmd_snapshot()`, `cmd_ls()`, `cmd_show()`, `cmd_config()`, `cmd_facts()` — サブコマンド用エントリ関数（connect → header → core(dict) → display）
 - `_check_host(hostname)` — `check` サブコマンド用ワーカー。int ではなく dict を返し、`main()` で結果を集約して `display.print_check_table` にテーブル出力。モデル解決順: `--model` > `config.ini [host].model` > `dev.facts["model"]`
 - `_check_local_inventory()` — `check --local` 用。`iter_configured_models()` の出力に対し `--model`（単一名）＋ `--tags` / `--exclude-tags`（`common._filter_models_by_tag_groups` で model 名 OR `<model>.tags` の OR フィルタ）を**積集合**で適用。`--local` 単独実行時 (`check_connect`/`check_remote` ともに false) は `_run()` 側で `get_targets()` をスキップさせ、ホスト側 `--tags` が "no hosts matched tags" で sys.exit するのを回避。フィルタ後 0 件は `logger.info` で「なぜ空か」をログる
 - `_open_connection()` — NETCONF 接続＋エラー時の display 出力ヘルパー（`--json` 時は connect エラーを JSON で出す）
@@ -121,11 +138,12 @@ junos-ops install [hostname ...]           # インストールだけ
 junos-ops rollback [hostname ...]          # ロールバック
 junos-ops version [hostname ...]           # バージョン表示
 junos-ops reboot --at YYMMDDHHMM [hostname ...]  # リブート
+junos-ops snapshot [--force] [hostname ...] # 代替ブートメディアを同期（request system snapshot、MX中心）
 junos-ops ls [-l] [hostname ...]           # リモートファイル一覧
 junos-ops show COMMAND [-F text|json|xml] [hostname ...]   # 任意の CLI コマンドを実行（-F で構造化出力）
 junos-ops config -f FILE [--confirm N] [hostname ...]  # set コマンドファイル適用
 junos-ops check [--connect|--local|--remote|--all] [--model M] [hostname ...]  # pre-flight チェック
-junos-ops rsi [hostname ...]               # RSI/SCF収集
+junos-ops rsi [--rsi-dir DIR] [hostname ...]  # RSI/SCF収集（--rsi-dir で出力先を上書き）
 junos-ops [hostname ...]                   # サブコマンド省略 → device facts 表示
 junos-ops --version                        # プログラムバージョン
 ```
