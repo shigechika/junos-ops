@@ -22,7 +22,7 @@ Juniper/JUNOS デバイスの運用を NETCONF 経由で自動化する Python C
 - Pre-flight `check` サブコマンド: NETCONF 疎通・ローカル firmware チェックサム（デバイス接続不要）・リモート firmware チェックサムを 1 コマンドで統合表示
 - 任意の CLI コマンドを複数ホストで実行（`show` サブコマンド、`RpcTimeoutError` 自動リトライ対応）
 - `config` での設定投入（commit confirmed + コミット後ヘルスチェック: ping / `uptime` NETCONF プローブ / 任意の CLI コマンド）
-- Jinja2 テンプレートによるホスト別設定生成（[詳細](docs/template.md#日本語版)）
+- Jinja2 テンプレートによるホスト別設定生成（[詳細](docs/template.ja.md)）
 - `--tags` によるタグベースのホストフィルタ（AND マッチ）
 - ローカルファームウェア置き場（`lpath`、`~` 展開対応）
 - ドライランモード（`--dry-run`）で事前確認
