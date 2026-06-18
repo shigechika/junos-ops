@@ -17,6 +17,7 @@ Juniper/JUNOS デバイスの運用を NETCONF 経由で自動化する Python C
 - インストール前のパッケージ検証（validate）
 - ロールバック対応（MX/EX/SRX モデル別処理）
 - スケジュールリブート（ファームウェアインストール後の config 変更を自動検出し、必要なら再インストール）
+- オンデマンドのリカバリスナップショット（`snapshot`）で代替ブートメディアを同期（MX 中心）、代替メディア稼働時の安全ガード付き
 - RSI（request support information）/ SCF（show configuration | display set）の並列収集
 - Pre-flight `check` サブコマンド: NETCONF 疎通・ローカル firmware チェックサム（デバイス接続不要）・リモート firmware チェックサムを 1 コマンドで統合表示
 - 任意の CLI コマンドを複数ホストで実行（`show` サブコマンド、`RpcTimeoutError` 自動リトライ対応）
@@ -205,6 +206,7 @@ junos-ops <subcommand> [options] [hostname ...]
 | `rollback` | 前バージョンにロールバック |
 | `version` | running/planning/pendingバージョンとリブート予定を表示 |
 | `reboot --at YYMMDDHHMM` | 指定日時にリブートをスケジュール |
+| `snapshot [--force]` | リカバリスナップショット（`request system snapshot`）を作成し代替ブートメディアを同期。MX 中心。代替メディアで稼働中のデバイスでは `--force` がない限り拒否。詳細は後述の [snapshot](#snapshotブートメディアの代替面を同期) を参照 |
 | `ls [-l]` | リモートパスのファイル一覧 |
 | `show COMMAND [--retry N]` / `show -f FILE` | 任意の CLI コマンド（またはコマンドファイル）を複数ホストで実行 |
 | `check [--connect\|--local\|--remote\|--all] [--model M]` | Pre-flight チェック: NETCONF 疎通・ローカル/リモート firmware チェックサム |
@@ -527,6 +529,8 @@ rt2.example.jp   ok       missing     MX5-T     jinstall-ppc-18.4R3-S10-signed.t
   rt2.example.jp.RSI done
 ```
 
+出力先は config.ini の `RSI_DIR` で指定しますが、`--rsi-dir DIR` で実行ごとに上書きできます（デフォルト: カレントディレクトリ）。
+
 ### reboot（スケジュールリブート）
 
 ```
@@ -534,6 +538,25 @@ rt2.example.jp   ok       missing     MX5-T     jinstall-ppc-18.4R3-S10-signed.t
 # rt1.example.jp
 	Shutdown at Fri Jun 13 05:00:00 2025. [pid 97978]
 ```
+
+### snapshot（ブートメディアの代替面を同期）
+
+```
+% junos-ops snapshot rt1.example.jp
+# rt1.example.jp
+	snapshot: 'request system snapshot' completed
+```
+
+`request system snapshot` を実行し、稼働中システム（root ＋ config）を**代替（バックアップ）ブートメディア**へコピーします。
+
+JUNOS のアップグレードは現在稼働中のメディアしか書き換えず、代替面は自動更新されないため時間とともに古くなります（「化石化した代替面」）。後にプライマリがブートに失敗すると、デバイスはその古い代替面にフォールバックし、疎通できない状態で立ち上がることがあります。リスクの高い変更の前や定期的にスナップショットを取っておくと、代替面が最新に保たれフォールバックが安全になります。
+
+- **MX が主対象**（固定構成の MX5/MX80 デュアル eUSB、および RE/ディスクベースの MX240/480）。この問題が実際に表面化するプラットフォームです。
+- **EX/QFX（SWITCH）** は対応していますが、EX2300/EX3400 は慢性的に空き容量が逼迫しておりリカバリスナップショットが収まらない場合があります。容量不足は致命的エラーではなく、クリーンな「スキップ」として報告されます。
+- **Branch SRX（SRX300/320/340/345/380）** は対応していますが**優先度は低め**です。通常のアップグレード時に代替スライスが同期されるため、明示的なスナップショットは通常不要です（`request system snapshot slice alternate` を使用）。
+- その他のプラットフォーム（MX204/MX10003 等の vmhost MX、mid/high-end SRX、HA クラスタ、vMX/vSRX、Junos Evolved、不明機種）は**スキップ**されます（非致命的）。スナップショット挙動が未検証のハードウェアにはコマンドを発行しません。
+
+**安全ガード:** `snapshot` は、代替メディアで稼働中と判定されるデバイス上では実行を拒否します（古い可能性のあるシステムをプライマリへ複製してしまうのを防ぐため）。稼働中イメージこそ伝播させたいものだと確信できる場合のみ `--force` で上書きしてください。代替メディア稼働状態のオンデバイス判定はベストエフォートで、「判定不能（inconclusive）」を報告することがあります（その場合は警告付きでスナップショットを続行します）。
 
 ### config（set コマンドファイル適用）
 
