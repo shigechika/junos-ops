@@ -833,9 +833,9 @@ def _run():
         "-F", "--format", dest="show_format",
         choices=list(show.VALID_FORMATS), default="text",
         help=(
-            "output format: text (default), json, or xml. "
-            "Note: '| match' / '| last' pipe stages are dropped by NETCONF "
-            "under json/xml; use text (or an RPC) when you need to filter."
+            "output format: text (default), json, or xml. Pipe stages "
+            "('| match' etc.) are ignored by the device for all formats; "
+            "see README for filtering options."
         ),
     )
     p_show.add_argument(

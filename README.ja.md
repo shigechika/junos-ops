@@ -659,7 +659,7 @@ show security flow session summary
 }
 ```
 
-> **注意 — `json` / `xml` ではパイプ段が落ちる。** NETCONF 経由で `json`／`xml` を要求すると、`| match`、`| last`、`| count` などのパイプ修飾子はデバイス側で暗黙に落とされます（[Juniper/junos-mcp-server#4](https://github.com/Juniper/junos-mcp-server/issues/4)／[#12](https://github.com/Juniper/junos-mcp-server/issues/12) 参照）。`--format text` なら従来どおりパイプ段は有効です。構造化出力をフィルタしたいときは `text` のままシェル側（`jc` / `grep` / 後段の `jq` 等）で加工するか、対応する RPC を直接呼び出してください。
+> **注意 — パイプは `--format` に関わらずデバイス側で無視される。** `dev.cli()` は NETCONF RPC 経由でコマンドを送るため、`| match`、`| last`、`| count` などのパイプは要求した形式に関わらず（`text` を含めて）デバイス側で暗黙に無視されます（[Juniper/junos-mcp-server#4](https://github.com/Juniper/junos-mcp-server/issues/4)／[#12](https://github.com/Juniper/junos-mcp-server/issues/12) 参照。#12 自体の NETCONF トレースでも `format="text"` を明示指定した場合にパイプが無視されていることが示されています）。例外は `| display xml rpc` で、これはデバイス側が特別扱いし、通常の出力の代わりに対応する RPC メソッド名を返します。出力をフィルタしたいときはシェル側（`grep` 等）に通すか、対応する RPC を直接呼び出してください。`json` の場合、`-F json` だけでは上記のように `# hostname` / `## command` ヘッダーが付いたままなので、トップレベルの `--json` フラグを併用してください（`junos-ops --json show ... -F json host`）——ヘッダーなしの純粋な JSON が stdout に出るので、その後 `jq` に渡せます。
 
 ### 引数なし（デバイスファクト表示）
 

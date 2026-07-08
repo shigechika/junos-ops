@@ -8,15 +8,21 @@ serializers.
 The three formats map to PyEZ as follows:
 
 - ``text`` -> ``dev.cli(command)`` returns a string (default, legacy behaviour)
-- ``json`` -> ``dev.cli(command, format="json")`` returns a Python ``dict``
-  parsed from the device's ``| display json`` output
+- ``json`` -> ``dev.cli(command, format="json")`` returns a Python ``dict``,
+  requested via the NETCONF ``format`` attribute — not a ``| display json``
+  pipe stage in the command string (pipe stages in the command are ignored,
+  see below)
 - ``xml``  -> ``dev.cli(command, format="xml")`` returns an ``lxml._Element``
   which we serialise with pretty-printing
 
-NETCONF note: pipe stages such as ``| match`` and ``| last`` are dropped
-by the device when the caller asks for ``format=json|xml``. Callers that
-need to filter output should use ``format=text`` or call the equivalent
-RPC directly.
+NETCONF note: pipe stages such as ``| match``, ``| last``, and ``| count``
+are ignored by the device regardless of ``format`` — ``dev.cli()`` sends
+the command over NETCONF RPC, and the device does not process filtering
+pipe stages for that path, for any of the three formats. The one
+exception is ``| display xml rpc``, which the device honours specially
+by returning the equivalent RPC method name instead of normal output.
+Callers that need to filter output should do so client-side, or call
+the equivalent RPC directly.
 """
 
 import time
