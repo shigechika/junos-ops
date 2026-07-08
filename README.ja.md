@@ -659,7 +659,7 @@ show security flow session summary
 }
 ```
 
-> **注意 — パイプ段は `--format` に関わらず落ちる。** NETCONF 経由では、`| match`、`| last`、`| count` などのパイプ修飾子は要求した形式に関わらず（`text` を含めて）デバイス側で暗黙に落とされます（[Juniper/junos-mcp-server#4](https://github.com/Juniper/junos-mcp-server/issues/4)／[#12](https://github.com/Juniper/junos-mcp-server/issues/12) 参照。#12 自体の NETCONF トレースでも `format="text"` を明示指定した場合にパイプ段が落ちていることが示されています）。出力をフィルタしたいときはコマンドの出力をクライアント側でシェル側（`grep` / `json` なら `jq` 等）に通して加工するか、対応する RPC を直接呼び出してください。
+> **注意 — パイプは `--format` に関わらず無視される。** NETCONF 経由では、`| match`、`| last`、`| count` などのパイプは要求した形式に関わらず（`text` を含めて）デバイス側で暗黙に無視されます（[Juniper/junos-mcp-server#4](https://github.com/Juniper/junos-mcp-server/issues/4)／[#12](https://github.com/Juniper/junos-mcp-server/issues/12) 参照。#12 自体の NETCONF トレースでも `format="text"` を明示指定した場合にパイプが無視されていることが示されています）。出力をフィルタしたいときはコマンドの出力をクライアント側でシェル側（`grep` / `json` なら `jq` 等）に通して加工するか、対応する RPC を直接呼び出してください。
 
 ### 引数なし（デバイスファクト表示）
 
