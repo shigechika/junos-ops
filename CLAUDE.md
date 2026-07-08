@@ -104,7 +104,7 @@ LICENSE
 - `run_cli_batch(dev, commands, ...)` — `-f FILE` 用。最初の失敗で短絡
 - `_cli_with_retry()` — `RpcTimeoutError` 時のバックオフ付きリトライ（5秒, 10秒, 15秒, ...）
 - `VALID_FORMATS` — `("text", "json", "xml")`
-- Caveat: NETCONF は `json` / `xml` 取得時に `| match` / `| last` / `| count` などのパイプ段を落とす。フィルタしたいときは `text` かつシェル側で加工
+- Caveat: `dev.cli()` は NETCONF RPC 経由でコマンドを送るため、`format` に関わらず（`text` を含め）デバイス側で `| match` / `| last` / `| count` などのパイプが無視される。フィルタしたいときはクライアント側で加工
 
 ### snapshot.py — snapshot サブコマンド core（すべて dict を返す）
 - 用途: `request system snapshot` で稼働中システム（root ＋ config）を**代替（バックアップ）ブートメディア**へ同期。アップグレードは稼働中メディアしか書き換えず代替面が「化石化」するため、フォールバック時の安全性を担保する。MX 中心

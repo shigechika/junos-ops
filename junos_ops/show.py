@@ -15,9 +15,12 @@ The three formats map to PyEZ as follows:
 - ``xml``  -> ``dev.cli(command, format="xml")`` returns an ``lxml._Element``
   which we serialise with pretty-printing
 
-NETCONF note: pipe stages such as ``| match`` and ``| last`` are dropped
-regardless of ``format`` — ``dev.cli()`` sends the command over NETCONF
-RPC, which JunOS does not pipe-process for any of the three formats.
+NETCONF note: pipe stages such as ``| match``, ``| last``, and ``| count``
+are ignored by the device regardless of ``format`` — ``dev.cli()`` sends
+the command over NETCONF RPC, and the device does not process filtering
+pipe stages for that path, for any of the three formats. The one
+exception is ``| display xml rpc``, which the device honours specially
+by returning the equivalent RPC method name instead of normal output.
 Callers that need to filter output should do so client-side, or call
 the equivalent RPC directly.
 """
