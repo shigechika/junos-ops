@@ -8,8 +8,10 @@ serializers.
 The three formats map to PyEZ as follows:
 
 - ``text`` -> ``dev.cli(command)`` returns a string (default, legacy behaviour)
-- ``json`` -> ``dev.cli(command, format="json")`` returns a Python ``dict``
-  parsed from the device's ``| display json`` output
+- ``json`` -> ``dev.cli(command, format="json")`` returns a Python ``dict``,
+  requested via the NETCONF ``format`` attribute — not a ``| display json``
+  pipe stage in the command string (pipe stages in the command are dropped,
+  see below)
 - ``xml``  -> ``dev.cli(command, format="xml")`` returns an ``lxml._Element``
   which we serialise with pretty-printing
 
