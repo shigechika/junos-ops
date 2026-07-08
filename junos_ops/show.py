@@ -14,9 +14,10 @@ The three formats map to PyEZ as follows:
   which we serialise with pretty-printing
 
 NETCONF note: pipe stages such as ``| match`` and ``| last`` are dropped
-by the device when the caller asks for ``format=json|xml``. Callers that
-need to filter output should use ``format=text`` or call the equivalent
-RPC directly.
+regardless of ``format`` — ``dev.cli()`` sends the command over NETCONF
+RPC, which JunOS does not pipe-process for any of the three formats.
+Callers that need to filter output should do so client-side, or call
+the equivalent RPC directly.
 """
 
 import time

@@ -709,7 +709,7 @@ Use `-F` / `--format {text,json,xml}` to change the output format. `text` is the
 }
 ```
 
-> **Caveat — pipe stages with `json` / `xml`.** Over NETCONF, pipe modifiers like `| match`, `| last`, and `| count` are silently dropped when the device is asked to emit `json` or `xml` (see [Juniper/junos-mcp-server#4](https://github.com/Juniper/junos-mcp-server/issues/4) / [#12](https://github.com/Juniper/junos-mcp-server/issues/12)). They are honoured for `--format text`. If you need to filter structured output, either stay on `text` and pipe through shell tools (e.g. `jc`, `grep`, `jq` after a separate parse step) or call the equivalent RPC directly.
+> **Caveat — pipe stages are dropped regardless of `--format`.** Over NETCONF, pipe modifiers like `| match`, `| last`, and `| count` are silently dropped no matter which format is requested — `text` included (see [Juniper/junos-mcp-server#4](https://github.com/Juniper/junos-mcp-server/issues/4) / [#12](https://github.com/Juniper/junos-mcp-server/issues/12), whose own NETCONF trace shows a `format="text"` request still losing its pipe stage). If you need to filter output, pipe the command's output through shell tools client-side (e.g. `grep`, or `jq` for `json`) or call the equivalent RPC directly.
 
 ### No subcommand (show device facts)
 

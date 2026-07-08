@@ -835,7 +835,8 @@ def _run():
         help=(
             "output format: text (default), json, or xml. "
             "Note: '| match' / '| last' pipe stages are dropped by NETCONF "
-            "under json/xml; use text (or an RPC) when you need to filter."
+            "regardless of format; filter client-side or call an RPC "
+            "directly when you need to filter."
         ),
     )
     p_show.add_argument(
