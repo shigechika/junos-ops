@@ -1,0 +1,111 @@
+name: Request Copilot review
+
+# Automatically request a GitHub Copilot code review on new pull requests,
+# EXCEPT the release PRs that release-please keeps open. Copilot review is a
+# metered premium request, and a release PR is only a version bump plus a
+# generated CHANGELOG — reviewing it every release wastes credits with nothing
+# to catch.
+#
+# This replaces the repository ruleset "Copilot review for default branch".
+# A ruleset (or the equivalent repo setting) can only match on the PR's *base*
+# branch, so it cannot skip PRs by head branch — every PR into main, including
+# release-please's, gets reviewed. release-please PRs are also authored by a
+# real user (a PAT), not a bot, so they cannot be excluded by author either.
+# Moving the request into a workflow lets us gate on the head branch name.
+#
+# The request is made with a Copilot-enabled user PAT (secret
+# COPILOT_REVIEW_TOKEN), NOT the Actions GITHUB_TOKEN: github-actions[bot] has
+# no Copilot seat, so `gh pr edit --add-reviewer @copilot` returns success but
+# silently attaches nothing under GITHUB_TOKEN. The PAT must be a fine-grained
+# token owned by a user with Copilot access, scoped to this repo, with Pull
+# requests: read and write.
+#
+# pull_request_target (not pull_request) is deliberate on two counts: on a fork
+# PR the pull_request token is read-only AND its secrets are withheld, so the
+# PAT would be unavailable and external contributions would silently lose
+# Copilot review. pull_request_target exposes secrets and runs with write
+# access, so fork PRs are covered too. It is safe here because this workflow
+# never checks out or executes the PR's code — it only passes the PR number to
+# the API — so none of the usual pull_request_target code-injection risks apply.
+#
+# The release-please skip is scoped to same-repo PRs: release-please only ever
+# creates branches in this repository, and on a fork the author controls
+# head.ref, so a fork PR named "release-please--…" must NOT be allowed to skip
+# review. Requiring head.repo == this repo closes that bypass.
+
+on:
+  pull_request_target:
+    types: [opened, reopened, ready_for_review]
+
+# The default GITHUB_TOKEN is unused (the step authenticates with the PAT), so
+# it needs no permissions.
+permissions: {}
+
+jobs:
+  request:
+    # Skip release-please PRs (credit saving) and drafts (reviewed once marked
+    # ready via the ready_for_review trigger above). The release-please match is
+    # scoped to same-repo branches so a fork PR cannot skip review by naming its
+    # branch "release-please--…".
+    if: >-
+      github.event.pull_request.draft == false &&
+      !(github.event.pull_request.head.repo.full_name == github.repository &&
+        startsWith(github.event.pull_request.head.ref, 'release-please--'))
+    runs-on: ubuntu-latest
+    steps:
+      - name: Request review from Copilot
+        env:
+          GH_TOKEN: ${{ secrets.COPILOT_REVIEW_TOKEN }}
+          # Pass PR number and repo via env rather than interpolating into the
+          # run script, per the workflow-injection guard. (Both are trusted —
+          # an integer and owner/repo — but this keeps the pattern uniform.)
+          PR: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+        # Use `gh pr edit --add-reviewer @copilot` (the documented handle), NOT
+        # the REST requested_reviewers endpoint, which returns 200 but silently
+        # ignores the Copilot bot login. Even gh's request can attach nothing if
+        # the token lacks a Copilot seat, so afterwards confirm a Copilot
+        # review_requested event actually landed and fail loudly otherwise — a
+        # Copilot review that is already present (idempotent re-request) or one
+        # that has already been submitted still leaves this event, so the check
+        # is stable across re-fires. This turns a silent green no-op into a
+        # visible red.
+        run: |
+          set -euo pipefail
+          gh pr edit "$PR" --repo "$REPO" --add-reviewer "@copilot"
+          # Confirm a Copilot review_requested event actually landed. The PR
+          # timeline is the reliable source: requested_reviewers drops the
+          # Copilot bot once it reviews, but the timeline event persists. It is
+          # an issues-namespace endpoint (a PR is an issue), readable with this
+          # repo's pull-request access. --paginate because our event is the
+          # NEWEST and the timeline is oldest-first, so on a long timeline it
+          # lands on the last page.
+          #
+          # Distinguish a failed query from "Copilot absent": capture gh api's
+          # own exit status via the `if` (no `|| true` masking) so a persistent
+          # read failure is reported as its own cause, not miscredited to a
+          # missing Copilot seat.
+          query_ok=false
+          for attempt in 1 2 3; do
+            if logins=$(gh api --paginate "repos/$REPO/issues/$PR/timeline?per_page=100" \
+                          --jq '.[] | select(.event=="review_requested") | .requested_reviewer.login'); then
+              query_ok=true
+              # Exact per-login match (not a substring) so a reviewer whose name
+              # merely contains "copilot" cannot satisfy the check.
+              while IFS= read -r login; do
+                if [ "${login,,}" = copilot ]; then
+                  echo "Copilot review requested."
+                  exit 0
+                fi
+              done <<< "$logins"
+            else
+              echo "::warning::timeline query failed on attempt $attempt; retrying"
+            fi
+            sleep 5
+          done
+          if [ "$query_ok" = true ]; then
+            echo "::error::Copilot was not requested — COPILOT_REVIEW_TOKEN may lack Copilot access or be expired."
+          else
+            echo "::error::Could not read the PR timeline after 3 attempts — a transient GitHub API error, or COPILOT_REVIEW_TOKEN lacking read access to this repository."
+          fi
+          exit 1
