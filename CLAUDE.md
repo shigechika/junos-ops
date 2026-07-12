@@ -76,7 +76,7 @@ LICENSE
 - `copy()` — SCP転送＋チェックサム検証（dict: storage_cleanup/snapshot_delete/steps/error）
 - `install()` — パッケージインストール（dict: copy_result/rollback_result/rescue_save/steps など nested）
 - `rollback()` — 前バージョンへの復帰（dict: ok/rpc_output/message/error）
-- `reboot()` — スケジュールリブート（dict: code/reinstall_result/steps。code は従来の 0..6 を保持）
+- `reboot()` — スケジュールリブート（dict: code/reinstall_result/steps。code は 0..7。7 は `--force` 無しで `get-reboot-information` の XML 解析に失敗したケース、issue #60）
 - `show_version()` — バージョン情報収集（dict: running/planning/pending/commit/config_changed_after_install 他）
 - `get_model_file()` / `get_model_hash()` — モデル→パッケージマッピング
 - `get_pending_version()` / `get_planning_version()` / `compare_version()` — バージョン比較
@@ -88,7 +88,7 @@ LICENSE
 - `check_remote_package(hostname, dev)` / `check_remote_package_by_model(hostname, dev, model)` — リモート firmware checksum 検証（by_model 版はモデルを明示指定）
 - `_compute_local_checksum(path, algo)` — hashlib ベースの純粋関数（PyEZ SW 非依存）
 - `get_hashcache()` / `set_hashcache()` / `clear_hashcache()` — チェックサムキャッシュ（スレッド安全）。`clear_hashcache` は `storage_cleanup` 後に invoke して cache が stale 化するのを防ぐ
-- `load_config()` — set コマンドファイルのロード＋コミット（dict: steps + logger.info でリアルタイム進捗）
+- `load_config()` — set/Jinja2(`.j2`) 設定ファイルのロード＋コミット（dict: steps/template/rendered_commands/diff/commit_mode 等。各ステップを `logger.debug` で実時間エコー、関数自身は print しない）。フローは lock → load → diff → commit_check → **commit confirmed** → ヘルスチェック → confirm → unlock。**ヘルスチェック失敗時は commit を confirm せず**、JUNOS の commit-confirmed タイマー満了で**自動ロールバック**させる（リモート機を締め出さない生命線。この順序は load-bearing）。`.j2` の場合は `common.render_template()` が config.ini ホストセクションの `var_` 変数＋`facts`/`hostname` を StrictUndefined でレンダリング（optional extra `junos-ops[template]` が必要）
 - `list_remote_path()` — リモートファイル一覧（dict: files/file_count/format）
 - `dry_run()` — local/remote package の検証（dict）
 - すべての core 関数は stdout に print しない。人間向け整形は `display` 層が担う。
@@ -141,7 +141,7 @@ junos-ops reboot --at YYMMDDHHMM [hostname ...]  # リブート
 junos-ops snapshot [--force] [hostname ...] # 代替ブートメディアを同期（request system snapshot、MX中心）
 junos-ops ls [-l] [hostname ...]           # リモートファイル一覧
 junos-ops show COMMAND [-F text|json|xml] [hostname ...]   # 任意の CLI コマンドを実行（-F で構造化出力）
-junos-ops config -f FILE [--confirm N] [hostname ...]  # set コマンドファイル適用
+junos-ops config -f FILE [--confirm N] [--health-check CMD ...] [--no-health-check] [--no-confirm] [--no-commit] [hostname ...]  # set/.j2 設定ファイル適用（commit confirmed＋ヘルスチェック＋自動ロールバック）
 junos-ops check [--connect|--local|--remote|--all] [--model M] [hostname ...]  # pre-flight チェック
 junos-ops rsi [--rsi-dir DIR] [hostname ...]  # RSI/SCF収集（--rsi-dir で出力先を上書き）
 junos-ops [hostname ...]                   # サブコマンド省略 → device facts 表示
@@ -220,7 +220,7 @@ CI で sdist / wheel のビルドを検証。pyproject.toml の記述ミス（PE
 1. Conventional Commits（`feat:` / `fix:` / `refactor:` / `perf:` など）で main にマージする
 2. release-please が自動で "chore(release): ..." の PR を開き、次バージョン候補と CHANGELOG を提示する
 3. 内容を確認して PR をマージ → release-please がタグ (`v0.X.Y`) と GitHub Release を作成
-4. `release.yml` が `release: published` で発火 → TestPyPI → PyPI → homebrew-tap 通知まで自動実行
+4. `release: published` で `release.yml`（TestPyPI → PyPI → homebrew-tap 通知）に加え `deb.yml` / `rpm.yml`（.deb / .rpm ビルド＋当該 Release へ添付）が発火
 
 `junos_ops/__init__.py` の `__version__` には `# x-release-please-version` マーカーが付いており、release-please が `.release-please-manifest.json` と同期して書き換える。CHANGELOG.md も自動 prepend される。
 
@@ -229,7 +229,8 @@ CI で sdist / wheel のビルドを検証。pyproject.toml の記述ミス（PE
 - `release-please-config.json` — package-name、release-type（python）、extra-files、changelog-sections
 - `.release-please-manifest.json` — 現在のバージョン（release-please が更新）
 - `.github/workflows/release-please.yml` — push: main で発火、`RELEASE_PLEASE_TOKEN`（fine-grained PAT）で下流 workflow を起動
-- `.github/workflows/release.yml` — `release: published` をフック、PyPI 公開と homebrew-tap 通知
+- `.github/workflows/release.yml` — `release: published` をフック、TestPyPI → PyPI 公開と homebrew-tap 通知
+- `.github/workflows/deb.yml` / `rpm.yml` — 同じく `release: published`（＋ `workflow_dispatch`）で発火し .deb / .rpm をビルドして当該 Release に添付（パッケージング設定は `debian/` / `rpm/` ディレクトリ）
 
 ### 下流連携
 

@@ -40,12 +40,21 @@ dev loop above.
 ### 1. The `display`-import boundary (do not regress)
 
 Core modules (`upgrade.py`, `common.py`, `rsi.py`, `show.py`, `snapshot.py`)
-never write to stdout — they only return dicts. `display.py` is the *sole*
-place that prints. Its own docstring states the reason explicitly: non-CLI
-callers (i.e. the downstream MCP wrapper) use `display.format_*()` to render
-result dicts as strings, precisely so they never need to import or trigger
-anything that writes to stdout. As long as that wrapper never imports
-`display`, it emits zero stdout output.
+return dicts and, on the normal path, do not write to stdout — `display.py`
+is the *sole* place that prints. (The one deliberate exception is
+`common.get_targets()`'s inner `_fatal()`, which prints a diagnostic to
+`sys.stdout` when `--json` is not set and then `sys.exit(1)`; a library caller
+that passes an empty host selection can hit it. Don't take that as licence to
+add new stdout writes elsewhere in core modules.) Its own docstring states the
+reason explicitly: non-CLI callers (i.e. the downstream MCP wrapper) use
+`display.format_*()` to render result dicts as strings, precisely so they
+never need to import or trigger anything that writes to stdout. As long as
+that wrapper never imports `display`, it emits zero stdout output.
+
+Relatedly, `argcomplete` (`cli.py`) and `tqdm` (in `_run_check_with_progress`)
+are imported under `try/except ImportError` on purpose — they map to the
+optional `completion` / `progress` extras, so a diff that moves either to a
+module-level `import` would break the default (extras-free) install. Flag it.
 
 This means: any stray `print()`/debug statement added to a core module, or
 any refactor that makes `display` get imported transitively by something the
