@@ -9,11 +9,26 @@ permissions:
   contents: write
   pull-requests: write
 
+# Release flow (immutable-releases compatible):
+#   1. release-please creates the GitHub Release as a DRAFT ("draft": true in
+#      release-please-config.json). A draft has no git tag yet.
+#   2. deb/rpm build against the merged commit (which contains the version
+#      bump) and attach their packages to the draft.
+#   3. publish-release flips the draft to published — that creates the tag
+#      and fires release:published, which triggers the PyPI pipeline
+#      (release.yml) exactly as before.
+# Assets must be attached BEFORE publishing: with immutable releases enabled,
+# a published release's assets can never be added, changed, or removed.
+
 jobs:
   release-please:
     runs-on: ubuntu-latest
+    outputs:
+      release_created: ${{ steps.release.outputs.release_created }}
+      tag_name: ${{ steps.release.outputs.tag_name }}
     steps:
       - uses: googleapis/release-please-action@v5
+        id: release
         with:
           # Use a fine-grained PAT so that tags and releases created by
           # release-please trigger downstream workflows. Tokens attributed
@@ -28,3 +43,32 @@ jobs:
           token: ${{ secrets.RELEASE_PLEASE_TOKEN || secrets.GITHUB_TOKEN }}
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
+
+  deb:
+    needs: release-please
+    if: needs.release-please.outputs.release_created == 'true'
+    uses: ./.github/workflows/deb.yml
+    with:
+      tag: ${{ needs.release-please.outputs.tag_name }}
+
+  rpm:
+    needs: release-please
+    if: needs.release-please.outputs.release_created == 'true'
+    uses: ./.github/workflows/rpm.yml
+    with:
+      tag: ${{ needs.release-please.outputs.tag_name }}
+
+  publish-release:
+    needs: [release-please, deb, rpm]
+    if: needs.release-please.outputs.release_created == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      # Publish with the PAT for the same recursion-guard reason as above:
+      # publishing is what creates the tag and emits release:published, and
+      # that event must be allowed to trigger release.yml.
+      - name: Publish draft release
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_PLEASE_TOKEN || secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ needs.release-please.outputs.tag_name }}
+        run: gh release edit "$TAG" --draft=false

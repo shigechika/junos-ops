@@ -1,8 +1,16 @@
 name: Build .deb packages
 
+# Called from release-please.yml while the release is still a DRAFT so the
+# assets are attached before publishing (required for immutable releases —
+# assets cannot be added after publish). workflow_dispatch remains for
+# ad-hoc builds and uploads nothing.
 on:
-  release:
-    types: [published]
+  workflow_call:
+    inputs:
+      tag:
+        description: "Draft release tag to attach the .deb to (e.g. v0.20.0)"
+        required: true
+        type: string
   workflow_dispatch:
     inputs:
       version:
@@ -43,11 +51,14 @@ jobs:
             libffi-dev
 
       - name: Update debian/changelog version
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+          INPUT_TAG: ${{ inputs.tag }}
         run: |
-          if [ -n "${{ inputs.version }}" ]; then
-            VERSION="${{ inputs.version }}"
+          if [ -n "$INPUT_VERSION" ]; then
+            VERSION="$INPUT_VERSION"
           else
-            VERSION="${GITHUB_REF_NAME#v}"
+            VERSION="${INPUT_TAG#v}"
           fi
           sed -i "1s/([^)]*)/($VERSION-1)/" debian/changelog
 
@@ -68,9 +79,12 @@ jobs:
           path: junos-ops_*~${{ matrix.codename }}.deb
           retention-days: 7
 
+      # The release is still a draft at this point; gh resolves draft
+      # releases by tag name for users with push access.
       - name: Upload .deb to GitHub Release
-        if: github.event_name == 'release'
+        if: inputs.tag != ''
         env:
           GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
         run: |
-          gh release upload "${GITHUB_REF_NAME}" junos-ops_*~${{ matrix.codename }}.deb --clobber
+          gh release upload "$TAG" junos-ops_*~${{ matrix.codename }}.deb --clobber

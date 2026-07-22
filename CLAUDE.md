@@ -219,8 +219,11 @@ CI で sdist / wheel のビルドを検証。pyproject.toml の記述ミス（PE
 
 1. Conventional Commits（`feat:` / `fix:` / `refactor:` / `perf:` など）で main にマージする
 2. release-please が自動で "chore(release): ..." の PR を開き、次バージョン候補と CHANGELOG を提示する
-3. 内容を確認して PR をマージ → release-please がタグ (`v0.X.Y`) と GitHub Release を作成
-4. `release: published` で `release.yml`（TestPyPI → PyPI → homebrew-tap 通知）に加え `deb.yml` / `rpm.yml`（.deb / .rpm ビルド＋当該 Release へ添付）が発火
+3. 内容を確認して PR をマージ → release-please が GitHub Release を **draft** で作成（この時点ではタグ無し）
+4. 同じ `release-please.yml` 内で `deb.yml` / `rpm.yml` が reusable workflow として呼ばれ、.deb / .rpm を draft Release に添付
+5. 添付完了後に `publish-release` ジョブが draft を公開 → タグ (`v0.X.Y`) が作成され、`release: published` で `release.yml`（TestPyPI → PyPI → homebrew-tap 通知）が発火
+
+draft → 添付 → 公開の順序は **Immutable Releases** 対応のため（公開後は資産の追加・変更・削除が一切できない）。
 
 `junos_ops/__init__.py` の `__version__` には `# x-release-please-version` マーカーが付いており、release-please が `.release-please-manifest.json` と同期して書き換える。CHANGELOG.md も自動 prepend される。
 
@@ -228,9 +231,9 @@ CI で sdist / wheel のビルドを検証。pyproject.toml の記述ミス（PE
 
 - `release-please-config.json` — package-name、release-type（python）、extra-files、changelog-sections
 - `.release-please-manifest.json` — 現在のバージョン（release-please が更新）
-- `.github/workflows/release-please.yml` — push: main で発火、`RELEASE_PLEASE_TOKEN`（fine-grained PAT）で下流 workflow を起動
+- `.github/workflows/release-please.yml` — push: main で発火。draft Release 作成 → deb/rpm 呼び出し → draft 公開までをオーケストレーション。`RELEASE_PLEASE_TOKEN`（fine-grained PAT）で Release を作成・公開し、下流 workflow を起動
 - `.github/workflows/release.yml` — `release: published` をフック、TestPyPI → PyPI 公開と homebrew-tap 通知
-- `.github/workflows/deb.yml` / `rpm.yml` — 同じく `release: published`（＋ `workflow_dispatch`）で発火し .deb / .rpm をビルドして当該 Release に添付（パッケージング設定は `debian/` / `rpm/` ディレクトリ）
+- `.github/workflows/deb.yml` / `rpm.yml` — `release-please.yml` から `workflow_call`（tag 入力）で呼ばれ .deb / .rpm をビルドして draft Release に添付。単発ビルドは `workflow_dispatch`（添付なし）。パッケージング設定は `debian/` / `rpm/` ディレクトリ
 
 ### 下流連携
 
