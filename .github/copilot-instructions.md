@@ -29,11 +29,13 @@ pytest tests/ -v --tb=short
 pip install build && python -m build
 ```
 
-This mirrors `.github/workflows/ci.yml` (Python 3.12/3.13 matrix). CI also
-has separate `deb.yml`/`rpm.yml` jobs that package the sdist/wheel into
-`.deb`/`.rpm`; a PR that changes `pyproject.toml` packaging metadata should
-be checked against those workflows too, but they are not part of the normal
-dev loop above.
+This mirrors `.github/workflows/ci.yml` (Python 3.12/3.13 matrix). Separate
+`deb.yml`/`rpm.yml` workflows package the sdist/wheel into `.deb`/`.rpm` —
+they run inside the release pipeline (called from `release-please.yml`, which
+attaches the packages to a draft release before publishing) or ad hoc via
+`workflow_dispatch`. A PR that changes `pyproject.toml` packaging metadata
+should be checked against those workflows too, but they are not part of the
+normal dev loop above.
 
 ## Review focus
 
