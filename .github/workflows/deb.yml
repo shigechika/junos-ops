@@ -11,6 +11,10 @@ on:
         description: "Draft release tag to attach the .deb to (e.g. v0.20.0)"
         required: true
         type: string
+      sha:
+        description: "Commit to build from (the draft release's target)"
+        required: false
+        type: string
   workflow_dispatch:
     inputs:
       version:
@@ -29,9 +33,13 @@ jobs:
       contents: write
 
     steps:
+      # Build the exact commit the draft release targets, not whatever HEAD
+      # the calling run happens to sit on (empty on workflow_dispatch →
+      # default checkout).
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
+          ref: ${{ inputs.sha }}
 
       - name: Install build dependencies
         run: |
@@ -78,6 +86,9 @@ jobs:
           name: junos-ops-${{ matrix.codename }}
           path: junos-ops_*~${{ matrix.codename }}.deb
           retention-days: 7
+          # Without this, re-running a failed job 409s on the artifact left
+          # by the previous attempt before ever reaching the release upload.
+          overwrite: true
 
       # The release is still a draft at this point; gh resolves draft
       # releases by tag name for users with push access.

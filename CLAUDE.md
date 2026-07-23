@@ -225,6 +225,8 @@ CI で sdist / wheel のビルドを検証。pyproject.toml の記述ミス（PE
 
 draft → 添付 → 公開の順序は **Immutable Releases** 対応のため（公開後は資産の追加・変更・削除が一切できない）。
 
+**deb/rpm 失敗時の復旧**: 同じ run の **「Re-run failed jobs」** で再開する（draft への `--clobber` 再アップロードは冪等）。**「Re-run all jobs」は使わない** — release-please がリリース済みと判定して全ジョブ skip となり、draft が未公開のまま残る。座礁した draft の手動復旧は `gh release upload <tag> <資産>` → PAT（`RELEASE_PLEASE_TOKEN` 相当）で `gh release edit <tag> --draft=false`（`GITHUB_TOKEN` で公開すると release.yml が発火しない）。
+
 `junos_ops/__init__.py` の `__version__` には `# x-release-please-version` マーカーが付いており、release-please が `.release-please-manifest.json` と同期して書き換える。CHANGELOG.md も自動 prepend される。
 
 ### 設定ファイル

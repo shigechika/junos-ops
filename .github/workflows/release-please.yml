@@ -9,6 +9,13 @@ permissions:
   contents: write
   pull-requests: write
 
+# Never run two release pipelines at once: with draft releases a lost race
+# would create two drafts for the same tag (release-please's "already
+# released" check is label-based and happens after release creation).
+concurrency:
+  group: release-please
+  cancel-in-progress: false
+
 # Release flow (immutable-releases compatible):
 #   1. release-please creates the GitHub Release as a DRAFT ("draft": true in
 #      release-please-config.json). A draft has no git tag yet.
@@ -26,6 +33,7 @@ jobs:
     outputs:
       release_created: ${{ steps.release.outputs.release_created }}
       tag_name: ${{ steps.release.outputs.tag_name }}
+      sha: ${{ steps.release.outputs.sha }}
     steps:
       - uses: googleapis/release-please-action@v5
         id: release
@@ -50,6 +58,7 @@ jobs:
     uses: ./.github/workflows/deb.yml
     with:
       tag: ${{ needs.release-please.outputs.tag_name }}
+      sha: ${{ needs.release-please.outputs.sha }}
 
   rpm:
     needs: release-please
@@ -57,6 +66,7 @@ jobs:
     uses: ./.github/workflows/rpm.yml
     with:
       tag: ${{ needs.release-please.outputs.tag_name }}
+      sha: ${{ needs.release-please.outputs.sha }}
 
   publish-release:
     needs: [release-please, deb, rpm]
