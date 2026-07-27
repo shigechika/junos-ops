@@ -4,7 +4,6 @@ from concurrent import futures
 from jnpr.junos import Device
 from jnpr.junos.exception import (
     ConnectAuthError,
-    ConnectClosedError,
     ConnectError,
     ConnectRefusedError,
     ConnectTimeoutError,

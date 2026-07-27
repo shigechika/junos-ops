@@ -1,7 +1,7 @@
 """CLI 引数パースのテスト（Issue #36: サブコマンドなしで -c 指定時のエラー修正）"""
 
 import sys
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
 import pytest
 

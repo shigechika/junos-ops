@@ -1,7 +1,7 @@
 """reboot 関連関数のテスト"""
 
 import datetime
-from unittest.mock import MagicMock, patch, PropertyMock
+from unittest.mock import MagicMock, patch
 
 from lxml import etree
 
