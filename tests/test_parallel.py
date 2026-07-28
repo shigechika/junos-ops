@@ -1,6 +1,5 @@
 """run_parallel() / get_targets() のテスト"""
 
-import argparse
 import configparser
 
 import pytest

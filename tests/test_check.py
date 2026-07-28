@@ -16,8 +16,6 @@ Covers three surfaces:
 import argparse
 import configparser
 import hashlib
-import os
-import tempfile
 from unittest.mock import MagicMock, patch
 
 from junos_ops import cli
@@ -686,7 +684,7 @@ class TestFormatCheckTable:
         )
         assert "avail" in out
         lines = out.splitlines()
-        data_line = [l for l in lines if "rt1" in l][0]
+        data_line = [line for line in lines if "rt1" in line][0]
         assert "  -  " in data_line or data_line.endswith("  -")
 
 

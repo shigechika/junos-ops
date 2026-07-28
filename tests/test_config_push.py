@@ -1,6 +1,6 @@
 """load_config() のテスト"""
 
-from unittest.mock import MagicMock, patch, call
+from unittest.mock import MagicMock, patch
 
 from junos_ops import cli
 from junos_ops import common
