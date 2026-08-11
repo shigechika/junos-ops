@@ -219,13 +219,17 @@ CI で sdist / wheel のビルドを検証。pyproject.toml の記述ミス（PE
 
 1. Conventional Commits（`feat:` / `fix:` / `refactor:` / `perf:` など）で main にマージする
 2. release-please が自動で "chore(release): ..." の PR を開き、次バージョン候補と CHANGELOG を提示する
-3. 内容を確認して PR をマージ → release-please が GitHub Release を **draft** で作成（この時点ではタグ無し）
+3. 内容を確認して PR をマージ → release-please が GitHub Release を **draft** で作成。`release-please-config.json` の top-level `"force-tag-creation": true`（2026-08-11 PR #145 で追加）により、この時点で実タグ `v0.X.Y` も同時に作られる — draft のままでもタグは実在する
 4. 同じ `release-please.yml` 内で `deb.yml` / `rpm.yml` が reusable workflow として呼ばれ、.deb / .rpm を draft Release に添付
-5. 添付完了後に `publish-release` ジョブが draft を公開 → タグ (`v0.X.Y`) が作成され、`release: published` で `release.yml`（TestPyPI → PyPI → homebrew-tap 通知）が発火
+5. 添付完了後に `publish-release` ジョブが draft を公開し、`release: published` で `release.yml`（TestPyPI → PyPI → homebrew-tap 通知）が発火
 
 draft → 添付 → 公開の順序は **Immutable Releases** 対応のため（公開後は資産の追加・変更・削除が一切できない）。
 
+**force-tag-creation が要る理由**: GitHub は draft リリースに対して公開されるまで実タグを作らない（release-please 公式ドキュメントが "lazy tag creation" と呼ぶ挙動）。これが無いと、deb/rpm 添付が失敗して draft が公開されないたびに release-please が「直前リリース」を見失い、コミット全履歴への再スキャンにフォールバックして、過去の一度きりの `Release-As:` コミットを再度 honor するなどして**既に公開済みのバージョンを再提案 → 同名タグの immutable リリースと衝突 → 失敗 → 再びアンカーを見失う**という無限ループに陥る。2026-07-23〜08-11 に junos-ops で実際に発生し（PR #126/#134/#139/#143/#144 がバージョン番号を行ったり来たり提案し続けた）、`force-tag-creation: true` で解消した。
+
 **deb/rpm 失敗時の復旧**: 同じ run の **「Re-run failed jobs」** で再開する（draft への `--clobber` 再アップロードは冪等）。**「Re-run all jobs」は使わない** — release-please がリリース済みと判定して全ジョブ skip となり、draft が未公開のまま残る。座礁した draft の手動復旧は `gh release upload <tag> <資産>` → PAT（`RELEASE_PLEASE_TOKEN` 相当）で `gh release edit <tag> --draft=false`（`GITHUB_TOKEN` で公開すると release.yml が発火しない）。
+
+**注意（上記「Re-run で冪等」が成り立たないケース）**: `deb.yml`/`rpm.yml` のエラーが `Cannot delete asset from an immutable release` の場合、それは新しく作られた draft のタグ名が**既に公開・immutable 化済みの別リリースと重複している**ことを意味する（`gh release upload` はタグ名で解決するため、新しい draft ではなく古い公開済みリリースにヒットしてしまう）。これは Re-run しても同じエラーで恒久的に失敗する — まず `.release-please-manifest.json` の値と `gh release list` の実際の最新公開バージョンが一致しているかを確認すること。`force-tag-creation` 導入後はこの状態自体が起きないはずなので、再発したら release-please 側の別の不具合を疑う。
 
 `junos_ops/__init__.py` の `__version__` には `# x-release-please-version` マーカーが付いており、release-please が `.release-please-manifest.json` と同期して書き換える。CHANGELOG.md も自動 prepend される。
 
