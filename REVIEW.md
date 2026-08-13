@@ -74,6 +74,8 @@ reviewer also receives.
   rule above, not an oversight.
 - Anything `ruff check .` already fails the build on. It is gated at a
   pinned version, so restating a finding costs a round trip and no
-  information.
+  information. This never applies to a rule listed under **Always
+  blocking** above, even if a lint rule happens to fire on the same
+  line.
 - `ruff format` findings. Formatting is deliberately not gated here;
   see `ruff.toml`.
