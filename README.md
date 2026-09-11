@@ -618,10 +618,14 @@ status`:
   refused unless `--allow-mixed-version`.
 
 `--wait SEC` (only with `--member --now`) verifies the recovery instead of
-leaving it to you: after issuing, junos-ops reconnects until the member is
-`Prsnt` with a role **and** its FPC slot is `Online`. Add
-`--expect-up ge-0/0/40,xe-0/0/47` to also require those interfaces to be
-`up/up` — a member can be `Prsnt` while its PFE is still not forwarding, which
+leaving it to you: junos-ops reads the member's boot timestamp *before*
+issuing the reboot, then reconnects until that timestamp has changed and the
+member is `Prsnt` with a role **and** its FPC slot is `Online`. (The reboot RPC
+returns while the member is still up, so "healthy" on its own is not evidence
+that anything happened; if the boot time cannot be read, junos-ops instead
+requires having seen the member go away, and says so.) Add
+`--expect-up ge-0/0/40,xe-0/0/47` (physical or logical names) to also require
+those interfaces to be `up/up` — a member can be `Prsnt` while its PFE is still not forwarding, which
 is exactly when traffic hashed to it is black-holed. Connection failures during
 the window are "not yet": the whole VC can be unreachable while one member
 reboots if the management path transits its uplink. Exit code is 10 when the

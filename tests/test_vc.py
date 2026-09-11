@@ -739,12 +739,30 @@ up
 """
 
 
-def member_dev(vc_rsp=None, s0="Online", s1="Online", o40="up", o47="up"):
+UPTIME_XML = """
+<multi-routing-engine-results>
+  <multi-routing-engine-item><re-name>localre</re-name><system-uptime-information>
+    <system-booted-time><date-time>{b1}</date-time></system-booted-time>
+  </system-uptime-information></multi-routing-engine-item>
+  <multi-routing-engine-item><re-name>fpc0</re-name><system-uptime-information>
+    <system-booted-time><date-time>{b0}</date-time></system-booted-time>
+  </system-uptime-information></multi-routing-engine-item>
+</multi-routing-engine-results>
+"""
+
+BOOT_BEFORE = "2026-06-17 04:11:55 JST"
+BOOT_AFTER = "2026-09-11 23:47:42 JST"
+
+
+def member_dev(vc_rsp=None, s0="Online", s1="Online", o40="up", o47="up", booted=BOOT_AFTER):
     dev = MagicMock()
     dev.rpc.get_virtual_chassis_information.return_value = vc_rsp if vc_rsp is not None else vc_xml()
     dev.rpc.get_fpc_information.return_value = etree.fromstring(FPC_XML.format(s0=s0, s1=s1))
     dev.rpc.get_interface_information.return_value = etree.fromstring(
         IFACE_XML.format(o40=o40, o47=o47)
+    )
+    dev.rpc.get_system_uptime_information.return_value = etree.fromstring(
+        UPTIME_XML.format(b0=booted, b1="2026-06-17 04:11:43 JST")
     )
     return dev
 
@@ -793,6 +811,7 @@ class TestWaitForMember:
 
     def _run(self, seq, **kw):
         clock = itertools.count(0, 5)
+        kw.setdefault("booted_before", BOOT_BEFORE)
         with (
             patch.object(common, "connect", side_effect=seq) as connect,
             patch.object(vc.time, "sleep") as sleep,
@@ -845,3 +864,99 @@ class TestWaitForMember:
         r, _, _ = self._run([self._fail()] * 3, timeout=10)
         assert r["ok"] is False and r["error"] == "unreachable"
         assert r["after"] is None
+
+
+class TestWaitForMemberRebootEvidence:
+    """#164 review: 'healthy right now' is not evidence that the reboot happened."""
+
+    def _conn(self, dev):
+        return {"hostname": "h", "host": "h", "ok": True, "dev": dev,
+                "error": None, "error_message": None}
+
+    def _fail(self):
+        return {"ok": False, "dev": None, "error": "ConnectTimeoutError",
+                "error_message": "timed out"}
+
+    def _run(self, seq, **kw):
+        """seq may be a list (exact sequence) or a single conn dict (repeated)."""
+        clock = itertools.count(0, 25)
+        side = seq if isinstance(seq, list) else (lambda *a, **k: seq)
+        with (
+            patch.object(common, "connect", side_effect=side),
+            patch.object(vc.time, "sleep"),
+            patch.object(vc.time, "monotonic", side_effect=lambda: next(clock)),
+        ):
+            return vc.wait_for_member("h", kw.pop("member", 0), kw.pop("timeout", 60), **kw)
+
+    def test_unchanged_boot_time_is_not_success(self, mock_args, mock_config):
+        """The member is still up from before the reboot RPC took effect."""
+        still_old = member_dev(booted=BOOT_BEFORE)
+        r = self._run(self._conn(still_old), booted_before=BOOT_BEFORE)
+        assert r["ok"] is False and r["error"] == "member_not_back"
+        assert "has not rebooted yet" in r["error_message"]
+
+    def test_changed_boot_time_is_success_on_the_first_probe(self, mock_args, mock_config):
+        r = self._run([self._conn(member_dev(booted=BOOT_AFTER))], booted_before=BOOT_BEFORE)
+        assert r["ok"] is True and r["rebooted"] is True
+        assert r["booted"] == BOOT_AFTER
+
+    def test_unreadable_boot_time_keeps_waiting(self, mock_args, mock_config):
+        dev = member_dev()
+        dev.rpc.get_system_uptime_information.side_effect = RpcError()
+        r = self._run(self._conn(dev), booted_before=BOOT_BEFORE)
+        assert r["ok"] is False
+        assert "cannot read the member's boot time" in r["error_message"]
+
+    def test_without_baseline_requires_an_observed_transition(self, mock_args, mock_config):
+        healthy = member_dev()
+        r = self._run(self._conn(healthy), booted_before=None)
+        assert r["ok"] is False
+        assert "has not gone down yet" in r["error_message"]
+
+    def test_without_baseline_a_transition_unblocks_it(self, mock_args, mock_config):
+        r = self._run([self._fail(), self._conn(member_dev())], booted_before=None)
+        assert r["ok"] is True and r["rebooted"] is True
+
+    def test_master_member_uses_localre_uptime(self, mock_args, mock_config):
+        dev = member_dev()
+        assert vc.get_member_boot_time(dev, 1, master="1") == "2026-06-17 04:11:43 JST"
+        assert vc.get_member_boot_time(dev, 0) == BOOT_AFTER
+        assert vc.get_member_boot_time(dev, 5) is None
+
+    def test_single_re_uptime_reply(self, mock_args, mock_config):
+        dev = member_dev()
+        dev.rpc.get_system_uptime_information.return_value = etree.fromstring(
+            "<system-uptime-information><system-booted-time>"
+            f"<date-time>{BOOT_AFTER}</date-time></system-booted-time></system-uptime-information>"
+        )
+        assert vc.get_member_boot_time(dev, 0) == BOOT_AFTER
+
+
+class TestLogicalInterfaceExpectations:
+    def test_logical_names_match(self):
+        xml = (
+            "<interface-information><physical-interface><name>ae0</name>"
+            "<admin-status>up</admin-status><oper-status>up</oper-status>"
+            "<logical-interface><name>ae0.0</name><admin-status>up</admin-status>"
+            "<oper-status>down</oper-status></logical-interface></physical-interface>"
+            "</interface-information>"
+        )
+        dev = MagicMock()
+        dev.rpc.get_interface_information.return_value = etree.fromstring(xml)
+        st = vc.get_interface_states(dev, ["ae0", "ae0.0"])
+        assert st == {"ae0": "up/up", "ae0.0": "up/down"}
+
+
+class TestPollBoundsRpcs:
+    def test_device_timeout_is_capped_by_the_window(self, mock_args, mock_config):
+        dev = member_dev()
+        conn = {"hostname": "h", "host": "h", "ok": True, "dev": dev,
+                "error": None, "error_message": None}
+        clock = itertools.count(0, 5)
+        with (
+            patch.object(common, "connect", return_value=conn),
+            patch.object(vc.time, "sleep"),
+            patch.object(vc.time, "monotonic", side_effect=lambda: next(clock)),
+        ):
+            vc.wait_for_member("h", 0, 30, booted_before=BOOT_BEFORE)
+        assert dev.timeout <= 30 and dev.timeout >= 5

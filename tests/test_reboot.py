@@ -758,6 +758,7 @@ class TestCmdRebootWait:
     def _waited(self, ok=True, **over):
         base = {
             "ok": ok,
+            "booted": "2026-09-11 23:47:42 JST", "rebooted": ok,
             "after": {"ok": True, "members": [{"id": "0", "role": "Backup", "status": "Prsnt"}],
                       "master": "1", "backup": "0"},
             "fpc_state": "Online" if ok else "Present",
@@ -775,9 +776,13 @@ class TestCmdRebootWait:
         mock_args.rebootat = None
         mock_args.wait = argv_wait
         mock_args.expect_up = expect_up
+        status = {"ok": True, "members": [], "master": "1", "backup": "0",
+                  "mode": "Enabled", "error": None, "error_message": None}
         with (
             patch.object(cli, "_open_connection", return_value=MagicMock()),
             patch.object(cli.upgrade, "reboot", return_value=result),
+            patch.object(vc, "get_vc_status", return_value=status),
+            patch.object(vc, "get_member_boot_time", return_value="2026-06-17 04:11:55 JST"),
             patch.object(vc, "wait_for_member", return_value=waited) as w,
         ):
             rc = cli.cmd_reboot("test-host")
@@ -787,7 +792,10 @@ class TestCmdRebootWait:
         r = self._result()
         rc, w = self._run(mock_args, r, self._waited())
         assert rc == 0
-        w.assert_called_once_with("test-host", 0, 600, expect_up=[])
+        w.assert_called_once_with(
+            "test-host", 0, 600, expect_up=[],
+            booted_before="2026-06-17 04:11:55 JST", master="1",
+        )
         out = capsys.readouterr().out
         assert "confirmed: member 0 is back" in out
         assert r["wait"]["attempts"] == 12
@@ -796,7 +804,7 @@ class TestCmdRebootWait:
         waited = self._waited(interfaces={"ge-0/0/40": "up/up", "xe-0/0/47": "up/up"})
         rc, w = self._run(mock_args, self._result(), waited, expect_up=" ge-0/0/40 , xe-0/0/47 ")
         assert rc == 0
-        w.assert_called_once_with("test-host", 0, 600, expect_up=["ge-0/0/40", "xe-0/0/47"])
+        assert w.call_args.kwargs["expect_up"] == ["ge-0/0/40", "xe-0/0/47"]
         assert "xe-0/0/47=up/up" in capsys.readouterr().out
 
     def test_not_back_is_code_10(self, mock_args, mock_config, capsys):
@@ -837,3 +845,44 @@ class TestCmdRebootWait:
         ):
             assert cli.cmd_reboot("test-host") == 0
         w.assert_not_called()
+
+
+class TestCmdRebootWaitBaseline:
+    """The pre-reboot boot time is read before issuing, and its absence is flagged."""
+
+    def _run(self, mock_args, boot_before):
+        from junos_ops import cli, vc
+        mock_args.member = 0
+        mock_args.now = True
+        mock_args.rebootat = None
+        mock_args.wait = 600
+        mock_args.expect_up = None
+        result = TestCmdRebootWait()._result()
+        waited = TestCmdRebootWait()._waited()
+        order = []
+        status = {"ok": True, "members": [], "master": "1", "backup": "0",
+                  "mode": "Enabled", "error": None, "error_message": None}
+        with (
+            patch.object(cli, "_open_connection", return_value=MagicMock()),
+            patch.object(vc, "get_vc_status", return_value=status),
+            patch.object(vc, "get_member_boot_time",
+                         side_effect=lambda *a, **k: (order.append("boot"), boot_before)[1]),
+            patch.object(cli.upgrade, "reboot",
+                         side_effect=lambda *a, **k: (order.append("reboot"), result)[1]),
+            patch.object(vc, "wait_for_member", return_value=waited) as w,
+        ):
+            rc = cli.cmd_reboot("test-host")
+        return rc, w, order, result
+
+    def test_baseline_is_read_before_the_reboot(self, mock_args, mock_config):
+        rc, w, order, _ = self._run(mock_args, "2026-06-17 04:11:55 JST")
+        assert rc == 0
+        assert order == ["boot", "reboot"]
+        assert w.call_args.kwargs["booted_before"] == "2026-06-17 04:11:55 JST"
+
+    def test_missing_baseline_is_warned_about(self, mock_args, mock_config, capsys):
+        rc, w, _, result = self._run(mock_args, None)
+        assert rc == 0
+        assert w.call_args.kwargs["booted_before"] is None
+        assert any("could not read the member's boot time" in x for x in result["warnings"])
+        assert "WARNING" in capsys.readouterr().out

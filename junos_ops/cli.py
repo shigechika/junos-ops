@@ -369,7 +369,17 @@ def cmd_reboot(hostname) -> int:
     if dev is None:
         return 1
     member = getattr(common.args, "member", None)
+    wait = getattr(common.args, "wait", 0) or 0
+    booted_before = None
+    vc_master = None
     try:
+        if member is not None and wait > 0 and not common.args.dry_run:
+            # Read the member's boot timestamp *before* the reboot: the RPC
+            # returns while the member is still up, so "healthy" afterwards
+            # only means something if this changed.
+            status = vc.get_vc_status(dev)
+            vc_master = status.get("master") if status.get("ok") else None
+            booted_before = vc.get_member_boot_time(dev, member, master=vc_master)
         result = upgrade.reboot(hostname, dev, common.args.rebootat, member=member)
     except Exception as e:
         _emit_exception(hostname, e)
@@ -380,7 +390,6 @@ def cmd_reboot(hostname) -> int:
         except (ConnectClosedError, Exception):
             pass
 
-    wait = getattr(common.args, "wait", 0) or 0
     immediate = common.args.rebootat is None
     if (
         result.get("code") == 0
@@ -394,7 +403,15 @@ def cmd_reboot(hostname) -> int:
             for i in (getattr(common.args, "expect_up", None) or "").split(",")
             if i.strip()
         ]
-        waited = vc.wait_for_member(hostname, member, wait, expect_up=expect_up)
+        waited = vc.wait_for_member(
+            hostname, member, wait, expect_up=expect_up,
+            booted_before=booted_before, master=vc_master,
+        )
+        if booted_before is None:
+            result["warnings"] = result.get("warnings", []) + [
+                "could not read the member's boot time before the reboot; "
+                "recovery was judged by observing the member go away and come back"
+            ]
         result["wait"] = {
             k: waited[k]
             for k in ("ok", "elapsed", "attempts", "error", "error_message")
@@ -402,6 +419,7 @@ def cmd_reboot(hostname) -> int:
         result["after"] = waited["after"]
         result["fpc_state"] = waited["fpc_state"]
         result["interfaces"] = waited["interfaces"]
+        result["booted"] = waited["booted"]
         if waited["ok"]:
             ports = f", {len(expect_up)} port(s) up" if expect_up else ""
             result["steps"].append({

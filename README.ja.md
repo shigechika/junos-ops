@@ -576,7 +576,7 @@ reboot member 0 now
 - **現在の Master** の再起動は拒否 — 先に mastership を移す（[`vc-switch`](#vc-switchvirtual-chassis-の-mastership-を移す) 参照）か、本当に意図しているなら `--force`
 - インストール済み・未起動（pending）のパッケージがある場合、member 単体の再起動はその member だけで新バージョンを有効化し VC がバージョン不一致になるため、`--allow-mixed-version` が無ければ拒否
 
-`--wait SEC`（`--member --now` 併用時のみ）を付けると復帰確認まで junos-ops が行います。発行後に再接続を繰り返し、member が `Prsnt` かつ role を持ち、**FPC スロットが `Online`** になるまで待ちます。`--expect-up ge-0/0/40,xe-0/0/47` を足すと、それらのインターフェースが `up/up` になることも条件に加えられます — member が `Prsnt` でも PFE がまだ転送準備できていないことがあり、そこへハッシュされた通信がブラックホールになるためです。待機中の接続失敗は「まだ」の扱いです（member の uplink を管理経路が通っていると、再起動中は VC 全体に到達できなくなることがあります）。時間内に戻らなければ終了コード 10、JSON には `wait`・`after`・`fpc_state`・`interfaces` が載ります。
+`--wait SEC`（`--member --now` 併用時のみ）を付けると復帰確認まで junos-ops が行います。発行**前**に member の boot 時刻を読んでおき、その時刻が変わり、かつ member が `Prsnt` で role を持ち、**FPC スロットが `Online`** になるまで再接続を繰り返します（reboot RPC は member が落ちる前に戻るため、「今は健全」だけでは再起動した証拠になりません。boot 時刻が読めなかった場合は「一度は居なくなったのを観測した」ことを条件にし、その旨を警告します）。`--expect-up ge-0/0/40,xe-0/0/47`（物理名・論理名どちらも可）を足すと、それらのインターフェースが `up/up` になることも条件に加えられます — member が `Prsnt` でも PFE がまだ転送準備できていないことがあり、そこへハッシュされた通信がブラックホールになるためです。待機中の接続失敗は「まだ」の扱いです（member の uplink を管理経路が通っていると、再起動中は VC 全体に到達できなくなることがあります）。時間内に戻らなければ終了コード 10、JSON には `wait`・`after`・`fpc_state`・`interfaces` が載ります。
 
 ```
 % junos-ops reboot --member 0 --now --wait 600 --expect-up xe-0/0/47 sw1.example.jp

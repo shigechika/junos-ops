@@ -406,6 +406,8 @@ def format_reboot(result: dict) -> str:
     ifaces = result.get("interfaces")
     if ifaces:
         parts.append("  " + ", ".join(f"{n}={v or '?'}" for n, v in sorted(ifaces.items())))
+    for w in result.get("warnings") or []:
+        parts.append(f"  WARNING: {w}")
     return "\n".join(parts)
 
 
