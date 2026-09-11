@@ -222,6 +222,7 @@ junos-ops <subcommand> [options] [hostname ...]
 | `rollback` | Rollback to the previous version |
 | `version` | Show running/planning/pending versions and reboot schedule |
 | `reboot --at YYMMDDHHMM` | Schedule a reboot at the specified time |
+| `reboot --member N (--now \| --at YYMMDDHHMM)` | Reboot a single Virtual Chassis member (explicit hostnames required; refuses the current Master and mixed-version outcomes unless overridden) |
 | `snapshot [--force]` | Create a recovery snapshot (`request system snapshot`) to sync the alternate boot media; MX-focused. Refuses if the device is running on its alternate media unless `--force`. See [snapshot](#snapshot-sync-the-alternate-boot-media) below |
 | `ls [-l]` | List files on the remote path |
 | `show COMMAND [--retry N]` / `show -f FILE` | Run an arbitrary CLI command (or file of commands) across devices |
@@ -588,6 +589,36 @@ The output directory comes from `RSI_DIR` in config.ini, but `--rsi-dir DIR` ove
 # rt1.example.jp
 	Shutdown at Fri Jun 13 05:00:00 2025. [pid 97978]
 ```
+
+#### Rebooting a single Virtual Chassis member
+
+`--member N` issues `request system reboot member N` instead of rebooting the
+whole chassis, and `--now` (only together with `--member`) reboots immediately
+instead of at a scheduled time. Explicit hostnames are required — the implicit
+"all hosts in config.ini" target never applies to a member reboot.
+
+```
+% junos-ops reboot --member 0 --now sw1.example.jp
+# sw1.example.jp
+reboot member 0 now
+	member 0: role=Backup status=Prsnt (master=1, backup=0)
+	Shutdown NOW!
+```
+
+Before issuing anything the member is checked against `show virtual-chassis
+status`:
+
+- the member must exist and be `Prsnt`;
+- rebooting the **current Master** is refused — switch mastership away first
+  (`vc-switch`, tracked in #153) or pass
+  `--force` if you really mean it;
+- if a package is installed but not yet booted (pending), a single-member reboot
+  would activate it on that member only and leave the VC mixed-version; this is
+  refused unless `--allow-mixed-version`.
+
+The existing-schedule check, `--force` schedule clearing and the
+config-drift/reinstall gate apply as for a whole-chassis reboot. `--member`
+also works with `--at` to schedule a member reboot.
 
 ### snapshot (sync the alternate boot media)
 

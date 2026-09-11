@@ -28,6 +28,7 @@ junos_ops/
 ├── show.py         # show サブコマンド core（run_cli / run_cli_batch、text|json|xml）
 ├── snapshot.py     # snapshot サブコマンド core（request system snapshot、代替メディア判定）
 ├── rsi.py          # RSI/SCF収集機能
+├── vc.py           # Virtual Chassis ヘルパ（status 取得、reboot --member の検証に使用）
 └── display.py      # 表示層（core が返す dict を人間向け整形 / JSON シリアライズ）
 tests/
 ├── conftest.py     # pytest フィクスチャ
@@ -49,7 +50,8 @@ tests/
 ├── test_json_output.py # --json JSONL 出力のテスト
 ├── test_list_remote.py # ls サブコマンドのテスト
 ├── test_package_checks.py # ローカル/リモート firmware checksum 検証のテスト
-├── test_cli_parse.py   # CLI引数パース・サブコマンドなし実行のテスト
+├── test_cli_parse.py   # CLI引数パース・サブコマンドなし実行・reboot --member/--now ガードのテスト
+├── test_vc.py          # vc.get_vc_status / find_member（実機 XML fixture）のテスト
 └── test_logging.py     # _setup_logging（console / --log-file / -d / logging.ini / 冪等性）と python -m junos_ops のテスト
 pyproject.toml      # パッケージメタデータ、エントリポイント
 config.ini          # 設定ファイル（設定例）
@@ -79,7 +81,7 @@ LICENSE
 - `copy()` — SCP転送＋チェックサム検証（dict: storage_cleanup/snapshot_delete/steps/error）
 - `install()` — パッケージインストール（dict: copy_result/rollback_result/rescue_save/steps など nested）
 - `rollback()` — 前バージョンへの復帰（dict: ok/rpc_output/message/error）
-- `reboot()` — スケジュールリブート（dict: code/reinstall_result/steps。code は 0..7。7 は `--force` 無しで `get-reboot-information` の XML 解析に失敗したケース、issue #60）
+- `reboot(hostname, dev, reboot_dt, *, member=None)` — スケジュールリブート（dict: code/reinstall_result/steps/member/vc_status。code は 0..9。7 は `--force` 無しで `get-reboot-information` の XML 解析に失敗したケース（issue #60）、8 は `--member` の VC 検証失敗（status 取得不能／member 不在／member が現 Master で `--force` 無し）、9 は pending パッケージで `--allow-mixed-version` 無し）。`member` 指定時は PyEZ `SW.reboot(member_id=)` を**使わず** `_reboot_member()` が `dev.rpc.request_reboot(member=N, in=0|at=…)` を直接発行する — SW 版は `all_re=True`（既定）だと `<member>` を付けず、facts 由来の member 一覧に無いと無言で None を返すため。`reboot_dt=None` は「今」（CLI は `--member` 併用時のみ許可）。pending チェックは `check_and_reinstall` の**前**（VC 全体の reinstall を走らせないため）
 - `show_version()` — バージョン情報収集（dict: running/planning/pending/commit/config_changed_after_install 他）
 - `get_model_file()` / `get_model_hash()` — モデル→パッケージマッピング
 - `get_pending_version()` / `get_planning_version()` / `compare_version()` — バージョン比較
@@ -95,6 +97,11 @@ LICENSE
 - `list_remote_path()` — リモートファイル一覧（dict: files/file_count/format）
 - `dry_run()` — local/remote package の検証（dict）
 - すべての core 関数は stdout に print しない。人間向け整形は `display` 層が担う。
+
+### vc.py — Virtual Chassis ヘルパ（すべて dict を返す、print しない）
+- `get_vc_status(dev)` — `get-virtual-chassis-information` を JSON-native な dict に（members[{id, role, status, priority, model}], master, backup, mode）。`member-role` の末尾 `*`（`Master*`）は剥がす。RPC 失敗・`member-list` 欠落は `ok=False`（例外は握って `error`/`error_message` に載せる）。呼び側は **fail-closed**（`ok=False` を「VC ではない」と解釈しない）
+- `find_member(status, member_id)` — id で member エントリを引く（int/str どちらでも）
+- 実機（QFX5110 2 member）で確認した XML: `member-status`=`Prsnt`、`member-role`=`Master*`/`Backup`/`Linecard`、`virtual-chassis-mode`=`Enabled`
 
 ### display.py — 表示層
 - `print_version()`, `print_copy()`, `print_install()`, `print_rollback()`, `print_reboot()`, `print_reinstall()`, `print_load_config()`, `print_list_remote()`, `print_dry_run()`, `print_rsi()`, `print_show()`, `print_snapshot()`, `print_connect_error()`, `print_read_config_error()`, `print_host_header()`, `print_host_footer()` — core が返す dict を人間向けに整形（`format_snapshot()` 等の `format_*` が整形ロジック本体）
@@ -142,6 +149,7 @@ junos-ops install [hostname ...]           # インストールだけ
 junos-ops rollback [hostname ...]          # ロールバック
 junos-ops version [hostname ...]           # バージョン表示
 junos-ops reboot --at YYMMDDHHMM [hostname ...]  # リブート
+junos-ops reboot --member N (--now | --at YYMMDDHHMM) [--allow-mixed-version] hostname ...  # VC member 個別リブート（ホスト名必須）
 junos-ops snapshot [--force] [hostname ...] # 代替ブートメディアを同期（request system snapshot、MX中心）
 junos-ops ls [-l] [hostname ...]           # リモートファイル一覧
 junos-ops show COMMAND [-F text|json|xml] [hostname ...]   # 任意の CLI コマンドを実行（-F で構造化出力）

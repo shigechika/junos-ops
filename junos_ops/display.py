@@ -367,7 +367,15 @@ def print_install(result: dict) -> None:
 # -------------------------------------------------------------------
 
 
-_REBOOT_PRE_ACTIONS = {"existing_schedule", "force_clear", "clear_reboot"}
+_REBOOT_PRE_ACTIONS = {
+    "vc_member", "force_master", "mixed_version", "error",
+    "existing_schedule", "force_clear", "clear_reboot",
+}
+
+
+def _reboot_when(result: dict) -> str:
+    at = result.get("reboot_at")
+    return "now" if at == "now" else f"at {at}"
 
 
 def format_reboot(result: dict) -> str:
@@ -378,6 +386,9 @@ def format_reboot(result: dict) -> str:
     the final ``reboot`` step message.
     """
     parts: list[str] = []
+    member = result.get("member")
+    if member is not None:
+        parts.append(f"reboot member {member} {_reboot_when(result)}")
     pre = _steps_text(result, _REBOOT_PRE_ACTIONS)
     if pre:
         parts.append(pre)

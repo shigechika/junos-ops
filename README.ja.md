@@ -222,6 +222,7 @@ junos-ops <subcommand> [options] [hostname ...]
 | `rollback` | 前バージョンにロールバック |
 | `version` | running/planning/pendingバージョンとリブート予定を表示 |
 | `reboot --at YYMMDDHHMM` | 指定日時にリブートをスケジュール |
+| `reboot --member N (--now \| --at YYMMDDHHMM)` | Virtual Chassis の member を個別に再起動（ホスト名明示が必須。現 Master とバージョン不一致になるケースは上書き指定が無い限り拒否） |
 | `snapshot [--force]` | リカバリスナップショット（`request system snapshot`）を作成し代替ブートメディアを同期。MX 中心。代替メディアで稼働中のデバイスでは `--force` がない限り拒否。詳細は後述の [snapshot](#snapshotブートメディアの代替面を同期) を参照 |
 | `ls [-l]` | リモートパスのファイル一覧 |
 | `show COMMAND [--retry N]` / `show -f FILE` | 任意の CLI コマンド（またはコマンドファイル）を複数ホストで実行 |
@@ -555,6 +556,26 @@ rt2.example.jp   ok       missing     MX5-T     jinstall-ppc-18.4R3-S10-signed.t
 # rt1.example.jp
 	Shutdown at Fri Jun 13 05:00:00 2025. [pid 97978]
 ```
+
+#### Virtual Chassis の member を個別に再起動する
+
+`--member N` を付けるとシャーシ全体ではなく `request system reboot member N` を発行します。`--now`（`--member` 併用時のみ）でスケジュールではなく即時に再起動します。ホスト名の明示が必須で、「config.ini の全ホスト」という暗黙のターゲットは member 再起動には適用されません。
+
+```
+% junos-ops reboot --member 0 --now sw1.example.jp
+# sw1.example.jp
+reboot member 0 now
+	member 0: role=Backup status=Prsnt (master=1, backup=0)
+	Shutdown NOW!
+```
+
+発行前に `show virtual-chassis status` で member を検証します:
+
+- member が存在し `Prsnt` であること
+- **現在の Master** の再起動は拒否 — 先に mastership を移す（`vc-switch`、#153 で追加予定）か、本当に意図しているなら `--force`
+- インストール済み・未起動（pending）のパッケージがある場合、member 単体の再起動はその member だけで新バージョンを有効化し VC がバージョン不一致になるため、`--allow-mixed-version` が無ければ拒否
+
+既存スケジュールの検出、`--force` によるスケジュール消去、設定ドリフト検出＋再インストールのゲートはシャーシ全体の再起動と同様に働きます。`--member` は `--at` と組み合わせてスケジュール実行もできます。
 
 ### snapshot（ブートメディアの代替面を同期）
 

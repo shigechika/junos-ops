@@ -20,6 +20,7 @@ import logging
 from logging import getLogger
 
 from junos_ops import common
+from junos_ops import vc
 
 logger = getLogger(__name__)
 
@@ -1753,8 +1754,29 @@ def check_and_reinstall(hostname, dev) -> dict:
     return result
 
 
-def reboot(hostname: str, dev, reboot_dt: datetime.datetime) -> dict:
-    """Schedule device reboot at the specified time.
+def reboot(
+    hostname: str, dev, reboot_dt: datetime.datetime | None, *, member: int | None = None
+) -> dict:
+    """Schedule device reboot at the specified time (or reboot a VC member).
+
+    :param reboot_dt: target time; ``None`` means "now" and is only
+        accepted together with ``member`` (the CLI enforces this).
+    :param member: Virtual Chassis member id for ``request system reboot
+        member N``. The member is validated against
+        :func:`junos_ops.vc.get_vc_status` first (present, and not the
+        current Master unless ``--force``), and a pending package is
+        refused unless ``--allow-mixed-version`` because rebooting a
+        single member would activate it there only.
+
+        PyEZ ``SW.reboot(member_id=...)`` is deliberately not used: with
+        its default ``all_re=True`` the ``<member>`` element is never
+        emitted, and when the id is not in its facts-derived member list
+        it silently returns None. The RPC is built directly instead.
+
+        Field-verify note: on a VC ``get-reboot-information`` returns one
+        ``reboot-information-results`` per RE (``localre``, ``fpc1``); the
+        existing-schedule check below still looks at the whole text and
+        can miss a schedule that exists on only one of them.
 
     :return: dict with keys:
 
@@ -1764,9 +1786,17 @@ def reboot(hostname: str, dev, reboot_dt: datetime.datetime) -> dict:
           reboot info, 3 = clear_reboot failed, 4 = ConnectError on
           reboot RPC, 5 = RpcError on reboot RPC, 6 =
           check_and_reinstall failed, 7 = get_reboot_information XML
-          parse error without ``--force`` — see issue #60).
+          parse error without ``--force`` — see issue #60, 8 = VC member
+          check failed (status unavailable / member not present / member
+          is the current Master without ``--force``), 9 = a pending
+          package would leave the VC mixed-version and
+          ``--allow-mixed-version`` was not given).
         - ``dry_run`` (bool)
-        - ``reboot_at`` (str): formatted ``yymmddhhmm`` target time.
+        - ``reboot_at`` (str): formatted ``yymmddhhmm`` target time, or
+          ``"now"``.
+        - ``member`` (int | None): VC member id for a member reboot.
+        - ``vc_status`` (dict | None): :func:`junos_ops.vc.get_vc_status`
+          result when ``member`` was given.
         - ``existing_schedule`` (str | None): summary of any
           pre-existing reboot/shutdown schedule detected.
         - ``cleared_existing`` (bool): True iff we forcibly cleared a
@@ -1781,8 +1811,8 @@ def reboot(hostname: str, dev, reboot_dt: datetime.datetime) -> dict:
     Does not print. Note: the legacy implementation called
     ``dev.close()`` on success; callers should now close the device.
     """
-    logger.debug(f"{reboot_dt=}")
-    at_str = reboot_dt.strftime("%y%m%d%H%M")
+    logger.debug(f"{reboot_dt=} {member=}")
+    at_str = reboot_dt.strftime("%y%m%d%H%M") if reboot_dt is not None else "now"
     steps: list[dict] = []
     result: dict = {
         "hostname": hostname,
@@ -1790,6 +1820,8 @@ def reboot(hostname: str, dev, reboot_dt: datetime.datetime) -> dict:
         "code": 0,
         "dry_run": common.args.dry_run,
         "reboot_at": at_str,
+        "member": member,
+        "vc_status": None,
         "existing_schedule": None,
         "cleared_existing": False,
         "reinstall_result": None,
@@ -1797,6 +1829,80 @@ def reboot(hostname: str, dev, reboot_dt: datetime.datetime) -> dict:
         "steps": steps,
         "error": None,
     }
+
+    if member is not None:
+        # Member reboot: validate against the live VC before touching any
+        # schedule. The procedure this exists for is "switch mastership
+        # away first, then reboot the ex-master", so rebooting the current
+        # Master is refused unless --force.
+        status = vc.get_vc_status(dev)
+        result["vc_status"] = status
+        if not status["ok"]:
+            result["code"] = 8
+            result["error"] = "vc_status_unavailable"
+            result["message"] = (
+                f"cannot read virtual-chassis status ({status['error']}: "
+                f"{status['error_message']}); refusing member reboot"
+            )
+            steps.append({"action": "error", "message": f"\t{result['message']}"})
+            return result
+        entry = vc.find_member(status, member)
+        if entry is None or entry["status"] != "Prsnt":
+            result["code"] = 8
+            result["error"] = "member_not_present"
+            seen = ", ".join(
+                f"{m['id']}={m['role'] or '?'}/{m['status']}" for m in status["members"]
+            ) or "none"
+            result["message"] = (
+                f"member {member} is not present in the virtual chassis "
+                f"(members: {seen})"
+            )
+            steps.append({"action": "error", "message": f"\t{result['message']}"})
+            return result
+        steps.append({
+            "action": "vc_member",
+            "message": (
+                f"\tmember {member}: role={entry['role'] or '?'} "
+                f"status={entry['status']} (master={status['master']}, "
+                f"backup={status['backup']})"
+            ),
+        })
+        if entry["role"] == "Master":
+            if not common.args.force:
+                result["code"] = 8
+                result["error"] = "member_is_master"
+                result["message"] = (
+                    f"member {member} is the current Master; switch mastership "
+                    "first (vc-switch) or retry with --force"
+                )
+                steps.append({"action": "error", "message": f"\t{result['message']}"})
+                return result
+            steps.append({
+                "action": "force_master",
+                "message": f"\tforce: rebooting the current Master (member {member})",
+            })
+        # A pending (installed, not yet booted) package would be activated
+        # on this member only. Checked *before* check_and_reinstall, which
+        # may otherwise kick off a whole-VC reinstall.
+        pending = get_pending_version(hostname, dev)
+        if pending is not None:
+            if not getattr(common.args, "allow_mixed_version", False):
+                result["code"] = 9
+                result["error"] = "pending_package_mixed_version"
+                result["message"] = (
+                    f"pending package {pending} would be activated on member "
+                    f"{member} only, leaving the virtual chassis mixed-version; "
+                    "reboot the whole chassis, or retry with --allow-mixed-version"
+                )
+                steps.append({"action": "error", "message": f"\t{result['message']}"})
+                return result
+            steps.append({
+                "action": "mixed_version",
+                "message": (
+                    f"\tWARNING: pending package {pending} will be activated on "
+                    f"member {member} only (--allow-mixed-version)"
+                ),
+            })
 
     xml_str: str = ""
     parse_error: Exception | None = None
@@ -1893,12 +1999,19 @@ def reboot(hostname: str, dev, reboot_dt: datetime.datetime) -> dict:
         return result
 
     # reboot
-    sw = SW(dev)
     try:
         if common.args.dry_run:
-            msg = f"dry-run: reboot at {at_str}"
+            what = f"reboot member {member}" if member is not None else "reboot"
+            when = "now" if reboot_dt is None else f"at {at_str}"
+            msg = f"dry-run: {what} {when}"
+        elif member is not None:
+            msg = _reboot_member(dev, member, None if reboot_dt is None else at_str)
         else:
-            msg = sw.reboot(at=at_str)
+            sw = SW(dev)
+            try:
+                msg = sw.reboot(at=at_str)
+            finally:
+                del sw
     except ConnectError as e:
         logger.error(f"{e=}")
         result["code"] = 4
@@ -1909,14 +2022,43 @@ def reboot(hostname: str, dev, reboot_dt: datetime.datetime) -> dict:
         result["code"] = 5
         result["error"] = "RpcError"
         return result
-    finally:
-        del sw
 
     result["message"] = msg
     steps.append({"action": "reboot", "message": f"\t{msg}"})
     result["ok"] = True
     logger.debug("success")
     return result
+
+
+def _reboot_member(dev, member: int, at_str: str | None) -> str:
+    """Issue ``request system reboot member N [at TIME]`` via the raw RPC.
+
+    Builds ``<request-reboot><member>N</member><in>0</in></request-reboot>``
+    (or ``<at>TIME</at>``) directly so the member element is always
+    present — see :func:`reboot` for why PyEZ ``SW.reboot`` is bypassed.
+    Returns the device's status text.
+    """
+    kwargs = {"member": str(member)}
+    if at_str is None:
+        kwargs["in"] = "0"
+    else:
+        kwargs["at"] = at_str
+    rsp = dev.rpc.request_reboot(**kwargs)
+    # PyEZ hands back the first child of <rpc-reply>: usually the
+    # <request-reboot-status> element itself (so look at .text, not
+    # descendants), sometimes <output> lines, and True for an empty <ok/>.
+    text = None
+    if isinstance(rsp, bool) or rsp is None:
+        pass
+    elif rsp.tag == "request-reboot-status":
+        text = (rsp.text or "").strip()
+    else:
+        text = rsp.findtext(".//request-reboot-status")
+        if not text:
+            text = "\n".join(
+                (o.text or "").strip() for o in rsp.iter("output") if (o.text or "").strip()
+            )
+    return text or f"request system reboot member {member} issued"
 
 
 def yymmddhhmm_type(dt_str: str) -> datetime.datetime:

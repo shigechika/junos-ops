@@ -3,6 +3,7 @@
 import datetime
 from unittest.mock import MagicMock, patch
 
+from jnpr.junos.exception import RpcError
 from lxml import etree
 
 
@@ -299,3 +300,169 @@ class TestDeleteSnapshots:
         assert result["error"] == "RpcError"
         assert "skipped" in result["message"]
         assert capsys.readouterr().out == ""
+
+
+class TestRebootMember:
+    """reboot(member=N): VC validation, mixed-version gate, raw request-reboot RPC."""
+
+    @staticmethod
+    def _reboot_xml(text="No shutdown/reboot scheduled.\n"):
+        root = etree.Element("output")
+        root.text = text
+        return root
+
+    @staticmethod
+    def _status(master="0", backup="1", members=None):
+        members = members or [
+            {"id": "0", "role": "Master", "status": "Prsnt", "priority": "129", "model": "m"},
+            {"id": "1", "role": "Backup", "status": "Prsnt", "priority": "129", "model": "m"},
+        ]
+        return {"ok": True, "mode": "Enabled", "members": members,
+                "master": master, "backup": backup, "error": None, "error_message": None}
+
+    def _dev(self):
+        dev = MagicMock()
+        dev.rpc.get_reboot_information.return_value = self._reboot_xml()
+        status_el = etree.Element("request-reboot-status")
+        status_el.text = "Shutdown NOW!"
+        dev.rpc.request_reboot.return_value = status_el
+        return dev
+
+    def _run(self, junos_upgrade, dev, member=1, reboot_dt=None, status=None, pending=None):
+        with (
+            patch("junos_ops.upgrade.vc.get_vc_status", return_value=status or self._status()),
+            patch.object(junos_upgrade, "get_pending_version", return_value=pending),
+            patch.object(junos_upgrade, "check_and_reinstall",
+                         return_value={"ok": True, "steps": []}) as reinstall,
+            patch("junos_ops.upgrade.SW") as sw_cls,
+        ):
+            result = junos_upgrade.reboot("test-host", dev, reboot_dt, member=member)
+        return result, reinstall, sw_cls
+
+    def test_member_now_uses_raw_rpc_not_sw(self, junos_upgrade, mock_args, mock_config):
+        dev = self._dev()
+        result, reinstall, sw_cls = self._run(junos_upgrade, dev, member=1)
+        assert result["code"] == 0 and result["ok"] is True
+        assert result["reboot_at"] == "now"
+        assert result["member"] == 1
+        dev.rpc.request_reboot.assert_called_once_with(member="1", **{"in": "0"})
+        sw_cls.assert_not_called()
+        reinstall.assert_called_once()
+        assert result["message"] == "Shutdown NOW!"
+        assert any(s["action"] == "vc_member" for s in result["steps"])
+
+    def test_member_at_schedules_via_rpc(self, junos_upgrade, mock_args, mock_config):
+        dev = self._dev()
+        result, _, _ = self._run(
+            junos_upgrade, dev, member=1, reboot_dt=datetime.datetime(2025, 6, 13, 5, 0)
+        )
+        assert result["reboot_at"] == "2506130500"
+        dev.rpc.request_reboot.assert_called_once_with(member="1", at="2506130500")
+
+    def test_dry_run_issues_nothing(self, junos_upgrade, mock_args, mock_config):
+        mock_args.dry_run = True
+        dev = self._dev()
+        result, _, _ = self._run(junos_upgrade, dev, member=1)
+        assert result["ok"] is True
+        assert "dry-run: reboot member 1 now" in result["message"]
+        dev.rpc.request_reboot.assert_not_called()
+
+    def test_member_is_master_refused(self, junos_upgrade, mock_args, mock_config):
+        dev = self._dev()
+        result, reinstall, _ = self._run(junos_upgrade, dev, member=0)
+        assert result["code"] == 8
+        assert result["error"] == "member_is_master"
+        dev.rpc.request_reboot.assert_not_called()
+        dev.rpc.get_reboot_information.assert_not_called()
+        reinstall.assert_not_called()
+
+    def test_member_is_master_with_force(self, junos_upgrade, mock_args, mock_config):
+        mock_args.force = True
+        dev = self._dev()
+        result, _, _ = self._run(junos_upgrade, dev, member=0)
+        assert result["code"] == 0
+        assert any(s["action"] == "force_master" for s in result["steps"])
+        dev.rpc.request_reboot.assert_called_once()
+
+    def test_member_not_present(self, junos_upgrade, mock_args, mock_config):
+        dev = self._dev()
+        members = [
+            {"id": "0", "role": "Master", "status": "Prsnt", "priority": None, "model": None},
+            {"id": "1", "role": "", "status": "NotPrsnt", "priority": None, "model": None},
+        ]
+        result, _, _ = self._run(
+            junos_upgrade, dev, member=1, status=self._status(backup=None, members=members)
+        )
+        assert result["code"] == 8
+        assert result["error"] == "member_not_present"
+        assert "1=?/NotPrsnt" in result["message"]
+        dev.rpc.request_reboot.assert_not_called()
+
+    def test_unknown_member_id(self, junos_upgrade, mock_args, mock_config):
+        result, _, _ = self._run(junos_upgrade, self._dev(), member=7)
+        assert result["error"] == "member_not_present"
+
+    def test_vc_status_unavailable(self, junos_upgrade, mock_args, mock_config):
+        bad = {"ok": False, "mode": None, "members": [], "master": None, "backup": None,
+               "error": "RpcError", "error_message": "boom"}
+        result, _, _ = self._run(junos_upgrade, self._dev(), member=1, status=bad)
+        assert result["code"] == 8
+        assert result["error"] == "vc_status_unavailable"
+        assert result["vc_status"] is bad
+
+    def test_pending_package_refused_before_reinstall(self, junos_upgrade, mock_args, mock_config):
+        dev = self._dev()
+        result, reinstall, _ = self._run(junos_upgrade, dev, member=1, pending="23.4R2-S3")
+        assert result["code"] == 9
+        assert result["error"] == "pending_package_mixed_version"
+        assert "23.4R2-S3" in result["message"]
+        reinstall.assert_not_called()
+        dev.rpc.request_reboot.assert_not_called()
+
+    def test_pending_package_allowed_with_flag(self, junos_upgrade, mock_args, mock_config):
+        mock_args.allow_mixed_version = True
+        dev = self._dev()
+        result, reinstall, _ = self._run(junos_upgrade, dev, member=1, pending="23.4R2-S3")
+        assert result["code"] == 0
+        warn = [s for s in result["steps"] if s["action"] == "mixed_version"]
+        assert warn and "23.4R2-S3" in warn[0]["message"]
+        reinstall.assert_called_once()
+        dev.rpc.request_reboot.assert_called_once()
+
+    def test_rpc_error_is_code_5(self, junos_upgrade, mock_args, mock_config):
+        dev = self._dev()
+        dev.rpc.request_reboot.side_effect = RpcError(
+            rsp=etree.fromstring("<rpc-error><error-message>x</error-message></rpc-error>")
+        )
+        result, _, _ = self._run(junos_upgrade, dev, member=1)
+        assert result["code"] == 5 and result["error"] == "RpcError"
+
+    def test_whole_chassis_path_unchanged(self, junos_upgrade, mock_args, mock_config):
+        """member=None keeps using SW.reboot(at=...) and never calls vc."""
+        dev = self._dev()
+        mock_sw = MagicMock()
+        mock_sw.reboot.return_value = "Shutdown at ..."
+        with (
+            patch("junos_ops.upgrade.vc.get_vc_status") as get_status,
+            patch.object(junos_upgrade, "check_and_reinstall", return_value={"ok": True, "steps": []}),
+            patch("junos_ops.upgrade.SW", return_value=mock_sw),
+        ):
+            result = junos_upgrade.reboot("test-host", dev, datetime.datetime(2025, 6, 13, 5, 0))
+        assert result["code"] == 0 and result["member"] is None
+        get_status.assert_not_called()
+        mock_sw.reboot.assert_called_once_with(at="2506130500")
+        dev.rpc.request_reboot.assert_not_called()
+
+
+class TestRebootMemberRpcHelper:
+    def test_output_lines_fallback(self, junos_upgrade):
+        dev = MagicMock()
+        rsp = etree.fromstring("<multi><output> line1 </output><output/><output>line2</output></multi>")
+        dev.rpc.request_reboot.return_value = rsp
+        assert junos_upgrade._reboot_member(dev, 0, None) == "line1\nline2"
+
+    def test_bool_reply_fallback(self, junos_upgrade):
+        dev = MagicMock()
+        dev.rpc.request_reboot.return_value = True
+        assert junos_upgrade._reboot_member(dev, 2, "2506130500") == "request system reboot member 2 issued"
+        dev.rpc.request_reboot.assert_called_once_with(member="2", at="2506130500")
