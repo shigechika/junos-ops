@@ -43,6 +43,8 @@ tests/
 ├── test_check.py       # check サブコマンド（local/remote/connect inventory）のテスト
 ├── test_display.py     # display 層（format_*/print_*/JSON）のテスト
 ├── test_install.py     # install フローのテスト
+├── test_copy.py        # copy フロー（storage cleanup ゲート・remote check・SCP 失敗系）のテスト
+├── test_rollback.py    # rollback core（成功マーカー・例外）と cmd_rollback（終了コード・JSON）のテスト
 ├── test_unlink.py      # --unlink 経路（CLI 直接実行）のテスト
 ├── test_json_output.py # --json JSONL 出力のテスト
 ├── test_list_remote.py # ls サブコマンドのテスト

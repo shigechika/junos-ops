@@ -120,10 +120,6 @@ def copy(hostname, dev) -> dict:
 
     Does not print. Progress is conveyed via the ``steps`` list for the
     display layer.
-
-    Note: the nested ``check_running_package`` / ``check_remote_package``
-    helpers still print to stdout in the current refactor step; that is
-    cleaned up in Phase 6.
     """
     logger.debug("copy: start")
     steps: list[dict] = []
