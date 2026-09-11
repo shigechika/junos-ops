@@ -434,18 +434,23 @@ class TestRsiDirOverride:
         assert (tmp_path / "out" / "test-host.SCF").read_text() == "config"
         assert (tmp_path / "out" / "test-host.RSI").read_text() == "RSI text"
 
-    def test_unwritable_directory_reports_cleanly(self, junos_common, mock_args, mock_config, tmp_path):
-        locked = tmp_path / "locked"
-        locked.mkdir()
-        locked.chmod(0o500)
-        mock_args.rsi_dir = str(locked / "sub")
-        conn = {"hostname": "test-host", "host": "test-host", "ok": True,
-                "dev": self._dev(), "error": None, "error_message": None}
-        try:
-            with patch.object(rsi.common, "connect", return_value=conn):
-                result = rsi.collect_rsi("test-host", self._dev(), str(locked / "sub"))
-        finally:
-            locked.chmod(0o700)
+    def test_unwritable_directory_reports_cleanly(self, junos_common, mock_config, tmp_path):
+        """makedirs failure is a clean early return, not a mid-collection crash."""
+        target = str(tmp_path / "sub")
+        with patch("os.makedirs", side_effect=PermissionError(13, "Permission denied")):
+            result = rsi.collect_rsi("test-host", self._dev(), target)
         assert result["ok"] is False
         assert result["error"] == "rsi_dir"
+        assert target in result["error_message"]
         assert "cannot create output directory" in result["error_message"]
+
+    def test_cmd_rsi_reports_directory_failure(self, junos_common, mock_args, mock_config, tmp_path):
+        """The CLI path surfaces it too (and still passes --rsi-dir through)."""
+        mock_args.rsi_dir = str(tmp_path / "sub")
+        conn = {"hostname": "test-host", "host": "test-host", "ok": True,
+                "dev": self._dev(), "error": None, "error_message": None}
+        with (
+            patch.object(rsi.common, "connect", return_value=conn),
+            patch("os.makedirs", side_effect=PermissionError(13, "Permission denied")),
+        ):
+            assert rsi.cmd_rsi("test-host") == 1

@@ -155,13 +155,27 @@ _SESSION_DROP_EXCEPTIONS = (
 # chassisd refusing the switch ("Not ready for mastership switch, try
 # after N secs.") and the <command> path echoing an unanswered
 # confirmation ("... ? [yes,no] (no)") — in both cases nothing happened.
-# Proof that the CLI never executed the command: it could not parse or
-# accept it at all. Only these allow trying the next candidate form — a
-# refusal like "Not ready for mastership switch" or an echoed [yes,no]
-# prompt is about *this* switch and must not trigger a second command.
+# Proof that mgd refused the command before dispatching it: the RPC layer
+# raised instead of returning output. Only an RpcError matching this is
+# allowed to advance to the next candidate form — see the "at most once"
+# note in :func:`master_switch`. A refusal like "Not ready for mastership
+# switch" or an echoed [yes,no] prompt is about *this* switch and must
+# never trigger a second command.
 _NOT_VALID_RE = re.compile(
-    r"command is not valid|unknown command|syntax error", re.I
+    r"\b(command is not valid|unknown command|syntax error)\b", re.I
 )
+
+
+def _is_not_valid_error(exc: RpcError) -> bool:
+    """True when an RpcError is mgd refusing to parse/accept the command.
+
+    Matched against PyEZ's ``.message`` (the device's own
+    ``<error-message>``) rather than ``str(exc)``, which wraps it in
+    ``RpcError(severity: …, message: …)``. Applied only to a raised
+    error — never to returned text — so "no output" already implies the
+    command was not dispatched.
+    """
+    return bool(_NOT_VALID_RE.search(getattr(exc, "message", "") or str(exc)))
 
 _REJECTED_RE = re.compile(
     r"^\s*(error:|syntax error|unknown command|permission denied)"
@@ -284,9 +298,14 @@ def master_switch(hostname: str, dev) -> dict:
     The command is sent through ``dev.cli()`` — the NETCONF ``<command>``
     path runs the CLI non-interactively, so there is no ``[yes,no]``
     prompt. Each form is sent **at most once**: the EX Virtual Chassis
-    form first and, only when the device proves it never ran it ("command
-    is not valid" / "unknown command" / "syntax error"), the QFX chassis
-    form. Any other refusal stops there. ``issued`` is set *before* the call:
+    form first and, only when the RPC layer *raised* an
+    :class:`RpcError` whose message is a parse/platform rejection
+    ("command is not valid on the qfx5110-…", "unknown command", "syntax
+    error"), the QFX chassis form. mgd rejects those before dispatching
+    the command, so nothing ran. Any reply that comes back as *text* —
+    including one that looks like an error — ends the attempt: the CLI
+    processed the command, and a second destructive form must not be
+    sent. ``issued`` is set *before* the call:
     any exception afterwards means the command may have left the box.
     Session-drop exceptions are the expected result of a successful
     switch and set ``session_dropped``; only ``RpcError`` and an anchored
@@ -391,8 +410,8 @@ def master_switch(hostname: str, dev) -> dict:
                 ),
             })
         except RpcError as e:
-            if _NOT_VALID_RE.search(str(e)):
-                not_valid = str(e)
+            if _is_not_valid_error(e):
+                not_valid = getattr(e, "message", "") or str(e)
             else:
                 result["error"] = "RpcError"
                 result["error_message"] = str(e)
@@ -414,11 +433,14 @@ def master_switch(hostname: str, dev) -> dict:
                 ),
             })
         else:
+            # A text reply means the CLI received and processed the
+            # command. Whatever it says, a second (destructive) form is
+            # never sent on this path: a reply that mixed a success
+            # banner with a parse diagnostic would otherwise switch
+            # mastership twice.
             text = out if isinstance(out, str) else str(out)
             result["rpc_output"] = text
-            if _NOT_VALID_RE.search(text):
-                not_valid = text.strip()
-            elif _REJECTED_RE.search(text):
+            if _REJECTED_RE.search(text):
                 result["error"] = "command_rejected"
                 result["error_message"] = text.strip()
                 result["status"] = "rejected"

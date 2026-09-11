@@ -646,10 +646,12 @@ after:
 Runs the mastership switch **once**, wrapped in the checks a bare
 `junos-ops show "request …"` cannot give you. The EX Virtual Chassis form
 (`request virtual-chassis routing-engine master switch`) is tried first; if the
-platform rejects it as not valid — QFX VCs do — the chassis form
+device *raises* a parse/platform rejection — QFX VCs answer "command is not
+valid on the qfx5110-…" — the chassis form
 (`request chassis routing-engine master switch no-confirm`) is sent instead.
-Each form is issued at most once, and only a refusal that proves the command
-never ran triggers the second one:
+Each form is issued at most once. Anything that comes back as text ends the
+attempt, whatever it says: the CLI processed the command, so a second
+destructive form is never sent.
 
 - **Pre-checks (fail closed):** `show virtual-chassis status` must report
   exactly one Master and one Backup with every member `Prsnt`; `show task

@@ -545,13 +545,22 @@ class TestQfxFallback:
         assert [c.args[0] for c in dev.cli.call_args_list] == list(vc.SWITCH_COMMANDS)
         assert any(s["action"] == "command_not_valid" for s in r["steps"])
 
-    def test_text_reply_not_valid_falls_back(self, mock_args, mock_config):
+    def test_text_reply_never_falls_back(self, mock_args, mock_config):
+        """A text reply means the CLI ran the command: no second form."""
         dev = switch_dev()
-        dev.cli.side_effect = ["unknown command: virtual-chassis", "Toggle mastership: done"]
+        dev.cli.side_effect = ["unknown command: virtual-chassis", "should not be reached"]
         r = vc.master_switch("h", dev)
-        assert r["status"] == "initiated_unverified"
-        assert r["command"] == vc.CHASSIS_SWITCH_COMMAND
-        assert dev.cli.call_count == 2
+        assert r["ok"] is False and r["status"] == "rejected"
+        assert r["error"] == "command_rejected"
+        assert r["command"] == vc.SWITCH_COMMAND
+        dev.cli.assert_called_once()
+
+    def test_mixed_success_and_parse_diagnostic_is_not_retried(self, mock_args, mock_config):
+        """A reply carrying both a banner and 'syntax error' must not switch twice."""
+        dev = switch_dev(cli_result="Toggle mastership: done\nsyntax error, expecting <eol>")
+        r = vc.master_switch("h", dev)
+        dev.cli.assert_called_once()
+        assert r["command"] == vc.SWITCH_COMMAND
 
     def test_session_drop_on_fallback_is_success(self, mock_args, mock_config):
         dev = switch_dev()
@@ -587,3 +596,21 @@ class TestQfxFallback:
         r = vc.master_switch("h", dev)
         assert r["command"] == vc.SWITCH_COMMAND
         dev.cli.assert_called_once_with(vc.SWITCH_COMMAND, warning=False)
+
+
+class TestRpcOutputEvidence:
+    def test_rpc_output_belongs_to_the_issued_command(self, mock_args, mock_config):
+        """Only the attempt that produced text sets rpc_output."""
+        dev = switch_dev()
+        dev.cli.side_effect = [_rpc_error(TestQfxFallback.NOT_VALID), "Toggle mastership: done"]
+        r = vc.master_switch("h", dev)
+        assert r["command"] == vc.CHASSIS_SWITCH_COMMAND
+        assert r["rpc_output"] == "Toggle mastership: done"
+
+    def test_no_text_leaks_from_a_refused_first_attempt(self, mock_args, mock_config):
+        dev = switch_dev()
+        dev.cli.side_effect = [_rpc_error(TestQfxFallback.NOT_VALID),
+                               RpcTimeoutError(MagicMock(), "cmd", 30)]
+        r = vc.master_switch("h", dev)
+        assert r["rpc_output"] is None
+        assert r["session_dropped"] is True and r["command"] == vc.CHASSIS_SWITCH_COMMAND
