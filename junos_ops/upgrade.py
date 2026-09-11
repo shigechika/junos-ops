@@ -1959,16 +1959,32 @@ def reboot(
         if pending is not None and _pending_is_running(pending, dev):
             # Host-based QFX (no "Pending:" line) derive pending from the
             # install log, whose "Staging ... completed" entry survives the
-            # reboot that activated it. Same version as running = nothing
-            # pending. Seen on QFX5110 at 23.4R2-S8.7.
-            steps.append({
-                "action": "pending_active",
-                "message": (
-                    f"\tinstall log reports {pending}, but that is the running "
-                    "version; nothing pending"
-                ),
-            })
-            pending = None
+            # reboot that activated it, so the running version shows up as
+            # "pending" forever (seen on QFX5110 at 23.4R2-S8.7). Version
+            # equality alone is not proof — a same-version re-install after
+            # config drift is genuinely pending — so also require that the
+            # last staging happened *before* the member last booted.
+            # Unknown (None) stays fail-closed.
+            stale = _install_log_staged_before_boot(hostname, dev, member=member)
+            if stale is True:
+                steps.append({
+                    "action": "pending_active",
+                    "message": (
+                        f"\tinstall log reports {pending}, but it is the running "
+                        "version and was staged before the last boot; nothing pending"
+                    ),
+                })
+                pending = None
+            else:
+                steps.append({
+                    "action": "pending_same_version",
+                    "message": (
+                        f"\tpending {pending} equals the running version but "
+                        + ("was staged after the last boot (re-install)"
+                           if stale is False else "staging time could not be verified")
+                        + "; treating as pending"
+                    ),
+                })
         if pending is not None:
             if not allow_mixed:
                 result["code"] = 9
@@ -2119,7 +2135,12 @@ def reboot(
 
 
 def _pending_is_running(pending: str, dev) -> bool:
-    """True when ``pending`` equals the running version (``dev.facts["version"]``)."""
+    """True when ``pending`` is exactly the running version string.
+
+    Exact string identity on purpose: :func:`compare_version` normalises
+    ``-S`` to ``00`` for ordering, which would make distinct strings
+    compare equal — unacceptable for a safety gate.
+    """
     # PyEZ facts is a Mapping-like _FactCache, not a dict; tests use dicts
     # or MagicMocks. Only trust a real string.
     try:
@@ -2128,7 +2149,63 @@ def _pending_is_running(pending: str, dev) -> bool:
         return False
     if not isinstance(running, str) or not running:
         return False
-    return compare_version(pending, running) == 0
+    return pending.strip() == running.strip()
+
+
+_INSTALL_LOG_HEADER_RE = re.compile(
+    r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}) \S+ mgd\[\d+\]: .*package -X (?:update|add)\b",
+    re.MULTILINE,
+)
+
+
+def _install_log_staged_before_boot(hostname, dev, *, member: int | None = None) -> bool | None:
+    """Was the last package staging in ``show log install`` before the last boot?
+
+    ``show log install`` prefixes each operation with a header such as
+    ``2026-06-16 17:33:26 JST mgd[51697]: /usr/libexec/ui/package -X update
+    ... <file>``; ``show system uptime`` reports ``System booted:
+    2026-06-17 04:11:55 JST``. Both are device-local wall-clock strings,
+    so they are compared as naive datetimes without any epoch/zone
+    conversion. On a VC the ``fpcN`` uptime block for ``member`` is used
+    when present.
+
+    :returns: True (staged before boot: already activated), False (staged
+        after boot: genuinely pending), or None when either side could
+        not be read — callers must treat None as "unknown".
+    """
+    try:
+        log = dev.rpc.get_log({"format": "text"}, filename="install")
+        log_text = etree.tostring(log, encoding="unicode")
+        up = dev.rpc.get_system_uptime_information(normalize=True)
+    except Exception as e:
+        logger.debug(f"{hostname}: _install_log_staged_before_boot: {type(e).__name__}: {e}")
+        return None
+    headers = _INSTALL_LOG_HEADER_RE.findall(log_text)
+    if not headers:
+        return None
+    try:
+        staged = datetime.datetime.strptime(headers[-1], "%Y-%m-%d %H:%M:%S")
+    except ValueError:
+        return None
+
+    if up is None or isinstance(up, bool):
+        return None
+    booted_el = None
+    items = up.findall(".//multi-routing-engine-item")
+    if items and member is not None:
+        for it in items:
+            if (it.findtext("re-name") or "").strip() == f"fpc{member}":
+                booted_el = it.find(".//system-booted-time/date-time")
+                break
+    if booted_el is None:
+        booted_el = up.find(".//system-booted-time/date-time")
+    booted_text = (booted_el.text or "").strip() if booted_el is not None else ""
+    try:
+        booted = datetime.datetime.strptime(booted_text[:19], "%Y-%m-%d %H:%M:%S")
+    except ValueError:
+        return None
+    logger.debug(f"{hostname}: install staged {staged}, booted {booted} (member={member})")
+    return staged < booted
 
 
 def _member_section(text: str, member: int) -> str:

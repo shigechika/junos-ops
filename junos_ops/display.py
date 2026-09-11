@@ -368,7 +368,7 @@ def print_install(result: dict) -> None:
 
 
 _REBOOT_PRE_ACTIONS = {
-    "vc_member", "force_master", "mixed_version", "pending_active", "error",
+    "vc_member", "force_master", "mixed_version", "pending_active", "pending_same_version", "error",
     "existing_schedule", "force_clear", "clear_reboot",
 }
 
