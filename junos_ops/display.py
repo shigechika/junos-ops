@@ -464,6 +464,12 @@ def format_vc_switch(result: dict) -> str:
         parts.append(f"  expected master after switch: member {result['expected_master']}")
     parts.extend(_vc_members_text(result.get("before"), "before"))
     parts.extend(_vc_members_text(result.get("after"), "after"))
+    repl = result.get("after_replication")
+    if repl and repl.get("ok"):
+        protos = ", ".join(f"{n}={s}" for n, s in repl["protocols"].items()) or "none"
+        parts.append(
+            f"  replication after switch: GRES={repl['gres']} RE={repl['re_mode']} {protos}"
+        )
     for w in result.get("warnings") or []:
         parts.append(f"  WARNING: {w}")
     steps = _steps_text(result)

@@ -419,10 +419,16 @@ def cmd_vc_switch(hostname) -> int:
                 result["verified"] = True
                 repl = waited["replication"]
                 result["after_replication"] = repl
-                if repl and repl["ok"] and not repl["complete"]:
+                if not repl or not repl["ok"]:
+                    err = f"{repl['error']}: {repl['error_message']}" if repl else "not collected"
+                    result["warnings"].append(
+                        f"post-switch replication state could not be checked ({err})"
+                    )
+                elif not repl["complete"]:
                     result["warnings"].append(
                         "replication not yet Complete after the switch: "
-                        + ", ".join(f"{n}={s}" for n, s in repl["protocols"].items())
+                        f"GRES={repl['gres']} RE={repl['re_mode']} "
+                        + (", ".join(f"{n}={s}" for n, s in repl["protocols"].items()) or "no protocols")
                     )
                 result["steps"].append({
                     "action": "verify",

@@ -124,6 +124,10 @@ def connect(
         "huge_tree": config.getboolean(hostname, "huge_tree", fallback=False),
         "gather_facts": gather_facts,
     }
+    if auto_probe > 0:
+        # Was accepted but never forwarded before; check --connect's
+        # auto_probe=5 was a no-op until now.
+        kwargs["auto_probe"] = auto_probe
     # Pass ssh_config only when the operator sets it; leaving it out preserves
     # PyEZ/paramiko's implicit ~/.ssh/config auto-pickup.
     ssh_config_path = config.get(hostname, "ssh_config", fallback=None)

@@ -145,6 +145,7 @@ class TestEmptyReply:
 # replication state / master_switch / wait_for_master / cmd_vc_switch
 # ---------------------------------------------------------------------------
 
+import itertools  # noqa: E402
 import json  # noqa: E402
 import sys  # noqa: E402
 from unittest.mock import patch  # noqa: E402
@@ -331,7 +332,7 @@ class TestWaitForMaster:
             self._conn(old),
             self._conn(new),
         ]
-        clock = iter(range(0, 1000, 5))
+        clock = itertools.count(0, 5)
         with (
             patch.object(common, "connect", side_effect=seq) as connect,
             patch.object(vc.time, "sleep") as sleep,
@@ -341,6 +342,10 @@ class TestWaitForMaster:
         assert r["ok"] is True
         assert r["after"]["master"] == "1"
         assert r["attempts"] == 3
+        assert r["elapsed"] > 0
+        # every probe is bounded by the interval / remaining window
+        assert all(c.kwargs["auto_probe"] <= 10 for c in connect.call_args_list)
+        assert all(c.kwargs["gather_facts"] is False for c in connect.call_args_list)
         assert r["replication"]["complete"] is True
         assert connect.call_count == 3
         assert sleep.call_count == 2
@@ -349,7 +354,7 @@ class TestWaitForMaster:
 
     def test_timeout_mastership_unchanged(self, mock_args, mock_config):
         old = switch_dev(vc=vc_xml())
-        clock = iter([0, 0, 100, 100, 200, 200, 300])
+        clock = itertools.count(0, 40)
         with (
             patch.object(common, "connect", side_effect=lambda *a, **k: self._conn(old)),
             patch.object(vc.time, "sleep"),
@@ -358,11 +363,12 @@ class TestWaitForMaster:
             r = vc.wait_for_master("h", "1", timeout=150, interval=10)
         assert r["ok"] is False
         assert r["error"] == "mastership_unchanged"
+        assert r["elapsed"] >= 150
         assert "master is 0, expected 1" in r["error_message"]
         assert r["after"]["master"] == "0"
 
     def test_never_reachable(self, mock_args, mock_config):
-        clock = iter([0, 0, 500])
+        clock = itertools.count(0, 100)
         with (
             patch.object(common, "connect", return_value={"ok": False, "dev": None, "error": "ConnectError", "error_message": "no route"}),
             patch.object(vc.time, "sleep"),
@@ -467,3 +473,49 @@ class TestCmdVcSwitch:
             assert cli._run() == 0
         assert common.args.wait == 30
         assert common.args.workers == 1
+
+
+class TestReviewFollowups:
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "Not ready for mastership switch, try after 264 secs.",
+            "Toggle mastership between routing engines ? [yes,no] (no)",
+            "Mastership switch is not allowed on this platform",
+        ],
+    )
+    def test_device_refusal_wording_is_rejected(self, mock_args, mock_config, text):
+        r = vc.master_switch("h", switch_dev(cli_result=text))
+        assert r["status"] == "rejected" and r["error"] == "command_rejected"
+        assert text in r["error_message"]
+
+    def test_unexpected_exception_after_issue_keeps_result(self, mock_args, mock_config):
+        dev = switch_dev(cli_result=ValueError("parser hiccup"))
+        r = vc.master_switch("h", dev)
+        assert r["ok"] is True and r["status"] == "initiated_unverified"
+        assert r["issued"] is True and r["before"]["master"] == "0"
+        assert any("ValueError" in w for w in r["warnings"])
+        dev.cli.assert_called_once()
+
+    def test_confirmed_but_replication_unavailable_warns(self, mock_args, mock_config, capsys):
+        after = {"ok": True, "members": [], "master": "1", "backup": "0"}
+        waited = {"ok": True, "after": after,
+                  "replication": {"ok": False, "error": "RpcError", "error_message": "x",
+                                  "complete": False, "protocols": {}, "gres": None, "re_mode": None},
+                  "elapsed": 12, "attempts": 2, "error": None, "error_message": None}
+        with (
+            patch.object(cli, "_open_connection", return_value=MagicMock()),
+            patch.object(vc, "master_switch", return_value=TestCmdVcSwitch()._result()),
+            patch.object(vc, "wait_for_master", return_value=waited),
+        ):
+            assert cli.cmd_vc_switch("h") == 0
+        out = capsys.readouterr().out
+        assert "confirmed" in out and "could not be checked" in out
+
+    def test_connect_forwards_auto_probe(self, mock_config):
+        with patch("junos_ops.common.Device") as dev_cls:
+            dev_cls.return_value.open.return_value = None
+            common.connect("test-host", gather_facts=False, auto_probe=7)
+            assert dev_cls.call_args.kwargs["auto_probe"] == 7
+            common.connect("test-host")
+            assert "auto_probe" not in dev_cls.call_args.kwargs

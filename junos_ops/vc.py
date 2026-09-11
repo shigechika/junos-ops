@@ -146,9 +146,14 @@ _SESSION_DROP_EXCEPTIONS = (
 )
 
 # Anchored at line start so prose containing the word "error" is not
-# mistaken for a rejection.
+# mistaken for a rejection. Besides the CLI's own error forms this covers
+# chassisd refusing the switch ("Not ready for mastership switch, try
+# after N secs.") and the <command> path echoing an unanswered
+# confirmation ("... ? [yes,no] (no)") — in both cases nothing happened.
 _REJECTED_RE = re.compile(
-    r"^\s*(error:|syntax error|unknown command|permission denied)", re.I | re.M
+    r"^\s*(error:|syntax error|unknown command|permission denied)"
+    r"|\bnot (ready|allowed|possible|supported)\b|\[yes,no\]",
+    re.I | re.M,
 )
 
 
@@ -369,6 +374,20 @@ def master_switch(hostname: str, dev) -> dict:
         result["status"] = "rejected"
         steps.append({"action": "error", "message": f"\tswitch rejected: RpcError: {e}"})
         return result
+    except Exception as e:
+        # Anything else after issued=True: the command may be in flight.
+        # Keep the result (and let --wait verify) instead of letting the
+        # worker-level handler discard it.
+        result["warnings"].append(
+            f"unexpected {type(e).__name__} after issuing the switch: {e}"
+        )
+        steps.append({
+            "action": "switch",
+            "message": (
+                f"\t'{SWITCH_COMMAND}' issued; unexpected {type(e).__name__}: {e} "
+                "— treating as possibly in flight"
+            ),
+        })
     else:
         text = out if isinstance(out, str) else str(out)
         result["rpc_output"] = text
@@ -413,11 +432,17 @@ def wait_for_master(hostname: str, expected: str, timeout: int, interval: int = 
         "error": None,
         "error_message": None,
     }
-    deadline = time.monotonic() + timeout
+    start = time.monotonic()
+    deadline = start + timeout
     last_problem = None
     while True:
         result["attempts"] += 1
-        conn = common.connect(hostname, gather_facts=False)
+        # Bound each probe by what is left of the window (min 1 s) so an
+        # unreachable box cannot push the loop far past --wait.
+        remaining = max(1, int(deadline - time.monotonic()))
+        conn = common.connect(
+            hostname, gather_facts=False, auto_probe=min(interval, remaining)
+        )
         if conn["ok"]:
             dev = conn["dev"]
             try:
@@ -427,6 +452,7 @@ def wait_for_master(hostname: str, expected: str, timeout: int, interval: int = 
                     if status["master"] == str(expected):
                         result["ok"] = True
                         result["replication"] = get_replication_state(dev)
+                        result["elapsed"] = int(time.monotonic() - start)
                         return result
                     last_problem = f"master is {status['master']}, expected {expected}"
                 else:
@@ -442,7 +468,7 @@ def wait_for_master(hostname: str, expected: str, timeout: int, interval: int = 
         if now >= deadline:
             break
         time.sleep(min(interval, max(0, deadline - now)))
-    result["elapsed"] = timeout
+    result["elapsed"] = int(time.monotonic() - start)
     result["error"] = "mastership_unchanged" if result["after"] is not None else "unreachable"
     result["error_message"] = last_problem
     return result

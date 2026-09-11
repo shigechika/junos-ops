@@ -67,7 +67,7 @@ LICENSE
 - グローバル変数: `config`, `config_lock`, `args`
 - `get_default_config()` — 設定ファイルパスの探索（XDG対応）
 - `read_config()` — INIファイル読込
-- `connect()` — NETCONF接続（huge_tree対応、個別例外処理）
+- `connect()` — NETCONF接続（huge_tree対応、個別例外処理。`auto_probe>0` は `Device(auto_probe=)` に転送 — `check --connect` の 5 秒プローブと `vc.wait_for_master` が使う）
 - `_get_host_tags()` — ホストセクションのタグを set で返す
 - `_get_model_tags()` — `<model>.tags = ...`（DEFAULT セクション）を set で返す。未設定なら空 set。`check --local` の model フィルタ専用で、ホストの tags 空間とは独立
 - `_parse_tag_groups()` — `--tags` CLI 値（list / str / None）を set のリストに正規化
@@ -102,8 +102,8 @@ LICENSE
 - `get_vc_status(dev)` — `get-virtual-chassis-information` を JSON-native な dict に（members[{id, role, status, priority, model}], master, backup, mode）。`member-role` の末尾 `*`（`Master*`）は剥がす。RPC 失敗・`member-list` 欠落は `ok=False`（例外は握って `error`/`error_message` に載せる）。呼び側は **fail-closed**（`ok=False` を「VC ではない」と解釈しない）
 - `find_member(status, member_id)` — id で member エントリを引く（int/str どちらでも）
 - `get_replication_state(dev)` — `get-routing-task-replication-state`（`show task replication`、PyEZ `SW._check_gres` と同じ RPC）→ gres/re_mode/protocols{name: state}/complete。`complete` は GRES Enabled ∧ RE Master ∧ protocols 非空 ∧ 全 Complete（空は **fail-closed**）
-- `master_switch(hostname, dev)` — `request virtual-chassis routing-engine master switch` を `dev.cli(..., warning=False)` で **1 回だけ**発行（RPC 名を推測しない。`<command>` 経路は非対話なので `[yes,no]` は出ない）。`_precheck_problems()` が拒否理由を列挙（Master/Backup がちょうど 1 つ・全 member Prsnt・replication complete・RPC 失敗は拒否）。`--force` は拒否理由を `warnings` に変えて続行。`issued=True` は `dev.cli()` の**前**に立てる。`RpcTimeoutError`/`ConnectClosedError`/`TimeoutExpiredError`/`OSError` は「切替に伴うセッション切断」（`session_dropped`）で `ok=True`／`status=initiated_unverified`。**`RpcTimeoutError` は `RpcError` のサブクラス**なので except の順序はセッション切断系が先。応答テキストの行頭 `error:`/`syntax error`/`unknown command`/`permission denied` は `command_rejected`。`status` は `dry_run`/`refused`/`rejected`/`initiated_unverified`（cli が `confirmed`/`verification_failed` に更新）。`hostname` キーは持たない（display が注入）
-- `wait_for_master(hostname, expected, timeout, interval=10)` — `common.connect(gather_facts=False)` で再接続を繰り返し `get_vc_status().master == expected` を待つ。接続失敗・RPC 失敗は「まだ」。`time.sleep`/`time.monotonic` はモジュール属性経由（テストで patch）。成功時に `get_replication_state` を `replication` として返す（ゲートしない）
+- `master_switch(hostname, dev)` — `request virtual-chassis routing-engine master switch` を `dev.cli(..., warning=False)` で **1 回だけ**発行（RPC 名を推測しない。`<command>` 経路は非対話なので `[yes,no]` は出ない）。`_precheck_problems()` が拒否理由を列挙（Master/Backup がちょうど 1 つ・全 member Prsnt・replication complete・RPC 失敗は拒否）。`--force` は拒否理由を `warnings` に変えて続行。`issued=True` は `dev.cli()` の**前**に立てる。`RpcTimeoutError`/`ConnectClosedError`/`TimeoutExpiredError`/`OSError` は「切替に伴うセッション切断」（`session_dropped`）で `ok=True`／`status=initiated_unverified`。**`RpcTimeoutError` は `RpcError` のサブクラス**なので except の順序はセッション切断系が先。応答テキストの行頭 `error:`/`syntax error`/`unknown command`/`permission denied`、行中の `not ready|allowed|possible|supported`（chassisd の "Not ready for mastership switch"）、`[yes,no]`（確認プロンプトのエコー＝未実行）は `command_rejected`。それ以外の予期しない例外は `warnings` に載せて `initiated_unverified` のまま返す（result を捨てず `--wait` 検証へ進める）。`status` は `dry_run`/`refused`/`rejected`/`initiated_unverified`（cli が `confirmed`/`verification_failed` に更新）。`hostname` キーは持たない（display が注入）
+- `wait_for_master(hostname, expected, timeout, interval=10)` — `common.connect(gather_facts=False)` で再接続を繰り返し `get_vc_status().master == expected` を待つ。接続失敗・RPC 失敗は「まだ」。各 probe は `auto_probe=min(interval, 残り秒)` で上限を付ける（`common.connect` の `auto_probe` は #156 まで `Device` に渡されておらず no-op だった）。`elapsed` は成功・失敗とも実測。`time.sleep`/`time.monotonic` はモジュール属性経由（テストで patch）。成功時に `get_replication_state` を `replication` として返す（ゲートしない）
 - 実機（QFX5110 2 member）で確認した XML: `member-status`=`Prsnt`、`member-role`=`Master*`/`Backup`/`Linecard`、`virtual-chassis-mode`=`Enabled`
 
 ### display.py — 表示層
