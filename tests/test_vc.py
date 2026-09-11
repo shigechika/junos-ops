@@ -960,3 +960,86 @@ class TestPollBoundsRpcs:
         ):
             vc.wait_for_member("h", 0, 30, booted_before=BOOT_BEFORE)
         assert dev.timeout <= 30 and dev.timeout >= 5
+
+
+class TestBootTimeComparison:
+    def test_newer_is_evidence(self):
+        assert vc.boot_time_is_newer(BOOT_AFTER, BOOT_BEFORE) is True
+
+    def test_same_instant_reformatted_is_not_evidence(self):
+        """A re-zoned/reformatted rendering of the same boot must not pass."""
+        assert vc.boot_time_is_newer("2026-06-17 04:11:55 UTC", BOOT_BEFORE) is False
+        assert vc.boot_time_is_newer(BOOT_BEFORE, BOOT_BEFORE) is False
+
+    def test_older_is_not_evidence(self):
+        assert vc.boot_time_is_newer(BOOT_BEFORE, BOOT_AFTER) is False
+
+    def test_unparseable_falls_back_to_inequality(self):
+        assert vc.boot_time_is_newer("boot A", "boot B") is True
+        assert vc.boot_time_is_newer("boot A", "boot A") is False
+
+    def test_missing_values(self):
+        assert vc.boot_time_is_newer(None, BOOT_BEFORE) is False
+        assert vc.boot_time_is_newer(BOOT_AFTER, None) is False
+
+
+class TestWaitForMemberEdgeCases:
+    def _conn(self, dev):
+        return {"hostname": "h", "host": "h", "ok": True, "dev": dev,
+                "error": None, "error_message": None}
+
+    def _run(self, seq, **kw):
+        clock = itertools.count(0, 25)
+        side = seq if isinstance(seq, list) else (lambda *a, **k: seq)
+        with (
+            patch.object(common, "connect", side_effect=side),
+            patch.object(vc.time, "sleep"),
+            patch.object(vc.time, "monotonic", side_effect=lambda: next(clock)),
+        ):
+            return vc.wait_for_member("h", kw.pop("member", 0), kw.pop("timeout", 60), **kw)
+
+    def test_mastership_moving_to_the_member_still_reads_its_uptime(self, mock_args, mock_config):
+        """The member became Master while rebooting: its block is now localre."""
+        dev = member_dev(vc_rsp=vc_xml(role0="Master*", role1="Backup"))
+        # Session lands on the (new) master, so member 0 is "localre" and
+        # there is no fpc0 block at all — the realistic shape.
+        dev.rpc.get_system_uptime_information.return_value = etree.fromstring(
+            "<multi-routing-engine-results>"
+            "<multi-routing-engine-item><re-name>localre</re-name><system-uptime-information>"
+            f"<system-booted-time><date-time>{BOOT_AFTER}</date-time></system-booted-time>"
+            "</system-uptime-information></multi-routing-engine-item>"
+            "<multi-routing-engine-item><re-name>fpc1</re-name><system-uptime-information>"
+            "<system-booted-time><date-time>2026-06-17 04:11:43 JST</date-time></system-booted-time>"
+            "</system-uptime-information></multi-routing-engine-item>"
+            "</multi-routing-engine-results>"
+        )
+        r = self._run(self._conn(dev), member=0, booted_before=BOOT_BEFORE, master="1")
+        assert r["ok"] is True
+        assert r["booted"] == BOOT_AFTER  # read from localre, per the *current* master
+
+    def test_status_rpc_failure_is_not_a_transition(self, mock_args, mock_config):
+        """No baseline: a flaky RPC must not stand in for the member going down."""
+        broken = member_dev()
+        broken.rpc.get_virtual_chassis_information.side_effect = [
+            RpcError(), etree.fromstring(etree.tostring(vc_xml())),
+        ]
+        clock = itertools.count(0, 2)
+        with (
+            patch.object(common, "connect", return_value=self._conn(broken)),
+            patch.object(vc.time, "sleep"),
+            patch.object(vc.time, "monotonic", side_effect=lambda: next(clock)),
+        ):
+            r = vc.wait_for_member("h", 0, 10, booted_before=None)
+        assert r["ok"] is False
+        assert "has not gone down yet" in r["error_message"]
+
+    def test_rpc_timeout_is_bounded_by_the_interval(self, mock_args, mock_config):
+        dev = member_dev(booted=BOOT_BEFORE)
+        clock = itertools.count(0, 25)
+        with (
+            patch.object(common, "connect", return_value=self._conn(dev)),
+            patch.object(vc.time, "sleep"),
+            patch.object(vc.time, "monotonic", side_effect=lambda: next(clock)),
+        ):
+            vc.wait_for_member("h", 0, 600, interval=15, booted_before=BOOT_BEFORE)
+        assert dev.timeout == 15

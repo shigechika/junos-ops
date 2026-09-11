@@ -29,6 +29,7 @@ against plain ``Master`` / ``Backup`` / ``Linecard``.
 """
 
 from logging import getLogger
+import datetime
 import re
 import time
 
@@ -527,6 +528,26 @@ def get_interface_states(dev, names) -> dict:
     return states
 
 
+def boot_time_is_newer(booted: str | None, baseline: str | None) -> bool:
+    """True when ``booted`` is evidence of a reboot since ``baseline``.
+
+    Both values come from ``show system uptime``. When both parse as
+    ``YYYY-MM-DD HH:MM:SS`` the comparison is on the instant, so a
+    reformatted or re-zoned rendering of the *same* boot is not mistaken
+    for a reboot; otherwise it falls back to string inequality. A reboot
+    always yields a later timestamp.
+    """
+    if not booted or not baseline:
+        return False
+    fmt = "%Y-%m-%d %H:%M:%S"
+    try:
+        return datetime.datetime.strptime(booted[:19], fmt) > datetime.datetime.strptime(
+            baseline[:19], fmt
+        )
+    except ValueError:
+        return booted.strip() != baseline.strip()
+
+
 def get_member_boot_time(dev, member, master=None) -> str | None:
     """Return the member's ``System booted`` timestamp text, or None.
 
@@ -564,7 +585,9 @@ def _poll_device(hostname: str, timeout: int, interval: int, check, on_unreachab
 
     ``check(dev)`` returns ``(done: bool, snapshot: dict, problem: str |
     None)``. Connection failures and RPC errors mean "not yet" and are
-    retried until the deadline; ``on_unreachable()`` (optional) is
+    retried until the deadline, which is checked between probes — a
+    probe already in flight is bounded by the interval, so ``timeout``
+    is a budget rather than a hard kill; ``on_unreachable()`` (optional) is
     called for each failed connect, which is how a caller learns the
     device went away between probes; each probe is bounded by what is left of
     the window so an unreachable device cannot overshoot ``timeout``.
@@ -590,10 +613,14 @@ def _poll_device(hostname: str, timeout: int, interval: int, check, on_unreachab
         if conn["ok"]:
             dev = conn["dev"]
             try:
-                # --wait is a budget, not just a connect timeout: cap the
-                # RPCs too, or a half-responsive device runs past it.
+                # --wait is a budget, not just a connect timeout: cap
+                # each RPC too, or a half-responsive device runs past it.
+                # Bounded by the probe interval rather than the whole
+                # window so one slow RPC cannot eat the entire budget.
                 try:
-                    dev.timeout = max(5, int(deadline - time.monotonic()))
+                    dev.timeout = max(
+                        5, min(interval, int(deadline - time.monotonic()))
+                    )
                 except Exception:  # pragma: no cover - Device always allows it
                     pass
                 done, snapshot, problem = check(dev)
@@ -641,7 +668,9 @@ def wait_for_member(
     success. ``booted_before`` (read by the caller before issuing the
     reboot) settles it — the boot timestamp must have changed. Without
     it the fallback is a transition: some probe must have found the
-    device unreachable or the member not ready.
+    device unreachable, or the member absent / not ``Prsnt`` / its FPC
+    not ``Online``. (A VC-status RPC failure does not count — it says
+    nothing about the member.)
 
     Note the whole VC can be unreachable while one member reboots (the
     management path may transit its uplink); connection failures are
@@ -662,7 +691,9 @@ def wait_for_member(
         status = get_vc_status(dev)
         snapshot = {"status": status, "fpc_state": None, "interfaces": None, "booted": None}
         if not status["ok"]:
-            seen_down = True
+            # An RPC/parse failure says nothing about the member, so it
+            # must not count as "the member went down" for the
+            # no-baseline fallback.
             return False, snapshot, f"{status['error']}: {status['error_message']}"
         entry = find_member(status, member)
         if entry is None or entry["status"] != "Prsnt" or not entry["role"]:
@@ -677,12 +708,15 @@ def wait_for_member(
 
         # Did the reboot actually happen? The RPC returns before the
         # member goes down, so "healthy right now" is not evidence.
-        booted = get_member_boot_time(dev, member, master=master)
+        # Use this probe's master, not the pre-reboot one: mastership can
+        # move during the window and it decides which uptime block
+        # (fpcN vs localre) belongs to the member.
+        booted = get_member_boot_time(dev, member, master=status.get("master") or master)
         snapshot["booted"] = booted
         if booted_before is not None:
             if booted is None:
                 return False, snapshot, "cannot read the member's boot time"
-            if booted == booted_before:
+            if not boot_time_is_newer(booted, booted_before):
                 return False, snapshot, f"member {member} has not rebooted yet (booted {booted})"
         elif not seen_down:
             return False, snapshot, f"member {member} has not gone down yet"
