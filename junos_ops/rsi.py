@@ -86,8 +86,26 @@ def get_support_information(dev) -> dict:
     }
 
 
-def collect_rsi(hostname, dev) -> dict:
+def resolve_rsi_dir(hostname: str, rsi_dir: str | None = None) -> str:
+    """Return the output directory: argument > ``[host] RSI_DIR`` > ``./``.
+
+    ``~`` is expanded. The explicit argument (the CLI's ``--rsi-dir``)
+    wins over the config value; passing None keeps the config-only
+    behaviour used by non-CLI callers.
+    """
+    path = rsi_dir
+    if not path and common.config is not None:
+        path = common.config.get(hostname, "RSI_DIR", fallback=None)
+    return os.path.expanduser(path or "./")
+
+
+def collect_rsi(hostname, dev, rsi_dir: str | None = None) -> dict:
     """Collect SCF (``show configuration``) and RSI for a single host.
+
+    :param rsi_dir: output directory override (the CLI passes
+        ``--rsi-dir``). When None the ``RSI_DIR`` config value is used,
+        falling back to the current directory. The directory is created
+        if it does not exist.
 
     :return: dict with keys:
 
@@ -115,10 +133,15 @@ def collect_rsi(hostname, dev) -> dict:
         "error_message": None,
     }
 
-    rsi_dir = os.path.expanduser(
-        common.config.get(hostname, "RSI_DIR", fallback="./")
-    )
+    rsi_dir = resolve_rsi_dir(hostname, rsi_dir)
     result["rsi_dir"] = rsi_dir
+    try:
+        os.makedirs(rsi_dir, exist_ok=True)
+    except OSError as e:
+        result["error"] = "rsi_dir"
+        result["error_message"] = f"cannot create output directory {rsi_dir}: {e}"
+        logger.error(f"{hostname}: {result['error_message']}")
+        return result
 
     # SCF: show configuration [| display set]
     try:
@@ -200,7 +223,9 @@ def cmd_rsi(hostname) -> int:
         return 1
     dev = conn["dev"]
     try:
-        result = collect_rsi(hostname, dev)
+        result = collect_rsi(
+            hostname, dev, getattr(common.args, "rsi_dir", None)
+        )
         if json_mode:
             display.print_json(hostname, result)
         else:

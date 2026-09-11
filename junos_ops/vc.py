@@ -134,7 +134,12 @@ def find_member(status: dict, member_id) -> dict | None:
 # Mastership switch (request virtual-chassis routing-engine master switch)
 # ---------------------------------------------------------------------------
 
+# EX Virtual Chassis form. QFX VCs reject it ("command is not valid on the
+# qfx5110-48s-4c") and want the chassis form instead; ``no-confirm`` keeps
+# the CLI from prompting, which the NETCONF <command> path cannot answer.
 SWITCH_COMMAND = "request virtual-chassis routing-engine master switch"
+CHASSIS_SWITCH_COMMAND = "request chassis routing-engine master switch no-confirm"
+SWITCH_COMMANDS = (SWITCH_COMMAND, CHASSIS_SWITCH_COMMAND)
 
 # Exceptions that mean "the command left the box and the session went with
 # it" — the *expected* outcome of a mastership switch, not a failure.
@@ -150,6 +155,28 @@ _SESSION_DROP_EXCEPTIONS = (
 # chassisd refusing the switch ("Not ready for mastership switch, try
 # after N secs.") and the <command> path echoing an unanswered
 # confirmation ("... ? [yes,no] (no)") — in both cases nothing happened.
+# Proof that mgd refused the command before dispatching it: the RPC layer
+# raised instead of returning output. Only an RpcError matching this is
+# allowed to advance to the next candidate form — see the "at most once"
+# note in :func:`master_switch`. A refusal like "Not ready for mastership
+# switch" or an echoed [yes,no] prompt is about *this* switch and must
+# never trigger a second command.
+_NOT_VALID_RE = re.compile(
+    r"\b(command is not valid|unknown command|syntax error)\b", re.I
+)
+
+
+def _is_not_valid_error(exc: RpcError) -> bool:
+    """True when an RpcError is mgd refusing to parse/accept the command.
+
+    Matched against PyEZ's ``.message`` (the device's own
+    ``<error-message>``) rather than ``str(exc)``, which wraps it in
+    ``RpcError(severity: …, message: …)``. Applied only to a raised
+    error — never to returned text — so "no output" already implies the
+    command was not dispatched.
+    """
+    return bool(_NOT_VALID_RE.search(getattr(exc, "message", "") or str(exc)))
+
 _REJECTED_RE = re.compile(
     r"^\s*(error:|syntax error|unknown command|permission denied)"
     r"|\bnot (ready|allowed|possible|supported)\b|\[yes,no\]",
@@ -270,7 +297,15 @@ def master_switch(hostname: str, dev) -> dict:
 
     The command is sent through ``dev.cli()`` — the NETCONF ``<command>``
     path runs the CLI non-interactively, so there is no ``[yes,no]``
-    prompt — and **exactly once**. ``issued`` is set *before* the call:
+    prompt. Each form is sent **at most once**: the EX Virtual Chassis
+    form first and, only when the RPC layer *raised* an
+    :class:`RpcError` whose message is a parse/platform rejection
+    ("command is not valid on the qfx5110-…", "unknown command", "syntax
+    error"), the QFX chassis form. mgd rejects those before dispatching
+    the command, so nothing ran. Any reply that comes back as *text* —
+    including one that looks like an error — ends the attempt: the CLI
+    processed the command, and a second destructive form must not be
+    sent. ``issued`` is set *before* the call:
     any exception afterwards means the command may have left the box.
     Session-drop exceptions are the expected result of a successful
     switch and set ``session_dropped``; only ``RpcError`` and an anchored
@@ -278,7 +313,8 @@ def master_switch(hostname: str, dev) -> dict:
 
     :return: dict with keys ``ok``, ``status`` (``dry_run`` / ``refused``
         / ``initiated_unverified`` / ``rejected``), ``dry_run``,
-        ``forced``, ``command``, ``issued``, ``session_dropped``,
+        ``forced``, ``command`` (the form actually issued), ``issued``,
+        ``session_dropped``,
         ``verified`` (always False here; :func:`wait_for_master` sets it),
         ``before`` (vc status), ``replication``, ``expected_master``
         (the pre-switch Backup id), ``after`` (None here), ``rpc_output``,
@@ -349,62 +385,96 @@ def master_switch(hostname: str, dev) -> dict:
             "action": "dry_run",
             "message": (
                 f"\tdry-run: would run '{SWITCH_COMMAND}' "
-                f"(master {status.get('master')} -> {result['expected_master']})"
+                f"(master {status.get('master')} -> {result['expected_master']}), "
+                f"falling back to '{CHASSIS_SWITCH_COMMAND}' if the platform "
+                "rejects it as not valid"
             ),
         })
         return result
 
-    result["issued"] = True
-    try:
-        out = dev.cli(SWITCH_COMMAND, warning=False)
-    # RpcTimeoutError subclasses RpcError in PyEZ, so the session-drop
-    # family must be matched first.
-    except _SESSION_DROP_EXCEPTIONS as e:
-        result["session_dropped"] = True
-        steps.append({
-            "action": "switch",
-            "message": (
-                f"\t'{SWITCH_COMMAND}' issued; session dropped "
-                f"({type(e).__name__}) — expected during a mastership switch"
-            ),
-        })
-    except RpcError as e:
-        result["error"] = "RpcError"
-        result["error_message"] = str(e)
-        result["status"] = "rejected"
-        steps.append({"action": "error", "message": f"\tswitch rejected: RpcError: {e}"})
-        return result
-    except Exception as e:
-        # Anything else after issued=True: the command may be in flight.
-        # Keep the result (and let --wait verify) instead of letting the
-        # worker-level handler discard it.
-        result["warnings"].append(
-            f"unexpected {type(e).__name__} after issuing the switch: {e}"
-        )
-        steps.append({
-            "action": "switch",
-            "message": (
-                f"\t'{SWITCH_COMMAND}' issued; unexpected {type(e).__name__}: {e} "
-                "— treating as possibly in flight"
-            ),
-        })
-    else:
-        text = out if isinstance(out, str) else str(out)
-        result["rpc_output"] = text
-        if _REJECTED_RE.search(text):
-            result["error"] = "command_rejected"
-            result["error_message"] = text.strip()
-            result["status"] = "rejected"
-            steps.append({"action": "error", "message": f"\tswitch rejected: {text.strip()}"})
+    for attempt, command in enumerate(SWITCH_COMMANDS):
+        result["command"] = command
+        result["issued"] = True
+        not_valid: str | None = None
+        try:
+            out = dev.cli(command, warning=False)
+        # RpcTimeoutError subclasses RpcError in PyEZ, so the session-drop
+        # family must be matched first.
+        except _SESSION_DROP_EXCEPTIONS as e:
+            result["session_dropped"] = True
+            steps.append({
+                "action": "switch",
+                "message": (
+                    f"\t'{command}' issued; session dropped "
+                    f"({type(e).__name__}) — expected during a mastership switch"
+                ),
+            })
+        except RpcError as e:
+            if _is_not_valid_error(e):
+                not_valid = getattr(e, "message", "") or str(e)
+            else:
+                result["error"] = "RpcError"
+                result["error_message"] = str(e)
+                result["status"] = "rejected"
+                steps.append({"action": "error", "message": f"\tswitch rejected: RpcError: {e}"})
+                return result
+        except Exception as e:
+            # Anything else after issued=True: the command may be in flight.
+            # Keep the result (and let --wait verify) instead of letting the
+            # worker-level handler discard it.
+            result["warnings"].append(
+                f"unexpected {type(e).__name__} after issuing the switch: {e}"
+            )
+            steps.append({
+                "action": "switch",
+                "message": (
+                    f"\t'{command}' issued; unexpected {type(e).__name__}: {e} "
+                    "— treating as possibly in flight"
+                ),
+            })
+        else:
+            # A text reply means the CLI received and processed the
+            # command. Whatever it says, a second (destructive) form is
+            # never sent on this path: a reply that mixed a success
+            # banner with a parse diagnostic would otherwise switch
+            # mastership twice.
+            text = out if isinstance(out, str) else str(out)
+            result["rpc_output"] = text
+            if _REJECTED_RE.search(text):
+                result["error"] = "command_rejected"
+                result["error_message"] = text.strip()
+                result["status"] = "rejected"
+                steps.append({"action": "error", "message": f"\tswitch rejected: {text.strip()}"})
+                return result
+            else:
+                steps.append({
+                    "action": "switch",
+                    "message": f"\t'{command}' issued" + (f": {text.strip()}" if text.strip() else ""),
+                })
+
+        if not_valid is None:
+            result["ok"] = True
+            result["status"] = "initiated_unverified"
             return result
-        steps.append({
-            "action": "switch",
-            "message": f"\t'{SWITCH_COMMAND}' issued" + (f": {text.strip()}" if text.strip() else ""),
-        })
 
-    result["ok"] = True
-    result["status"] = "initiated_unverified"
-    return result
+        # The device could not parse the command, which proves it did not
+        # run: lower ``issued`` again and try the next platform's form.
+        result["issued"] = False
+        remaining = attempt + 1 < len(SWITCH_COMMANDS)
+        steps.append({
+            "action": "command_not_valid",
+            "message": (
+                f"\t'{command}' not valid on this platform ({not_valid})"
+                + (f"; trying '{SWITCH_COMMANDS[attempt + 1]}'" if remaining else "")
+            ),
+        })
+        if not remaining:
+            result["error"] = "command_not_valid"
+            result["error_message"] = not_valid
+            result["status"] = "rejected"
+            return result
+
+    return result  # pragma: no cover - loop always returns
 
 
 def wait_for_master(hostname: str, expected: str, timeout: int, interval: int = 10) -> dict:

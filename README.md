@@ -581,7 +581,7 @@ When `--connect` / `--remote` need to resolve a model and it was not supplied vi
   rt2.example.jp.RSI done
 ```
 
-The output directory comes from `RSI_DIR` in config.ini, but `--rsi-dir DIR` overrides it per run (default: current directory).
+The output directory comes from `RSI_DIR` in config.ini, but `--rsi-dir DIR` overrides it per run (default: current directory). `~` is expanded and the directory is created if it does not exist.
 
 ### reboot (scheduled reboot)
 
@@ -643,8 +643,15 @@ after:
 	confirmed: member 1 is Master after 3 probe(s)
 ```
 
-Runs `request virtual-chassis routing-engine master switch` **exactly once**,
-wrapped in the checks a bare `junos-ops show "request …"` cannot give you:
+Runs the mastership switch **once**, wrapped in the checks a bare
+`junos-ops show "request …"` cannot give you. The EX Virtual Chassis form
+(`request virtual-chassis routing-engine master switch`) is tried first; if the
+device *raises* a parse/platform rejection — QFX VCs answer "command is not
+valid on the qfx5110-…" — the chassis form
+(`request chassis routing-engine master switch no-confirm`) is sent instead.
+Each form is issued at most once. Anything that comes back as text ends the
+attempt, whatever it says: the CLI processed the command, so a second
+destructive form is never sent.
 
 - **Pre-checks (fail closed):** `show virtual-chassis status` must report
   exactly one Master and one Backup with every member `Prsnt`; `show task
@@ -664,6 +671,14 @@ wrapped in the checks a bare `junos-ops show "request …"` cannot give you:
   so explicitly.
 - `-n` / `--dry-run` runs the pre-checks and prints what would be issued.
   Explicit hostnames are required; the implicit all-hosts target never applies.
+
+A rejection is also checked against the device: when the command was issued but
+the reply read as a refusal, `--wait` still looks at `show virtual-chassis
+status`. If mastership moved anyway the result is upgraded to `confirmed`, keeping the
+device's wording in `rejected_reply` and warning that this command may not be
+what moved it (a concurrent or manual switch looks identical); if it did not,
+the rejection stands, now backed by the device state rather than by its
+wording.
 
 Exit code 0 only for `confirmed`, `dry_run` and (with `--wait 0`)
 `initiated_unverified`; `refused`, `rejected` and `verification_failed` return 1.

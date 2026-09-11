@@ -274,7 +274,7 @@ class TestCmdRsi:
 
         m = mock_open()
         with patch.object(rsi.common, "connect", return_value={"hostname": "test-host", "host": "test-host", "ok": True, "dev": mock_dev, "error": None, "error_message": None}):
-            with patch("builtins.open", m):
+            with patch("builtins.open", m), patch("os.makedirs"):
                 result = rsi.cmd_rsi("test-host")
 
         assert result == 0
@@ -301,7 +301,7 @@ class TestCmdRsi:
 
         m = mock_open()
         with patch.object(rsi.common, "connect", return_value={"hostname": "test-host", "host": "test-host", "ok": True, "dev": mock_dev, "error": None, "error_message": None}):
-            with patch("builtins.open", m):
+            with patch("builtins.open", m), patch("os.makedirs"):
                 result = rsi.cmd_rsi("test-host")
 
         assert result == 0
@@ -329,7 +329,7 @@ class TestCmdRsi:
 
         m = mock_open()
         with patch.object(rsi.common, "connect", return_value={"hostname": "test-host", "host": "test-host", "ok": True, "dev": mock_dev, "error": None, "error_message": None}):
-            with patch("builtins.open", m):
+            with patch("builtins.open", m), patch("os.makedirs"):
                 result = rsi.cmd_rsi("test-host")
 
         assert result == 0
@@ -359,7 +359,7 @@ class TestCmdRsi:
 
         m = mock_open()
         with patch.object(rsi.common, "connect", return_value={"hostname": "test-host", "host": "test-host", "ok": True, "dev": mock_dev, "error": None, "error_message": None}):
-            with patch("builtins.open", m):
+            with patch("builtins.open", m), patch("os.makedirs"):
                 with patch("junos_ops.display.print_host_block") as mock_block, \
                         patch("junos_ops.display.print_host_header") as mock_header:
                     result = rsi.cmd_rsi("test-host")
@@ -394,3 +394,63 @@ class TestCmdRsi:
         assert mock_block.call_args[0][0] == "test-host"
         # The standalone (non-atomic) connect-error printer must not be used.
         mock_pce.assert_not_called()
+
+
+class TestRsiDirOverride:
+    """--rsi-dir wins over config RSI_DIR, and the directory is created (#160)."""
+
+    def _dev(self):
+        dev = MagicMock()
+        dev.cli.return_value = "config"
+        out = etree.Element("output")
+        out.text = "RSI text"
+        dev.rpc.get_support_information.return_value = out
+        dev.facts = {
+            "personality": "MX", "model": "MX204", "model_info": {"MX204": {}},
+            "hostname": "test-host", "srx_cluster": None,
+        }
+        return dev
+
+    def test_resolve_precedence(self, junos_common, mock_config, tmp_path):
+        mock_config.set("test-host", "RSI_DIR", "/from/config")
+        assert rsi.resolve_rsi_dir("test-host", str(tmp_path)) == str(tmp_path)
+        assert rsi.resolve_rsi_dir("test-host") == "/from/config"
+        assert rsi.resolve_rsi_dir("test-host", "") == "/from/config"
+        mock_config.remove_option("test-host", "RSI_DIR")
+        mock_config.remove_option("DEFAULT", "RSI_DIR")
+        assert rsi.resolve_rsi_dir("test-host") == "./"
+
+    def test_tilde_expanded_in_override(self, junos_common, mock_config, monkeypatch, tmp_path):
+        monkeypatch.setenv("HOME", str(tmp_path))
+        assert rsi.resolve_rsi_dir("test-host", "~/rsi") == str(tmp_path / "rsi")
+
+    def test_cli_option_writes_to_override_dir(self, junos_common, mock_args, mock_config, tmp_path):
+        mock_config.set("test-host", "RSI_DIR", "/does/not/exist")
+        mock_args.rsi_dir = str(tmp_path / "out")
+        conn = {"hostname": "test-host", "host": "test-host", "ok": True,
+                "dev": self._dev(), "error": None, "error_message": None}
+        with patch.object(rsi.common, "connect", return_value=conn):
+            assert rsi.cmd_rsi("test-host") == 0
+        assert (tmp_path / "out" / "test-host.SCF").read_text() == "config"
+        assert (tmp_path / "out" / "test-host.RSI").read_text() == "RSI text"
+
+    def test_unwritable_directory_reports_cleanly(self, junos_common, mock_config, tmp_path):
+        """makedirs failure is a clean early return, not a mid-collection crash."""
+        target = str(tmp_path / "sub")
+        with patch("os.makedirs", side_effect=PermissionError(13, "Permission denied")):
+            result = rsi.collect_rsi("test-host", self._dev(), target)
+        assert result["ok"] is False
+        assert result["error"] == "rsi_dir"
+        assert target in result["error_message"]
+        assert "cannot create output directory" in result["error_message"]
+
+    def test_cmd_rsi_reports_directory_failure(self, junos_common, mock_args, mock_config, tmp_path):
+        """The CLI path surfaces it too (and still passes --rsi-dir through)."""
+        mock_args.rsi_dir = str(tmp_path / "sub")
+        conn = {"hostname": "test-host", "host": "test-host", "ok": True,
+                "dev": self._dev(), "error": None, "error_message": None}
+        with (
+            patch.object(rsi.common, "connect", return_value=conn),
+            patch("os.makedirs", side_effect=PermissionError(13, "Permission denied")),
+        ):
+            assert rsi.cmd_rsi("test-host") == 1
