@@ -581,7 +581,7 @@ When `--connect` / `--remote` need to resolve a model and it was not supplied vi
   rt2.example.jp.RSI done
 ```
 
-The output directory comes from `RSI_DIR` in config.ini, but `--rsi-dir DIR` overrides it per run (default: current directory).
+The output directory comes from `RSI_DIR` in config.ini, but `--rsi-dir DIR` overrides it per run (default: current directory). `~` is expanded and the directory is created if it does not exist.
 
 ### reboot (scheduled reboot)
 
@@ -643,8 +643,13 @@ after:
 	confirmed: member 1 is Master after 3 probe(s)
 ```
 
-Runs `request virtual-chassis routing-engine master switch` **exactly once**,
-wrapped in the checks a bare `junos-ops show "request …"` cannot give you:
+Runs the mastership switch **once**, wrapped in the checks a bare
+`junos-ops show "request …"` cannot give you. The EX Virtual Chassis form
+(`request virtual-chassis routing-engine master switch`) is tried first; if the
+platform rejects it as not valid — QFX VCs do — the chassis form
+(`request chassis routing-engine master switch no-confirm`) is sent instead.
+Each form is issued at most once, and only a refusal that proves the command
+never ran triggers the second one:
 
 - **Pre-checks (fail closed):** `show virtual-chassis status` must report
   exactly one Master and one Backup with every member `Prsnt`; `show task

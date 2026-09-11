@@ -54,6 +54,13 @@ def vc_xml(role0="Master*", role1="Backup", status1="Prsnt", extra=""):
     )
 
 
+def _rpc_error(message):
+    """Build an RpcError whose str() carries the device's message."""
+    return RpcError(rsp=etree.fromstring(
+        f"<rpc-error><error-message>{message}</error-message></rpc-error>"
+    ))
+
+
 def dev_with(rsp):
     dev = MagicMock()
     if isinstance(rsp, Exception):
@@ -249,10 +256,12 @@ class TestMasterSwitch:
         assert r["issued"] is True
         dev.cli.assert_called_once()
 
-    @pytest.mark.parametrize("text", ["error: command not valid on this platform", "  syntax error, expecting <command>"])
+    @pytest.mark.parametrize("text", ["error: command not valid on this platform", "  permission denied"])
     def test_rejection_text(self, mock_args, mock_config, text):
-        r = vc.master_switch("h", switch_dev(cli_result=text))
+        dev = switch_dev(cli_result=text)
+        r = vc.master_switch("h", dev)
         assert r["ok"] is False and r["status"] == "rejected" and r["error"] == "command_rejected"
+        dev.cli.assert_called_once()  # a refusal about this switch is not retried
 
     def test_prose_error_word_is_not_rejection(self, mock_args, mock_config):
         r = vc.master_switch("h", switch_dev(cli_result="No error occurred; switching"))
@@ -519,3 +528,62 @@ class TestReviewFollowups:
             assert dev_cls.call_args.kwargs["auto_probe"] == 7
             common.connect("test-host")
             assert "auto_probe" not in dev_cls.call_args.kwargs
+
+
+class TestQfxFallback:
+    """#159: QFX VCs reject the virtual-chassis form; fall back to the chassis form."""
+
+    NOT_VALID = "command is not valid on the qfx5110-48s-4c"
+
+    def test_rpc_error_not_valid_falls_back_once(self, mock_args, mock_config):
+        dev = switch_dev()
+        dev.cli.side_effect = [_rpc_error(self.NOT_VALID), "Toggle mastership: done"]
+        r = vc.master_switch("h", dev)
+        assert r["ok"] is True and r["status"] == "initiated_unverified"
+        assert r["command"] == vc.CHASSIS_SWITCH_COMMAND
+        assert r["issued"] is True
+        assert [c.args[0] for c in dev.cli.call_args_list] == list(vc.SWITCH_COMMANDS)
+        assert any(s["action"] == "command_not_valid" for s in r["steps"])
+
+    def test_text_reply_not_valid_falls_back(self, mock_args, mock_config):
+        dev = switch_dev()
+        dev.cli.side_effect = ["unknown command: virtual-chassis", "Toggle mastership: done"]
+        r = vc.master_switch("h", dev)
+        assert r["status"] == "initiated_unverified"
+        assert r["command"] == vc.CHASSIS_SWITCH_COMMAND
+        assert dev.cli.call_count == 2
+
+    def test_session_drop_on_fallback_is_success(self, mock_args, mock_config):
+        dev = switch_dev()
+        dev.cli.side_effect = [_rpc_error(self.NOT_VALID), RpcTimeoutError(MagicMock(), "cmd", 30)]
+        r = vc.master_switch("h", dev)
+        assert r["ok"] is True and r["session_dropped"] is True
+        assert r["command"] == vc.CHASSIS_SWITCH_COMMAND
+
+    def test_both_forms_invalid_is_rejected(self, mock_args, mock_config):
+        dev = switch_dev()
+        dev.cli.side_effect = [_rpc_error(self.NOT_VALID), _rpc_error(self.NOT_VALID)]
+        r = vc.master_switch("h", dev)
+        assert r["ok"] is False and r["status"] == "rejected"
+        assert r["error"] == "command_not_valid"
+        assert r["issued"] is False  # proven not executed
+        assert dev.cli.call_count == 2
+
+    def test_other_rpc_error_does_not_fall_back(self, mock_args, mock_config):
+        dev = switch_dev()
+        dev.cli.side_effect = [_rpc_error("permission denied"), "should not be reached"]
+        r = vc.master_switch("h", dev)
+        assert r["error"] == "RpcError"
+        dev.cli.assert_called_once()
+
+    def test_not_ready_does_not_fall_back(self, mock_args, mock_config):
+        dev = switch_dev(cli_result="Not ready for mastership switch, try after 264 secs.")
+        r = vc.master_switch("h", dev)
+        assert r["error"] == "command_rejected"
+        dev.cli.assert_called_once()
+
+    def test_first_form_succeeds_without_second_call(self, mock_args, mock_config):
+        dev = switch_dev()
+        r = vc.master_switch("h", dev)
+        assert r["command"] == vc.SWITCH_COMMAND
+        dev.cli.assert_called_once_with(vc.SWITCH_COMMAND, warning=False)

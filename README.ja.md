@@ -548,7 +548,7 @@ rt2.example.jp   ok       missing     MX5-T     jinstall-ppc-18.4R3-S10-signed.t
   rt2.example.jp.RSI done
 ```
 
-出力先は config.ini の `RSI_DIR` で指定しますが、`--rsi-dir DIR` で実行ごとに上書きできます（デフォルト: カレントディレクトリ）。
+出力先は config.ini の `RSI_DIR` で指定しますが、`--rsi-dir DIR` で実行ごとに上書きできます（デフォルト: カレントディレクトリ）。`~` は展開され、ディレクトリが無ければ作成します。
 
 ### reboot（スケジュールリブート）
 
@@ -597,7 +597,7 @@ after:
 	confirmed: member 1 is Master after 3 probe(s)
 ```
 
-`request virtual-chassis routing-engine master switch` を**ちょうど 1 回**実行します。`junos-ops show "request …"` で素通しするのと違い、次のガードが付きます:
+mastership 切替を **1 回**実行します。EX Virtual Chassis 形式（`request virtual-chassis routing-engine master switch`）を先に試し、プラットフォームが「command is not valid」で拒否した場合（QFX VC が該当）はシャーシ形式（`request chassis routing-engine master switch no-confirm`）を送ります。各形式の発行は最大 1 回で、2 つ目に進むのは「コマンドが実行されていないことが証明できる拒否」のときだけです。`junos-ops show "request …"` で素通しするのと違い、次のガードが付きます:
 
 - **事前確認（fail-closed）:** `show virtual-chassis status` で Master と Backup がちょうど 1 つずつ、全 member が `Prsnt` であること。`show task replication` で GRES `Enabled`・RE mode `Master`・列挙された全プロトコルが `Complete` であること（何も列挙されない場合は「安全ではない」扱い — NSR 無しで切り替えるとルーティング隣接が落ちます）。どちらかの RPC が失敗したら拒否 — 「確認できなかった」を「たぶん大丈夫」とは見なしません。`--force` で拒否を警告に変えて続行します。
 - **1 回きり:** コマンドは再送しません。切替と同時に NETCONF セッションは通常切れます（`RpcTimeoutError` / 接続クローズ）が、それは「発行済み・セッション切断」として記録され、失敗ではありません。失敗と見なすのは `RpcError` と応答内の明示的な拒否だけです。
