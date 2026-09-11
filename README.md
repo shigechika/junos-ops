@@ -48,6 +48,17 @@ A Python CLI to automate Juniper/JUNOS operations over NETCONF: model-aware upgr
 brew install shigechika/tap/junos-ops
 ```
 
+Bottles are built for Apple Silicon only. On an Intel Mac the formula builds from source (cryptography, lxml, PyNaCl and bcrypt are compiled, which pulls in `rust` and takes around 10 minutes per upgrade) — use [pipx](#pipx) there instead.
+
+### pipx
+
+Installs from PyPI into an isolated virtualenv using pre-built wheels, so no compiler toolchain is needed:
+
+```bash
+pipx install junos-ops
+pipx upgrade junos-ops   # update
+```
+
 ### Debian / Ubuntu (.deb)
 
 Pre-built packages for Ubuntu 24.04 (Noble) are available on the [GitHub Releases](https://github.com/shigechika/junos-ops/releases) page. The package installs a self-contained Python virtualenv at `/opt/venvs/junos-ops/` with `junos-ops` symlinked to `/usr/bin/`:
@@ -132,14 +143,18 @@ The configuration file is searched in the following order (`-c` / `--config` can
 1. `./config.ini` in the current directory
 2. `~/.config/junos-ops/config.ini` (XDG_CONFIG_HOME)
 
-### Logging Configuration (logging.ini)
+### Logging
 
-An optional `logging.ini` file can be used to customize log output (e.g., suppress verbose paramiko/ncclient messages). The file is searched in the same order as `config.ini`:
+By default junos-ops logs at INFO to the console (stdout, or stderr under `--json`). `-d` / `--debug` raises this to DEBUG; the ncclient / paramiko / jnpr.junos loggers stay at WARNING so `-d` does not dump every NETCONF/SSH frame.
+
+File logging is opt-in. Give a path with `--log-file PATH` or `log_file = PATH` in the `[DEFAULT]` section of `config.ini` (the option wins over the config key, `~` is expanded, the parent directory is created on demand). The file rotates daily and keeps 10 backups. Nothing is ever written relative to the current directory unless you ask for it.
+
+For full control (extra handlers, per-logger levels, custom formats) place a `logging.ini` at one of these locations; it is searched in the same order as `config.ini` and replaces the defaults above:
 
 1. `./logging.ini` in the current directory
 2. `~/.config/junos-ops/logging.ini` (XDG_CONFIG_HOME)
 
-If neither is found, the default logging configuration (INFO level to stdout) is used.
+See [`logging.ini.example`](logging.ini.example) for a starting point. It is loaded with `disable_existing_loggers=False`; `-d` still applies on top of it.
 
 ### DEFAULT Section
 
@@ -155,6 +170,7 @@ hashalgo = md5        # Checksum algorithm
 rpath = /var/tmp      # Remote path
 # ssh_config = ~/.ssh/config   # OpenSSH config (ProxyCommand etc.); if unset, PyEZ auto-picks up ~/.ssh/config
 # lpath = ~/firmware   # Local firmware directory (~ expanded, default: current directory)
+# log_file = ~/.local/state/junos-ops/junos-ops.log   # Opt-in log file (daily rotation, 10 backups); default: console only
 # huge_tree = true    # Allow large XML responses
 # RSI_DIR = ./rsi/    # Output directory for RSI/SCF files
 # DISPLAY_STYLE = display set   # SCF output style (default: display set)
@@ -221,7 +237,8 @@ junos-ops <subcommand> [options] [hostname ...]
 | `hostname` | Target hostname(s) (defaults to all hosts in config file) |
 | `-c`, `--config CONFIG` | Config file path (default: `config.ini` or `~/.config/junos-ops/config.ini`) |
 | `-n`, `--dry-run` | Test run (connect and display messages only, no execution) |
-| `-d`, `--debug` | Debug output |
+| `-d`, `--debug` | Debug output (ncclient/paramiko stay at WARNING; see "Logging") |
+| `--log-file PATH` | Also write INFO logs to PATH (daily rotation, 10 backups). Overrides `log_file` in config.ini; default: console only |
 | `--force` | Force execution regardless of conditions |
 | `--json` | Emit machine-readable JSON instead of human-readable text. One JSON object per host per line (JSONL); logs are routed to stderr so stdout stays pure JSON. Pipe to `jq -s` to slurp into an array. See "JSON Output" below. |
 | `--tags TAG[,TAG...]` | Filter hosts by tags. Comma-separates AND together inside one value; repeating `--tags` ORs groups. Combined with explicit hostnames, the tag filter and hostname list intersect. See "Tag-based Host Filtering" below. |

@@ -48,6 +48,17 @@ Juniper/JUNOS デバイスの運用を NETCONF 経由で自動化する Python C
 brew install shigechika/tap/junos-ops
 ```
 
+bottle は Apple Silicon 向けのみです。Intel Mac では formula がソースビルドになり（cryptography・lxml・PyNaCl・bcrypt のコンパイルで `rust` が必要、upgrade のたびに 10 分程度）、代わりに [pipx](#pipx) を推奨します。
+
+### pipx
+
+PyPI のビルド済み wheel を隔離された virtualenv に入れるので、コンパイラ環境は不要です:
+
+```bash
+pipx install junos-ops
+pipx upgrade junos-ops   # 更新
+```
+
 ### Debian / Ubuntu (.deb)
 
 Ubuntu 24.04 (Noble) 向けのパッケージを [GitHub Releases](https://github.com/shigechika/junos-ops/releases) で配布しています。`/opt/venvs/junos-ops/` に自己完結型の Python 仮想環境をインストールし、`/usr/bin/junos-ops` にシンボリックリンクを作成します。
@@ -132,14 +143,18 @@ INI形式の設定ファイルで、接続情報とモデル別パッケージ�
 1. カレントディレクトリの `./config.ini`
 2. `~/.config/junos-ops/config.ini`（XDG_CONFIG_HOME）
 
-### ログ設定（logging.ini）
+### ログ
 
-`logging.ini` を配置すると、ログ出力をカスタマイズできます（例: paramiko/ncclient の冗長なログを抑制）。`config.ini` と同じ順序で探索されます：
+既定では INFO レベルをコンソール（stdout、`--json` 時は stderr）に出力します。`-d` / `--debug` で DEBUG に上がりますが、ncclient / paramiko / jnpr.junos の各ロガーは WARNING のままなので、`-d` を付けても NETCONF/SSH フレームが全部流れることはありません。
+
+ファイルへのログは opt-in です。`--log-file PATH` か、`config.ini` の `[DEFAULT]` セクションに `log_file = PATH` を書くと有効になります（オプションが設定より優先、`~` 展開あり、親ディレクトリは自動作成）。日次ローテーションで 10 世代保持します。指定しない限り、カレントディレクトリ相対に何かが書かれることはありません。
+
+さらに細かく制御したい場合（ハンドラ追加、ロガー別レベル、独自フォーマット）は `logging.ini` を次の場所に置きます。`config.ini` と同じ順序で探索され、見つかれば上記の既定を置き換えます：
 
 1. カレントディレクトリの `./logging.ini`
 2. `~/.config/junos-ops/logging.ini`（XDG_CONFIG_HOME）
 
-どちらも見つからない場合は、デフォルトのログ設定（INFO レベル、stdout 出力）が使用されます。
+雛形は [`logging.ini.example`](logging.ini.example) を参照してください。`disable_existing_loggers=False` で読み込まれ、`-d` はその上からも効きます。
 
 ### DEFAULTセクション
 
@@ -155,6 +170,7 @@ hashalgo = md5        # チェックサムアルゴリズム
 rpath = /var/tmp      # リモートパス
 # ssh_config = ~/.ssh/config    # OpenSSH 互換設定（ProxyCommand 等）。未指定時は PyEZ が ~/.ssh/config を自動参照
 # lpath = ~/firmware            # ローカルのファームウェア置き場（~ 展開対応、デフォルト: カレントディレクトリ）
+# log_file = ~/.local/state/junos-ops/junos-ops.log   # opt-in のログファイル（日次ローテーション・10世代）。既定はコンソールのみ
 # huge_tree = true    # 大きなXMLレスポンスを許可
 # RSI_DIR = ./rsi/    # RSI/SCFファイルの出力先
 # DISPLAY_STYLE = display set   # SCF出力形式（デフォルト: display set）
@@ -221,7 +237,8 @@ junos-ops <subcommand> [options] [hostname ...]
 | `hostname` | 対象ホスト名（省略時は設定ファイル内の全ホスト） |
 | `-c`, `--config CONFIG` | 設定ファイル指定（デフォルト: `config.ini` → `~/.config/junos-ops/config.ini`） |
 | `-n`, `--dry-run` | テスト実行（接続とメッセージ出力のみ、実行しない） |
-| `-d`, `--debug` | デバッグ出力 |
+| `-d`, `--debug` | デバッグ出力（ncclient/paramiko は WARNING のまま。「ログ」セクション参照） |
+| `--log-file PATH` | INFO ログを PATH にも書く（日次ローテーション・10世代）。config.ini の `log_file` より優先。既定はコンソールのみ |
 | `--force` | 条件を無視して強制実行 |
 | `--json` | 人間向けテキストの代わりに機械可読 JSON を出力。ホストごとに 1 行の JSON オブジェクト（JSONL）。ログは stderr に退避されるため stdout は純粋な JSON のみ。`jq -s` で配列に slurp 可能。詳細は「JSON 出力」セクション参照 |
 | `--tags TAG[,TAG...]` | タグでホストをフィルタ。カンマ区切りは 1 グループ内の AND、`--tags` の繰り返しはグループ間 OR。ホスト名併記時はタグフィルタと積集合。詳細は「タグベースのホストフィルタリング」セクション参照 |

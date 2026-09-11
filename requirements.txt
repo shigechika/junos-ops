@@ -1,4 +1,0 @@
-junos-eznc
-looseversion
-pytest
-pytest-cov

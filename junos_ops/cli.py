@@ -21,7 +21,27 @@ import io
 import sys
 import logging
 import logging.config
+import logging.handlers
 import os
+
+from junos_ops import __version__ as version
+from junos_ops import common
+from junos_ops import display
+from junos_ops import upgrade
+from junos_ops import snapshot
+from junos_ops import rsi
+from junos_ops import show
+
+logger = logging.getLogger(__name__)
+
+# Handler names let _setup_logging() replace its own handlers on re-entry
+# (tests call _run() many times) without touching handlers that pytest's
+# caplog or a user's logging.ini attached to the root logger.
+_CONSOLE_HANDLER = "junos-ops-console"
+_FILE_HANDLER = "junos-ops-file"
+_CONSOLE_FORMAT = "%(asctime)s [%(levelname)s] %(message)s"
+_NOISY_LOGGERS = ("ncclient", "paramiko", "jnpr.junos")
+
 
 def _find_logging_ini():
     """Search for logging.ini in standard locations."""
@@ -33,33 +53,91 @@ def _find_logging_ini():
         return xdg_path
     return None
 
-_logging_ini = _find_logging_ini()
-if _logging_ini:
-    logging.config.fileConfig(_logging_ini)
-else:
-    logging.basicConfig(
-        level=logging.INFO,
-        format='%(asctime)s [%(levelname)s] %(message)s',
-        handlers=[logging.StreamHandler(sys.stdout)]
-    )
-# ncclient / paramiko / junos-eznc emit every NETCONF and SSH frame at
-# INFO.  Apply WARNING suppression regardless of whether logging.ini was
-# found: when logging.ini sets root=DEBUG but omits these loggers, they
-# inherit DEBUG and flood the terminal.  Only override loggers that have
-# no explicit level (NOTSET) so a deliberate logging.ini entry is honoured.
-for noisy in ("ncclient", "paramiko", "jnpr.junos"):
-    lgr = logging.getLogger(noisy)
-    if lgr.level == logging.NOTSET:
-        lgr.setLevel(logging.WARNING)
-logger = logging.getLogger(__name__)
 
-from junos_ops import __version__ as version  # noqa: E402
-from junos_ops import common  # noqa: E402
-from junos_ops import display  # noqa: E402
-from junos_ops import upgrade  # noqa: E402
-from junos_ops import snapshot  # noqa: E402
-from junos_ops import rsi  # noqa: E402
-from junos_ops import show  # noqa: E402
+def _resolve_log_file(args) -> str | None:
+    """Return the opt-in log file path: ``--log-file`` > ``[DEFAULT] log_file``.
+
+    Returns None (no file logging) when neither is set or the config value
+    is empty. ``~`` is expanded. ``common.config`` may still be None when
+    called before ``read_config`` (e.g. from tests); that is treated as
+    "no config value".
+    """
+    path = getattr(args, "log_file", None)
+    if not path and common.config is not None:
+        path = common.config.get("DEFAULT", "log_file", fallback=None)
+    if not path:
+        return None
+    return os.path.expanduser(path)
+
+
+def _setup_logging(args) -> None:
+    """Configure the root logger for a CLI run.
+
+    Called from :func:`_run` after argument parsing and config loading,
+    never at import time, so importing ``junos_ops.cli`` (or any other
+    junos_ops module) leaves the caller's logging untouched.
+
+    Resolution:
+
+    1. If a ``logging.ini`` is found (``./logging.ini`` or
+       ``$XDG_CONFIG_HOME/junos-ops/logging.ini``) it is loaded with
+       ``disable_existing_loggers=False`` so the already-created
+       ``junos_ops.*`` module loggers keep working.
+    2. Otherwise a console ``StreamHandler`` at INFO is attached (stderr
+       under ``--json``, stdout otherwise). File logging is opt-in via
+       :func:`_resolve_log_file`: a daily-rotating handler (10 backups)
+       whose parent directory is created on demand; if that fails a
+       warning is logged and the run continues console-only.
+
+    In both branches ``-d`` raises the root logger to DEBUG, and the
+    chatty ncclient / paramiko / jnpr.junos loggers are pinned to WARNING
+    unless a logging.ini set them explicitly (they would otherwise inherit
+    DEBUG and flood the terminal with every NETCONF/SSH frame).
+    """
+    root = logging.getLogger()
+    for h in list(root.handlers):
+        if h.name in (_CONSOLE_HANDLER, _FILE_HANDLER):
+            root.removeHandler(h)
+            h.close()
+
+    ini = _find_logging_ini()
+    if ini:
+        logging.config.fileConfig(ini, disable_existing_loggers=False)
+    else:
+        stream = sys.stderr if getattr(args, "json", False) else sys.stdout
+        console = logging.StreamHandler(stream)
+        console.name = _CONSOLE_HANDLER
+        console.setFormatter(logging.Formatter(_CONSOLE_FORMAT))
+        root.addHandler(console)
+        root.setLevel(logging.INFO)
+
+        log_file = _resolve_log_file(args)
+        if log_file:
+            try:
+                os.makedirs(os.path.dirname(os.path.abspath(log_file)), exist_ok=True)
+                fh = logging.handlers.TimedRotatingFileHandler(
+                    log_file, when="midnight", interval=1, backupCount=10,
+                )
+            except OSError as e:
+                logger.warning(f"log file {log_file} unavailable ({e}); console only")
+            else:
+                fh.name = _FILE_HANDLER
+                fh.setLevel(logging.INFO)
+                fh.setFormatter(logging.Formatter(
+                    "%(asctime)s [%(levelname)s] %(name)s %(funcName)s %(message)s"
+                ))
+                root.addHandler(fh)
+
+    if getattr(args, "debug", False):
+        root.setLevel(logging.DEBUG)
+        for h in root.handlers:
+            if h.name == _CONSOLE_HANDLER:
+                h.setLevel(logging.DEBUG)
+
+    for noisy in _NOISY_LOGGERS:
+        lgr = logging.getLogger(noisy)
+        if lgr.level == logging.NOTSET:
+            lgr.setLevel(logging.WARNING)
 
 
 # --- サブコマンド用エントリ関数 ---
@@ -73,12 +151,13 @@ def _json_mode() -> bool:
 def _route_logs_to_stderr() -> None:
     """Redirect any stdout-bound logging StreamHandler to stderr.
 
-    Under ``--json`` stdout must carry only JSON lines, but both the
-    shipped logging.ini console handler and the basicConfig fallback
-    write log records to stdout — and ``load_config`` streams progress
-    via ``logger.info``. Moving those handlers to stderr keeps logs as
-    diagnostics while stdout stays machine-parseable. A file handler's
-    stream is not ``sys.stdout`` so it is left untouched.
+    Under ``--json`` stdout must carry only JSON lines, but a user's
+    logging.ini may declare a stdout console handler — and ``load_config``
+    streams progress via ``logger.info``. Moving those handlers to stderr
+    keeps logs as diagnostics while stdout stays machine-parseable. A file
+    handler's stream is not ``sys.stdout`` so it is left untouched.
+    (:func:`_setup_logging`'s own console handler already targets stderr
+    under ``--json``.)
     """
     for h in logging.getLogger().handlers:
         if isinstance(h, logging.StreamHandler) and getattr(h, "stream", None) is sys.stdout:
@@ -699,7 +778,17 @@ def _run():
         "-n", "--dry-run", action="store_true",
         help="connect and message output. No execute.",
     )
-    parent.add_argument("-d", "--debug", action="store_true", help="debug output")
+    parent.add_argument(
+        "-d", "--debug", action="store_true",
+        help="debug output (ncclient/paramiko stay at WARNING)",
+    )
+    parent.add_argument(
+        "--log-file", dest="log_file", default=None, type=str,
+        help=(
+            "also write INFO logs to this file (daily rotation, 10 backups). "
+            "Overrides `log_file` in config.ini. Default: console only."
+        ),
+    )
     parent.add_argument(
         "--json", action="store_true",
         help=(
@@ -1061,20 +1150,26 @@ def _run():
     if common.args.config is None:
         common.args.config = common.get_default_config()
 
-    # --json: stdout must carry only JSON, so move log records to stderr.
-    if _json_mode():
-        _route_logs_to_stderr()
-
-    logger.debug("start")
-
     cfg_result = common.read_config()
     if not cfg_result["ok"]:
+        # Logging is not configured yet (the config may carry `log_file`),
+        # so this diagnostic is printed directly rather than logged.
         if _json_mode():
             # Startup error → diagnostic on stderr so stdout stays pure JSON.
             print(display.format_read_config_error(cfg_result), file=sys.stderr)
         else:
             display.print_read_config_error(cfg_result)
         sys.exit(1)
+
+    # Logging comes after read_config so `[DEFAULT] log_file` is visible.
+    _setup_logging(args)
+    # --json: stdout must carry only JSON, so move log records to stderr.
+    # _setup_logging already picks stderr for its own console handler; this
+    # additionally covers a stdout handler declared in a user's logging.ini.
+    if _json_mode():
+        _route_logs_to_stderr()
+
+    logger.debug("start")
 
     # check --local is host-independent (staging-server inventory). When
     # --connect / --remote are not also requested, skip the host
