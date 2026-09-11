@@ -368,13 +368,9 @@ def cmd_reboot(hostname) -> int:
     dev = _open_connection(hostname)
     if dev is None:
         return 1
+    member = getattr(common.args, "member", None)
     try:
-        result = upgrade.reboot(
-            hostname, dev, common.args.rebootat,
-            member=getattr(common.args, "member", None),
-        )
-        _emit_result(hostname, result, display.format_reboot)
-        return result.get("code", 1)
+        result = upgrade.reboot(hostname, dev, common.args.rebootat, member=member)
     except Exception as e:
         _emit_exception(hostname, e)
         return 1
@@ -383,6 +379,53 @@ def cmd_reboot(hostname) -> int:
             dev.close()
         except (ConnectClosedError, Exception):
             pass
+
+    wait = getattr(common.args, "wait", 0) or 0
+    immediate = common.args.rebootat is None
+    if (
+        result.get("code") == 0
+        and member is not None
+        and immediate
+        and wait > 0
+        and not common.args.dry_run
+    ):
+        expect_up = [
+            i.strip()
+            for i in (getattr(common.args, "expect_up", None) or "").split(",")
+            if i.strip()
+        ]
+        waited = vc.wait_for_member(hostname, member, wait, expect_up=expect_up)
+        result["wait"] = {
+            k: waited[k]
+            for k in ("ok", "elapsed", "attempts", "error", "error_message")
+        }
+        result["after"] = waited["after"]
+        result["fpc_state"] = waited["fpc_state"]
+        result["interfaces"] = waited["interfaces"]
+        if waited["ok"]:
+            ports = f", {len(expect_up)} port(s) up" if expect_up else ""
+            result["steps"].append({
+                "action": "verify",
+                "message": (
+                    f"\tconfirmed: member {member} is back (FPC Online{ports}) "
+                    f"after {waited['elapsed']}s / {waited['attempts']} probe(s)"
+                ),
+            })
+        else:
+            result["ok"] = False
+            result["code"] = 10
+            result["error"] = waited["error"]
+            result["message"] = waited["error_message"]
+            result["steps"].append({
+                "action": "error",
+                "message": (
+                    f"\tmember {member} not back after {wait}s: "
+                    f"{waited['error']}: {waited['error_message']}"
+                ),
+            })
+
+    _emit_result(hostname, result, display.format_reboot)
+    return result.get("code", 1)
 
 
 def cmd_vc_switch(hostname) -> int:
@@ -1023,6 +1066,21 @@ def _run():
         help="reboot immediately instead of --at; only together with --member",
     )
     p_reboot.add_argument(
+        "--wait", dest="wait", type=int, default=0, metavar="SEC",
+        help=(
+            "with --member --now: after issuing, reconnect until the member is "
+            "Prsnt with a role and its FPC slot is Online (0 = do not verify; "
+            "600 is a reasonable value for a QFX/EX member)"
+        ),
+    )
+    p_reboot.add_argument(
+        "--expect-up", dest="expect_up", default=None, metavar="IFACE[,IFACE...]",
+        help=(
+            "with --wait: also require these interfaces to be up/up before "
+            "declaring the member back (e.g. the member's single-homed ports)"
+        ),
+    )
+    p_reboot.add_argument(
         "--allow-mixed-version", dest="allow_mixed_version", action="store_true",
         help=(
             "with --member: proceed even though a pending package would be "
@@ -1324,6 +1382,13 @@ def _run():
             parser.error("--at is required" + (" (or --now with --member)" if member is not None else ""))
         if member is not None and not getattr(args, "specialhosts", []):
             parser.error("--member requires explicit hostnames")
+        wait = getattr(args, "wait", 0) or 0
+        if wait < 0:
+            parser.error("--wait must be >= 0")
+        if wait and not (member is not None and now):
+            parser.error("--wait requires --member with --now")
+        if getattr(args, "expect_up", None) and not wait:
+            parser.error("--expect-up requires --wait")
     if getattr(args, "subcommand", None) == "vc-switch":
         if getattr(args, "wait", 0) < 0:
             parser.error("--wait must be >= 0")

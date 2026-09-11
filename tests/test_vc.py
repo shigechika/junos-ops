@@ -705,3 +705,143 @@ class TestRejectedButIssuedIsVerified:
         ):
             assert cli.cmd_vc_switch("h") == 1
         w.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# member reboot verification (#161)
+# ---------------------------------------------------------------------------
+
+FPC_XML = """
+<fpc-information style="brief">
+  <fpc><slot>0</slot><state>{s0}</state></fpc>
+  <fpc><slot>1</slot><state>{s1}</state></fpc>
+  <fpc><slot>2</slot><state>Empty</state></fpc>
+</fpc-information>
+"""
+
+IFACE_XML = """
+<interface-information style="terse">
+  <physical-interface><name>
+ge-0/0/40
+</name><admin-status>
+up
+</admin-status><oper-status>
+{o40}
+</oper-status></physical-interface>
+  <physical-interface><name>
+xe-0/0/47
+</name><admin-status>
+up
+</admin-status><oper-status>
+{o47}
+</oper-status></physical-interface>
+</interface-information>
+"""
+
+
+def member_dev(vc_rsp=None, s0="Online", s1="Online", o40="up", o47="up"):
+    dev = MagicMock()
+    dev.rpc.get_virtual_chassis_information.return_value = vc_rsp if vc_rsp is not None else vc_xml()
+    dev.rpc.get_fpc_information.return_value = etree.fromstring(FPC_XML.format(s0=s0, s1=s1))
+    dev.rpc.get_interface_information.return_value = etree.fromstring(
+        IFACE_XML.format(o40=o40, o47=o47)
+    )
+    return dev
+
+
+class TestGetFpcState:
+    def test_slot_state(self):
+        assert vc.get_fpc_state(member_dev(), 0) == "Online"
+        assert vc.get_fpc_state(member_dev(s0="Present"), "0") == "Present"
+        assert vc.get_fpc_state(member_dev(), 2) == "Empty"
+
+    def test_unknown_slot_and_failures(self):
+        assert vc.get_fpc_state(member_dev(), 7) is None
+        dev = member_dev()
+        dev.rpc.get_fpc_information.side_effect = RpcError()
+        assert vc.get_fpc_state(dev, 0) is None
+        dev2 = member_dev()
+        dev2.rpc.get_fpc_information.return_value = True
+        assert vc.get_fpc_state(dev2, 0) is None
+
+
+class TestGetInterfaceStates:
+    def test_states_are_stripped_and_combined(self):
+        st = vc.get_interface_states(member_dev(), ["ge-0/0/40", "xe-0/0/47"])
+        assert st == {"ge-0/0/40": "up/up", "xe-0/0/47": "up/up"}
+
+    def test_down_and_unknown(self):
+        st = vc.get_interface_states(member_dev(o47="down"), ["xe-0/0/47", "ge-0/0/99"])
+        assert st["xe-0/0/47"] == "up/down"
+        assert st["ge-0/0/99"] is None
+
+    def test_empty_request_and_rpc_failure(self):
+        assert vc.get_interface_states(member_dev(), []) == {}
+        dev = member_dev()
+        dev.rpc.get_interface_information.side_effect = RpcError()
+        assert vc.get_interface_states(dev, ["ge-0/0/40"]) == {"ge-0/0/40": None}
+
+
+class TestWaitForMember:
+    def _conn(self, dev):
+        return {"hostname": "h", "host": "h", "ok": True, "dev": dev,
+                "error": None, "error_message": None}
+
+    def _fail(self):
+        return {"ok": False, "dev": None, "error": "ConnectTimeoutError",
+                "error_message": "timed out"}
+
+    def _run(self, seq, **kw):
+        clock = itertools.count(0, 5)
+        with (
+            patch.object(common, "connect", side_effect=seq) as connect,
+            patch.object(vc.time, "sleep") as sleep,
+            patch.object(vc.time, "monotonic", side_effect=lambda: next(clock)),
+        ):
+            r = vc.wait_for_member("h", kw.pop("member", 0), kw.pop("timeout", 600), **kw)
+        return r, connect, sleep
+
+    def test_comes_back_after_unreachable_window(self, mock_args, mock_config):
+        back = member_dev()
+        seq = [self._fail(), self._fail(), self._conn(back)]
+        r, connect, sleep = self._run(seq)
+        assert r["ok"] is True
+        assert r["fpc_state"] == "Online"
+        assert r["after"]["master"] == "0"
+        assert r["attempts"] == 3 and r["elapsed"] > 0
+        assert sleep.call_count == 2
+        assert all(c.kwargs["gather_facts"] is False for c in connect.call_args_list)
+        back.close.assert_called_once()
+
+    def test_present_but_fpc_not_online_is_not_back(self, mock_args, mock_config):
+        dev = member_dev(s0="Present")
+        r, _, _ = self._run([self._conn(dev)] * 3, timeout=10)
+        assert r["ok"] is False and r["error"] == "member_not_back"
+        assert "FPC 0 is Present, not Online" in r["error_message"]
+        assert r["fpc_state"] == "Present"
+
+    def test_expect_up_gates_success(self, mock_args, mock_config):
+        down = member_dev(o47="down")
+        up = member_dev()
+        r, _, _ = self._run(
+            [self._conn(down), self._conn(up)], expect_up=["ge-0/0/40", "xe-0/0/47"]
+        )
+        assert r["ok"] is True
+        assert r["interfaces"] == {"ge-0/0/40": "up/up", "xe-0/0/47": "up/up"}
+
+    def test_expect_up_timeout_reports_the_port(self, mock_args, mock_config):
+        r, _, _ = self._run(
+            [self._conn(member_dev(o47="down"))] * 3, timeout=10, expect_up=["xe-0/0/47"]
+        )
+        assert r["ok"] is False and r["error"] == "member_not_back"
+        assert "xe-0/0/47=up/down" in r["error_message"]
+
+    def test_member_absent_from_vc(self, mock_args, mock_config):
+        r, _, _ = self._run([self._conn(member_dev())] * 2, member=7, timeout=10)
+        assert r["ok"] is False
+        assert "member 7 is absent" in r["error_message"]
+
+    def test_never_reachable(self, mock_args, mock_config):
+        r, _, _ = self._run([self._fail()] * 3, timeout=10)
+        assert r["ok"] is False and r["error"] == "unreachable"
+        assert r["after"] is None

@@ -477,6 +477,169 @@ def master_switch(hostname: str, dev) -> dict:
     return result  # pragma: no cover - loop always returns
 
 
+def get_fpc_state(dev, slot) -> str | None:
+    """Return the ``state`` of one FPC slot from ``get-fpc-information``.
+
+    ``show chassis fpc`` reports every slot (``Online`` / ``Empty`` / …);
+    on a VC the member id is the FPC slot. Returns None when the RPC
+    fails or the slot is absent — callers treat that as "unknown".
+    """
+    try:
+        rsp = dev.rpc.get_fpc_information(normalize=True)
+    except Exception as e:
+        logger.debug(f"get_fpc_state: {type(e).__name__}: {e}")
+        return None
+    if rsp is None or isinstance(rsp, bool):
+        return None
+    for fpc in rsp.findall(".//fpc"):
+        if (fpc.findtext("slot") or "").strip() == str(slot):
+            return (fpc.findtext("state") or "").strip() or None
+    return None
+
+
+def get_interface_states(dev, names) -> dict:
+    """Return ``{name: "up/up" | "down/up" | … | None}`` for the given interfaces.
+
+    One ``get-interface-information(terse=True)`` call, matched against
+    ``physical-interface/name``. Values are ``"<admin>/<oper>"``; a name
+    the device did not report maps to None ("unknown", never "up").
+    Text nodes are whitespace-wrapped in the terse reply, hence the
+    ``strip()`` on every field.
+    """
+    wanted = [n.strip() for n in names if n and n.strip()]
+    states: dict = {n: None for n in wanted}
+    if not wanted:
+        return states
+    try:
+        rsp = dev.rpc.get_interface_information(terse=True, normalize=True)
+    except Exception as e:
+        logger.debug(f"get_interface_states: {type(e).__name__}: {e}")
+        return states
+    if rsp is None or isinstance(rsp, bool):
+        return states
+    for phy in rsp.findall(".//physical-interface"):
+        name = (phy.findtext("name") or "").strip()
+        if name in states:
+            admin = (phy.findtext("admin-status") or "").strip()
+            oper = (phy.findtext("oper-status") or "").strip()
+            states[name] = f"{admin}/{oper}"
+    return states
+
+
+def _poll_device(hostname: str, timeout: int, interval: int, check) -> dict:
+    """Reconnect to ``hostname`` until ``check(dev)`` reports done.
+
+    ``check(dev)`` returns ``(done: bool, snapshot: dict, problem: str |
+    None)``. Connection failures and RPC errors mean "not yet" and are
+    retried until the deadline; each probe is bounded by what is left of
+    the window so an unreachable device cannot overshoot ``timeout``.
+    ``time.sleep`` / ``time.monotonic`` go through the module so tests
+    can patch them.
+
+    :return: dict with ``ok``, ``last`` (last snapshot, or None if the
+        device was never reachable), ``elapsed``, ``attempts``,
+        ``error_message`` (the last problem seen).
+    """
+    result: dict = {
+        "ok": False, "last": None, "elapsed": 0, "attempts": 0, "error_message": None,
+    }
+    start = time.monotonic()
+    deadline = start + timeout
+    last_problem = None
+    while True:
+        result["attempts"] += 1
+        remaining = max(1, int(deadline - time.monotonic()))
+        conn = common.connect(
+            hostname, gather_facts=False, auto_probe=min(interval, remaining)
+        )
+        if conn["ok"]:
+            dev = conn["dev"]
+            try:
+                done, snapshot, problem = check(dev)
+                if snapshot is not None:
+                    result["last"] = snapshot
+                if done:
+                    result["ok"] = True
+                    result["elapsed"] = int(time.monotonic() - start)
+                    return result
+                last_problem = problem
+            finally:
+                try:
+                    dev.close()
+                except Exception:
+                    pass
+        else:
+            last_problem = f"{conn['error']}: {conn['error_message']}"
+        now = time.monotonic()
+        if now >= deadline:
+            break
+        time.sleep(min(interval, max(0, deadline - now)))
+    result["elapsed"] = int(time.monotonic() - start)
+    result["error_message"] = last_problem
+    return result
+
+
+def wait_for_member(
+    hostname: str, member, timeout: int, interval: int = 15, expect_up=()
+) -> dict:
+    """Reconnect until VC ``member`` is back, or ``timeout`` seconds pass.
+
+    "Back" means: the member appears in ``show virtual-chassis status``
+    as ``Prsnt`` with a role, its FPC slot is ``Online``, and every
+    interface in ``expect_up`` is ``up/up``. A member that is ``Prsnt``
+    but whose PFE is not ready yet would otherwise look recovered while
+    traffic hashed to it is black-holed, which is why the FPC state and
+    the caller's ports are part of the condition.
+
+    Note the whole VC can be unreachable while one member reboots (the
+    management path may transit its uplink); connection failures are
+    "not yet", never a verdict.
+
+    :return: dict with ``ok``, ``after`` (last :func:`get_vc_status`),
+        ``fpc_state`` (str | None), ``interfaces`` (dict | None),
+        ``elapsed``, ``attempts``, ``error`` (``member_not_back`` /
+        ``unreachable`` / None), ``error_message``. Does not print.
+    """
+    wanted = [n.strip() for n in expect_up if n and n.strip()]
+
+    def check(dev):
+        status = get_vc_status(dev)
+        snapshot = {"status": status, "fpc_state": None, "interfaces": None}
+        if not status["ok"]:
+            return False, snapshot, f"{status['error']}: {status['error_message']}"
+        entry = find_member(status, member)
+        if entry is None or entry["status"] != "Prsnt" or not entry["role"]:
+            seen = entry["status"] if entry else "absent"
+            return False, snapshot, f"member {member} is {seen}"
+        fpc_state = get_fpc_state(dev, member)
+        snapshot["fpc_state"] = fpc_state
+        if fpc_state != "Online":
+            return False, snapshot, f"FPC {member} is {fpc_state or 'unknown'}, not Online"
+        if wanted:
+            states = get_interface_states(dev, wanted)
+            snapshot["interfaces"] = states
+            down = [f"{n}={v or 'unknown'}" for n, v in states.items() if v != "up/up"]
+            if down:
+                return False, snapshot, "interfaces not up: " + ", ".join(sorted(down))
+        return True, snapshot, None
+
+    polled = _poll_device(hostname, timeout, interval, check)
+    last = polled["last"] or {}
+    result = {
+        "ok": polled["ok"],
+        "after": last.get("status"),
+        "fpc_state": last.get("fpc_state"),
+        "interfaces": last.get("interfaces"),
+        "elapsed": polled["elapsed"],
+        "attempts": polled["attempts"],
+        "error": None,
+        "error_message": polled["error_message"],
+    }
+    if not polled["ok"]:
+        result["error"] = "member_not_back" if result["after"] is not None else "unreachable"
+    return result
+
+
 def wait_for_master(hostname: str, expected: str, timeout: int, interval: int = 10) -> dict:
     """Reconnect until ``expected`` is the VC Master, or ``timeout`` seconds pass.
 
