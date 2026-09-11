@@ -693,6 +693,21 @@ class TestInstallLogStagedBeforeBoot:
         # without master info, member 0 has no fpc0 block -> unknown, never another member's time
         assert junos_upgrade._install_log_staged_before_boot("h", dev, member=0) is None
 
+    def test_exact_fpc_block_preferred_over_localre(self, junos_upgrade):
+        """Session on the backup: localre is member 1, fpc0 is the master's own block."""
+        up = etree.fromstring(
+            "<multi-routing-engine-results>"
+            "<multi-routing-engine-item><re-name>fpc0</re-name><system-uptime-information>"
+            "<system-booted-time><date-time>2026-06-01 00:00:00 JST</date-time></system-booted-time>"
+            "</system-uptime-information></multi-routing-engine-item>"
+            "<multi-routing-engine-item><re-name>localre</re-name><system-uptime-information>"
+            "<system-booted-time><date-time>2026-06-17 04:11:55 JST</date-time></system-booted-time>"
+            "</system-uptime-information></multi-routing-engine-item>"
+            "</multi-routing-engine-results>"
+        )
+        # fpc0 booted before the staging -> still pending, even though localre would say otherwise
+        assert junos_upgrade._install_log_staged_before_boot("h", self._dev(uptime=up), member=0, master="0") is False
+
     def test_missing_member_block_is_unknown(self, junos_upgrade):
         assert junos_upgrade._install_log_staged_before_boot("h", self._dev(), member=2, master="0") is None
 

@@ -2172,9 +2172,23 @@ def _install_log_staged_before_boot(
     so they are compared as naive datetimes without any epoch/zone
     conversion. On a VC the uptime is reported per member: ``fpcN`` for
     every member except the one the session is on, which appears as
-    ``localre`` — so when ``member`` is the current ``master`` that block
-    is used. If the requested member's block cannot be found the answer
-    is None (never another member's boot time).
+    ``localre``. The exact ``fpcN`` block is preferred; ``localre`` is
+    accepted only as a fallback when ``member`` is the current ``master``
+    (sessions normally land on the master, but ``localre`` is really
+    "whichever RE I am talking to"). If the requested member's block
+    cannot be found the answer is None (never another member's boot
+    time).
+
+    Limits (documented, not detectable from the log):
+
+    - The header carries the time the ``package -X update`` *started*,
+      not when ``Staging ... completed``. A member rebooted inside that
+      staging window (minutes) and then a successful completion would be
+      classified as already activated.
+    - Host-based QFX stage a *host OS* image while ``System booted`` is
+      the Junos VM's boot time. On QFX5100/5110/5200 a Junos reboot goes
+      through a host reboot as far as observed, but that is not verified
+      across releases (field-verify).
 
     :returns: True (staged before boot: already activated), False (staged
         after boot: genuinely pending), or None when either side could
@@ -2203,15 +2217,14 @@ def _install_log_staged_before_boot(
     booted_el = None
     items = up.findall(".//multi-routing-engine-item")
     if member is not None:
-        wanted = {f"fpc{member}"}
-        if master is not None and str(member) == str(master):
-            wanted.add("localre")
-        for it in items:
-            if (it.findtext("re-name") or "").strip() in wanted:
-                booted_el = it.find(".//system-booted-time/date-time")
-                break
+        by_name = {(it.findtext("re-name") or "").strip(): it for it in items}
+        it = by_name.get(f"fpc{member}")
+        if it is None and master is not None and str(member) == str(master):
+            it = by_name.get("localre")
+        if it is not None:
+            booted_el = it.find(".//system-booted-time/date-time")
         if booted_el is None:
-            logger.debug(f"{hostname}: no uptime block for member {member} ({wanted})")
+            logger.debug(f"{hostname}: no uptime block for member {member}")
             return None
     else:
         booted_el = up.find(".//system-booted-time/date-time")
