@@ -1,0 +1,50 @@
+# Example logging.ini for junos-ops — full control over Python logging.
+#
+# You do NOT need this file. Without it junos-ops logs INFO to the console
+# (stderr under --json), -d raises that to DEBUG, and `--log-file PATH` or
+# `log_file = PATH` in config.ini adds a daily-rotating log file.
+#
+# Use this only when you need something the defaults cannot express (extra
+# handlers, per-logger levels, a custom format). To activate it, copy it to
+# ./logging.ini or ~/.config/junos-ops/logging.ini and edit the paths below.
+# It is loaded with disable_existing_loggers=False, so the junos_ops.*
+# module loggers keep working.
+#
+# The file handler does NOT create directories: the parent directory of the
+# log path must already exist. Use an absolute path — a relative one is
+# resolved against the current working directory of every run.
+
+[loggers]
+keys=root
+
+[handlers]
+keys=logFileHandler,consoleHandler
+
+[formatters]
+keys=logFileFormatter,consoleFormatter
+
+[logger_root]
+level=DEBUG
+handlers=logFileHandler,consoleHandler
+
+[handler_logFileHandler]
+class=handlers.TimedRotatingFileHandler
+#level=DEBUG
+level=INFO
+formatter=logFileFormatter
+# EDIT ME: absolute path; parent directory must exist.
+args=('/path/to/junos-ops/junos-ops.log', 'midnight', 1, 10)
+
+[handler_consoleHandler]
+class=StreamHandler
+#level=INFO
+level=DEBUG
+formatter=consoleFormatter
+args=(sys.stdout,)
+
+[formatter_logFileFormatter]
+#format=%(filename)s %(asctime)s [%(levelname)s] %(name)s %(funcName)s %(message)s
+format=%(asctime)s [%(levelname)s] %(name)s %(funcName)s %(message)s
+
+[formatter_consoleFormatter]
+format=[%(levelname)s] %(funcName)s - %(message)s

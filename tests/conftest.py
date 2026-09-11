@@ -23,6 +23,7 @@ def mock_args(junos_common):
     """テスト用の args グローバル変数を設定"""
     junos_common.args = argparse.Namespace(
         debug=False,
+        log_file=None,
         dry_run=False,
         force=False,
         json=False,
