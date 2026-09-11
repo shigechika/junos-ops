@@ -672,6 +672,12 @@ destructive form is never sent.
 - `-n` / `--dry-run` runs the pre-checks and prints what would be issued.
   Explicit hostnames are required; the implicit all-hosts target never applies.
 
+A rejection is also checked against the device: when the command was issued but
+the reply read as a refusal, `--wait` still looks at `show virtual-chassis
+status`. If mastership moved anyway the result is upgraded to `confirmed` with
+a warning not to re-issue it; if it did not, the rejection stands, now backed by
+the device state rather than by its wording.
+
 Exit code 0 only for `confirmed`, `dry_run` and (with `--wait 0`)
 `initiated_unverified`; `refused`, `rejected` and `verification_failed` return 1.
 With `--json` gate the next step on `status == "confirmed"` (or `verified`),

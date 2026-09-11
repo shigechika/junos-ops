@@ -614,3 +614,80 @@ class TestRpcOutputEvidence:
         r = vc.master_switch("h", dev)
         assert r["rpc_output"] is None
         assert r["session_dropped"] is True and r["command"] == vc.CHASSIS_SWITCH_COMMAND
+
+
+class TestRejectedButIssuedIsVerified:
+    """A rejection read off the device's own words is checked against its state."""
+
+    def _rejected(self, **over):
+        base = TestCmdVcSwitch()._result(
+            ok=False, status="rejected", issued=True, session_dropped=False,
+            error="command_rejected",
+            error_message="Toggle mastership: done\nsyntax error, expecting <eol>",
+        )
+        base.update(over)
+        return base
+
+    def _waited(self, ok, master):
+        return {
+            "ok": ok,
+            "after": {"ok": True, "members": [], "master": master, "backup": "0"},
+            "replication": {"ok": True, "complete": True, "protocols": {}, "gres": "Enabled",
+                            "re_mode": "Master", "error": None, "error_message": None},
+            "elapsed": 20, "attempts": 2,
+            "error": None if ok else "mastership_unchanged",
+            "error_message": None if ok else "master is 0, expected 1",
+        }
+
+    def test_mastership_moved_upgrades_to_confirmed(self, mock_args, mock_config, capsys):
+        with (
+            patch.object(cli, "_open_connection", return_value=MagicMock()),
+            patch.object(vc, "master_switch", return_value=self._rejected()),
+            patch.object(vc, "wait_for_master", return_value=self._waited(True, "1")) as w,
+        ):
+            assert cli.cmd_vc_switch("h") == 0
+        w.assert_called_once_with("h", "1", 180)
+        out = capsys.readouterr().out
+        assert "confirmed" in out
+        assert "do not re-issue" in out
+
+    def test_mastership_unchanged_keeps_rejection(self, mock_args, mock_config, capsys):
+        with (
+            patch.object(cli, "_open_connection", return_value=MagicMock()),
+            patch.object(vc, "master_switch", return_value=self._rejected()),
+            patch.object(vc, "wait_for_master", return_value=self._waited(False, "0")),
+        ):
+            assert cli.cmd_vc_switch("h") == 1
+        out = capsys.readouterr().out
+        assert "REJECTED" in out
+        assert "the rejection is real" in out
+
+    def test_not_issued_rejection_is_not_verified(self, mock_args, mock_config):
+        """Pre-check refusal / both forms invalid: nothing ran, nothing to verify."""
+        with (
+            patch.object(cli, "_open_connection", return_value=MagicMock()),
+            patch.object(vc, "master_switch",
+                         return_value=self._rejected(issued=False, error="command_not_valid")),
+            patch.object(vc, "wait_for_master") as w,
+        ):
+            assert cli.cmd_vc_switch("h") == 1
+        w.assert_not_called()
+
+    def test_wait_zero_does_not_verify(self, mock_args, mock_config):
+        mock_args.wait = 0
+        with (
+            patch.object(cli, "_open_connection", return_value=MagicMock()),
+            patch.object(vc, "master_switch", return_value=self._rejected()),
+            patch.object(vc, "wait_for_master") as w,
+        ):
+            assert cli.cmd_vc_switch("h") == 1
+        w.assert_not_called()
+
+    def test_rejected_without_expected_master_stays_rejected(self, mock_args, mock_config):
+        with (
+            patch.object(cli, "_open_connection", return_value=MagicMock()),
+            patch.object(vc, "master_switch", return_value=self._rejected(expected_master=None)),
+            patch.object(vc, "wait_for_master") as w,
+        ):
+            assert cli.cmd_vc_switch("h") == 1
+        w.assert_not_called()

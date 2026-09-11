@@ -604,6 +604,8 @@ mastership 切替を **1 回**実行します。EX Virtual Chassis 形式（`req
 - **検証（`--wait SEC`、既定 180）:** 元の Backup が Master を名乗るまで再接続を繰り返し、その後 `show task replication` を再確認します（まだ `Complete` でなければ警告 — 数分かかるものでゲートにはしません）。`--wait 0` は発行だけして検証せず戻り、出力にその旨を明示します。
 - `-n` / `--dry-run` は事前確認だけ行い、発行予定のコマンドを表示します。ホスト名の明示が必須で、暗黙の全ホスト対象にはなりません。
 
+拒否判定も実機で裏を取ります。コマンドを発行済みで応答が拒否に読める場合でも `--wait` は `show virtual-chassis status` を見に行き、mastership が動いていれば「再発行しないこと」という警告付きで `confirmed` に格上げ、動いていなければ拒否のまま（デバイスの状態で裏付けられた拒否）とします。
+
 終了コード 0 は `confirmed`・`dry_run`・（`--wait 0` のときの）`initiated_unverified` のみ。`refused`・`rejected`・`verification_failed` は 1 です。`--json` で次工程をゲートするなら `ok` ではなく `status == "confirmed"`（または `verified`）を見てください:
 
 ```bash

@@ -402,12 +402,23 @@ def cmd_vc_switch(hostname) -> int:
             pass
 
     wait = getattr(common.args, "wait", 0) or 0
-    if result["status"] == "initiated_unverified" and wait > 0:
+    # A "rejected" verdict is read off the device's own words. When the
+    # command was actually issued, those words can be ambiguous (a reply
+    # carrying both a banner and a diagnostic), so the device state — not
+    # the text — decides. Verifying a rejection is read-only and either
+    # upgrades it to confirmed or proves nothing moved, which is exactly
+    # what an operator needs before deciding whether to retry by hand.
+    verifiable = result["status"] == "initiated_unverified" or (
+        result["status"] == "rejected" and result["issued"]
+    )
+    if verifiable and wait > 0:
+        rejected_text = result["status"] == "rejected"
         if result["expected_master"] is None:
-            result["status"] = "verification_failed"
-            result["ok"] = False
-            result["error"] = "no_expected_master"
-            result["error_message"] = "no single Backup before the switch; cannot verify"
+            if not rejected_text:
+                result["status"] = "verification_failed"
+                result["ok"] = False
+                result["error"] = "no_expected_master"
+                result["error_message"] = "no single Backup before the switch; cannot verify"
         else:
             waited = vc.wait_for_master(hostname, result["expected_master"], wait)
             result["after"] = waited["after"]
@@ -415,7 +426,16 @@ def cmd_vc_switch(hostname) -> int:
                 k: waited[k] for k in ("ok", "elapsed", "attempts", "error", "error_message")
             }
             if waited["ok"]:
+                if rejected_text:
+                    result["warnings"].append(
+                        "the device reply read as a rejection "
+                        f"({result['error_message']}) but mastership moved; "
+                        "treating the switch as done — do not re-issue it"
+                    )
+                    result["error"] = None
+                    result["error_message"] = None
                 result["status"] = "confirmed"
+                result["ok"] = True
                 result["verified"] = True
                 repl = waited["replication"]
                 result["after_replication"] = repl
@@ -435,6 +455,15 @@ def cmd_vc_switch(hostname) -> int:
                     "message": (
                         f"\tconfirmed: member {result['expected_master']} is Master "
                         f"after {waited['attempts']} probe(s)"
+                    ),
+                })
+            elif rejected_text:
+                # Rejection stands, now backed by the device state.
+                result["steps"].append({
+                    "action": "verify",
+                    "message": (
+                        f"\tverified after {wait}s: mastership did not move "
+                        f"({waited['error']}); the rejection is real"
                     ),
                 })
             else:
