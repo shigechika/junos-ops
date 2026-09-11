@@ -49,10 +49,11 @@ tests/
 ├── test_json_output.py # --json JSONL 出力のテスト
 ├── test_list_remote.py # ls サブコマンドのテスト
 ├── test_package_checks.py # ローカル/リモート firmware checksum 検証のテスト
-└── test_cli_parse.py   # CLI引数パース・サブコマンドなし実行のテスト
+├── test_cli_parse.py   # CLI引数パース・サブコマンドなし実行のテスト
+└── test_logging.py     # _setup_logging（console / --log-file / -d / logging.ini / 冪等性）と python -m junos_ops のテスト
 pyproject.toml      # パッケージメタデータ、エントリポイント
 config.ini          # 設定ファイル（設定例）
-logging.ini         # ロギング設定
+logging.ini.example # ロギング設定の雛形（完全カスタム用。既定はコードで構成）
 README.md           # 英語版
 README.ja.md        # 日本語版
 LICENSE
@@ -129,7 +130,8 @@ LICENSE
 - `_check_local_inventory()` — `check --local` 用。`iter_configured_models()` の出力に対し `--model`（単一名）＋ `--tags` / `--exclude-tags`（`common._filter_models_by_tag_groups` で model 名 OR `<model>.tags` の OR フィルタ）を**積集合**で適用。`--local` 単独実行時 (`check_connect`/`check_remote` ともに false) は `_run()` 側で `get_targets()` をスキップさせ、ホスト側 `--tags` が "no hosts matched tags" で sys.exit するのを回避。フィルタ後 0 件は `logger.info` で「なぜ空か」をログる
 - `_open_connection()` — NETCONF 接続＋エラー時の display 出力ヘルパー（`--json` 時は connect エラーを JSON で出す）
 - `--json` グローバルオプション: 各 `cmd_*` は `_emit_result(hostname, result, formatter)` で「`--json` なら `display.print_json`、通常は `display.print_host_block(formatter(result))`」を分岐。失敗ホストは `_emit_exception` が `{"ok": false, "error", "error_message"}` の JSON 行を出す（JSONL consumer が行欠落で気づけないのを防ぐ）。出力は host ごと 1 行の JSONL（`run_parallel` で並列のため top-level 配列は作らない。`jq -s` で slurp）
-- `_route_logs_to_stderr()` — `--json` 時に root logger の stdout 向け StreamHandler を stderr へ移す。`logging.ini` の consoleHandler も fallback の basicConfig も stdout に出力するため、これをやらないと `load_config` の `logger.info` 進捗等が JSON を汚す。`_run()` で `common.args` 設定直後に呼ぶ
+- `_setup_logging(args)` — logging の構成。**import 時には何もしない**（junos-mcp 等が `junos_ops.*` を import しても root logger は無傷）。`_run()` で `read_config()` の**後**に呼ぶ（`[DEFAULT] log_file` を見るため）。`logging.ini`（`./` → `$XDG_CONFIG_HOME/junos-ops/`）があれば `fileConfig(..., disable_existing_loggers=False)`（`False` 必須 — この時点で `junos_ops.upgrade` 等のロガーは生成済みで、既定の `True` だと disabled にされる）。無ければ console StreamHandler（INFO、`--json` なら stderr）＋ opt-in のファイル `TimedRotatingFileHandler`（`--log-file` > `log_file`、midnight・10 世代、親ディレクトリ自動作成、失敗時は warning でコンソールのみ続行）。handler は固定名 `junos-ops-console` / `junos-ops-file` を持ち、再入時は自分の handler だけ差し替える（`root.handlers.clear()` はしない — pytest の caplog やテストが root に足した handler を壊す）。`-d` は両ブランチで root を DEBUG に上げるが、`ncclient`/`paramiko`/`jnpr.junos` は NOTSET なら WARNING に固定（firehose 防止）
+- `_route_logs_to_stderr()` — `--json` 時に root logger の stdout 向け StreamHandler を stderr へ移す。`_setup_logging` 自身の console handler は最初から stderr を選ぶので、これはユーザーの `logging.ini` が stdout handler を宣言したケースの保険。`_run()` で `_setup_logging` 直後に呼ぶ
 
 ## CLI設計
 
@@ -150,7 +152,7 @@ junos-ops [hostname ...]                   # サブコマンド省略 → device
 junos-ops --version                        # プログラムバージョン
 ```
 
-共通オプション: `--config` (`-c`), `--dry-run` (`-n`), `-d`, `--force`, `--workers N`, `--tags TAG,...`, `--exclude-tags TAG,...`, `--json`（機械可読 JSONL 出力。ログは stderr へ退避）
+共通オプション: `--config` (`-c`), `--dry-run` (`-n`), `-d`, `--log-file PATH`, `--force`, `--workers N`, `--tags TAG,...`, `--exclude-tags TAG,...`, `--json`（機械可読 JSONL 出力。ログは stderr へ退避）
 
 ## 開発環境セットアップ
 
