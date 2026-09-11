@@ -434,6 +434,57 @@ def print_snapshot(result: dict) -> None:
     _emit(format_snapshot(result))
 
 
+def _vc_members_text(status: dict | None, label: str) -> list[str]:
+    if not status or not status.get("ok"):
+        return []
+    lines = [f"{label}:"]
+    for m in status.get("members", []):
+        lines.append(f"  member {m['id']}: {m['role'] or '?':8} {m['status']}")
+    return lines
+
+
+def format_vc_switch(result: dict) -> str:
+    """Return ``vc.master_switch`` (+ wait) result as a text block.
+
+    Status line, before/after member tables, warnings, then the step log.
+    ``initiated_unverified`` is spelled out so an operator never mistakes
+    "issued" for "confirmed".
+    """
+    status = result.get("status", "?")
+    head = {
+        "dry_run": "vc-switch: dry-run",
+        "refused": "vc-switch: REFUSED",
+        "rejected": "vc-switch: REJECTED by device",
+        "initiated_unverified": "vc-switch: issued, NOT verified",
+        "confirmed": "vc-switch: confirmed",
+        "verification_failed": "vc-switch: issued but verification FAILED",
+    }.get(status, f"vc-switch: {status}")
+    parts: list[str] = [head]
+    if result.get("expected_master") is not None:
+        parts.append(f"  expected master after switch: member {result['expected_master']}")
+    parts.extend(_vc_members_text(result.get("before"), "before"))
+    parts.extend(_vc_members_text(result.get("after"), "after"))
+    repl = result.get("after_replication")
+    if repl and repl.get("ok"):
+        protos = ", ".join(f"{n}={s}" for n, s in repl["protocols"].items()) or "none"
+        parts.append(
+            f"  replication after switch: GRES={repl['gres']} RE={repl['re_mode']} {protos}"
+        )
+    for w in result.get("warnings") or []:
+        parts.append(f"  WARNING: {w}")
+    steps = _steps_text(result)
+    if steps:
+        parts.append(steps)
+    if result.get("error") and result.get("error_message"):
+        parts.append(f"  error: {result['error']}: {result['error_message']}")
+    return "\n".join(parts)
+
+
+def print_vc_switch(result: dict) -> None:
+    """Print ``vc.master_switch`` result."""
+    _emit(format_vc_switch(result))
+
+
 # -------------------------------------------------------------------
 # dry_run / list_remote / rsi
 # -------------------------------------------------------------------

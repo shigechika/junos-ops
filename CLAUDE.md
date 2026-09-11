@@ -28,7 +28,7 @@ junos_ops/
 ├── show.py         # show サブコマンド core（run_cli / run_cli_batch、text|json|xml）
 ├── snapshot.py     # snapshot サブコマンド core（request system snapshot、代替メディア判定）
 ├── rsi.py          # RSI/SCF収集機能
-├── vc.py           # Virtual Chassis ヘルパ（status 取得、reboot --member の検証に使用）
+├── vc.py           # Virtual Chassis（status/replication 取得、vc-switch core、reboot --member の検証）
 └── display.py      # 表示層（core が返す dict を人間向け整形 / JSON シリアライズ）
 tests/
 ├── conftest.py     # pytest フィクスチャ
@@ -51,7 +51,7 @@ tests/
 ├── test_list_remote.py # ls サブコマンドのテスト
 ├── test_package_checks.py # ローカル/リモート firmware checksum 検証のテスト
 ├── test_cli_parse.py   # CLI引数パース・サブコマンドなし実行・reboot --member/--now ガードのテスト
-├── test_vc.py          # vc.get_vc_status / find_member（実機 XML fixture）のテスト
+├── test_vc.py          # vc（status/replication パーサ・master_switch の拒否/1回発行/セッション切断・wait_for_master・cmd_vc_switch）のテスト
 └── test_logging.py     # _setup_logging（console / --log-file / -d / logging.ini / 冪等性）と python -m junos_ops のテスト
 pyproject.toml      # パッケージメタデータ、エントリポイント
 config.ini          # 設定ファイル（設定例）
@@ -67,7 +67,7 @@ LICENSE
 - グローバル変数: `config`, `config_lock`, `args`
 - `get_default_config()` — 設定ファイルパスの探索（XDG対応）
 - `read_config()` — INIファイル読込
-- `connect()` — NETCONF接続（huge_tree対応、個別例外処理）
+- `connect()` — NETCONF接続（huge_tree対応、個別例外処理。`auto_probe>0` は `Device(auto_probe=)` に転送 — `check --connect` の 5 秒プローブと `vc.wait_for_master` が使う）
 - `_get_host_tags()` — ホストセクションのタグを set で返す
 - `_get_model_tags()` — `<model>.tags = ...`（DEFAULT セクション）を set で返す。未設定なら空 set。`check --local` の model フィルタ専用で、ホストの tags 空間とは独立
 - `_parse_tag_groups()` — `--tags` CLI 値（list / str / None）を set のリストに正規化
@@ -101,10 +101,13 @@ LICENSE
 ### vc.py — Virtual Chassis ヘルパ（すべて dict を返す、print しない）
 - `get_vc_status(dev)` — `get-virtual-chassis-information` を JSON-native な dict に（members[{id, role, status, priority, model}], master, backup, mode）。`member-role` の末尾 `*`（`Master*`）は剥がす。RPC 失敗・`member-list` 欠落は `ok=False`（例外は握って `error`/`error_message` に載せる）。呼び側は **fail-closed**（`ok=False` を「VC ではない」と解釈しない）
 - `find_member(status, member_id)` — id で member エントリを引く（int/str どちらでも）
+- `get_replication_state(dev)` — `get-routing-task-replication-state`（`show task replication`、PyEZ `SW._check_gres` と同じ RPC）→ gres/re_mode/protocols{name: state}/complete。`complete` は GRES Enabled ∧ RE Master ∧ protocols 非空 ∧ 全 Complete（空は **fail-closed**）
+- `master_switch(hostname, dev)` — `request virtual-chassis routing-engine master switch` を `dev.cli(..., warning=False)` で **1 回だけ**発行（RPC 名を推測しない。`<command>` 経路は非対話なので `[yes,no]` は出ない）。`_precheck_problems()` が拒否理由を列挙（Master/Backup がちょうど 1 つ・全 member Prsnt・replication complete・RPC 失敗は拒否）。`--force` は拒否理由を `warnings` に変えて続行。`issued=True` は `dev.cli()` の**前**に立てる。`RpcTimeoutError`/`ConnectClosedError`/`TimeoutExpiredError`/`OSError` は「切替に伴うセッション切断」（`session_dropped`）で `ok=True`／`status=initiated_unverified`。**`RpcTimeoutError` は `RpcError` のサブクラス**なので except の順序はセッション切断系が先。応答テキストの行頭 `error:`/`syntax error`/`unknown command`/`permission denied`、行中の `not ready|allowed|possible|supported`（chassisd の "Not ready for mastership switch"）、`[yes,no]`（確認プロンプトのエコー＝未実行）は `command_rejected`。それ以外の予期しない例外は `warnings` に載せて `initiated_unverified` のまま返す（result を捨てず `--wait` 検証へ進める）。`status` は `dry_run`/`refused`/`rejected`/`initiated_unverified`（cli が `confirmed`/`verification_failed` に更新）。`hostname` キーは持たない（display が注入）
+- `wait_for_master(hostname, expected, timeout, interval=10)` — `common.connect(gather_facts=False)` で再接続を繰り返し `get_vc_status().master == expected` を待つ。接続失敗・RPC 失敗は「まだ」。各 probe は `auto_probe=min(interval, 残り秒)` で上限を付ける（`common.connect` の `auto_probe` は #156 まで `Device` に渡されておらず no-op だった）。`elapsed` は成功・失敗とも実測。`time.sleep`/`time.monotonic` はモジュール属性経由（テストで patch）。成功時に `get_replication_state` を `replication` として返す（ゲートしない）
 - 実機（QFX5110 2 member）で確認した XML: `member-status`=`Prsnt`、`member-role`=`Master*`/`Backup`/`Linecard`、`virtual-chassis-mode`=`Enabled`
 
 ### display.py — 表示層
-- `print_version()`, `print_copy()`, `print_install()`, `print_rollback()`, `print_reboot()`, `print_reinstall()`, `print_load_config()`, `print_list_remote()`, `print_dry_run()`, `print_rsi()`, `print_show()`, `print_snapshot()`, `print_connect_error()`, `print_read_config_error()`, `print_host_header()`, `print_host_footer()` — core が返す dict を人間向けに整形（`format_snapshot()` 等の `format_*` が整形ロジック本体）
+- `print_version()`, `print_copy()`, `print_install()`, `print_rollback()`, `print_reboot()`, `print_reinstall()`, `print_load_config()`, `print_list_remote()`, `print_dry_run()`, `print_rsi()`, `print_show()`, `print_snapshot()`, `print_vc_switch()`, `print_connect_error()`, `print_read_config_error()`, `print_host_header()`, `print_host_footer()` — core が返す dict を人間向けに整形（`format_snapshot()` 等の `format_*` が整形ロジック本体）
 - `format_json(hostname, result)` / `print_json(hostname, result)` — core dict を `{"hostname": ..., **result}` の 1 行 JSON にシリアライズ（`--json` 用）。`format_json_obj(obj)` / `print_json_obj(obj)` は hostname を注入せず obj をそのまま出す（`check` の model 単位 row 用）。`json.dumps(..., default=str, ensure_ascii=False)` で lxml/datetime 等の非シリアライズ値も str fallback、非 ASCII はそのまま
 - `_print_lock` (`threading.Lock`) でマルチワーカー時の出力インターリーブを防止
 - junos-mcp など非 CLI 利用者は display を import しなければ stdout 出力ゼロ
@@ -135,6 +138,7 @@ LICENSE
 - `cmd_upgrade()`, `cmd_copy()`, `cmd_install()`, `cmd_rollback()`, `cmd_version()`, `cmd_reboot()`, `cmd_snapshot()`, `cmd_ls()`, `cmd_show()`, `cmd_config()`, `cmd_facts()` — サブコマンド用エントリ関数（connect → header → core(dict) → display）
 - `_check_host(hostname)` — `check` サブコマンド用ワーカー。int ではなく dict を返し、`main()` で結果を集約して `display.print_check_table` にテーブル出力。モデル解決順: `--model` > `config.ini [host].model` > `dev.facts["model"]`
 - `_check_local_inventory()` — `check --local` 用。`iter_configured_models()` の出力に対し `--model`（単一名）＋ `--tags` / `--exclude-tags`（`common._filter_models_by_tag_groups` で model 名 OR `<model>.tags` の OR フィルタ）を**積集合**で適用。`--local` 単独実行時 (`check_connect`/`check_remote` ともに false) は `_run()` 側で `get_targets()` をスキップさせ、ホスト側 `--tags` が "no hosts matched tags" で sys.exit するのを回避。フィルタ後 0 件は `logger.info` で「なぜ空か」をログる
+- `cmd_vc_switch(hostname)` — `vc.master_switch` → 接続を閉じる → `--wait > 0` かつ `initiated_unverified` なら `vc.wait_for_master(hostname, expected_master, wait)` を結果にマージ（`confirmed`/`verification_failed`、`after`/`after_replication`/`wait`）。終了コードは `ok` ベース（`confirmed`/`dry_run`/`initiated_unverified`(--wait 0) → 0）。`_run` のガード: ホスト名必須・`--wait >= 0`
 - `_open_connection()` — NETCONF 接続＋エラー時の display 出力ヘルパー（`--json` 時は connect エラーを JSON で出す）
 - `--json` グローバルオプション: 各 `cmd_*` は `_emit_result(hostname, result, formatter)` で「`--json` なら `display.print_json`、通常は `display.print_host_block(formatter(result))`」を分岐。失敗ホストは `_emit_exception` が `{"ok": false, "error", "error_message"}` の JSON 行を出す（JSONL consumer が行欠落で気づけないのを防ぐ）。出力は host ごと 1 行の JSONL（`run_parallel` で並列のため top-level 配列は作らない。`jq -s` で slurp）
 - `_setup_logging(args)` — logging の構成。**import 時には何もしない**（junos-mcp 等が `junos_ops.*` を import しても root logger は無傷）。`_run()` で `read_config()` の**後**に呼ぶ（`[DEFAULT] log_file` を見るため）。`logging.ini`（`./` → `$XDG_CONFIG_HOME/junos-ops/`）があれば `fileConfig(..., disable_existing_loggers=False)`（`False` 必須 — この時点で `junos_ops.upgrade` 等のロガーは生成済みで、既定の `True` だと disabled にされる）。無ければ console StreamHandler（INFO、`--json` なら stderr）＋ opt-in のファイル `TimedRotatingFileHandler`（`--log-file` > `log_file`、midnight・10 世代、親ディレクトリ自動作成、失敗時は warning でコンソールのみ続行）。handler は固定名 `junos-ops-console` / `junos-ops-file` を持ち、再入時は自分の handler だけ差し替える（`root.handlers.clear()` はしない — pytest の caplog やテストが root に足した handler を壊す）。`-d` は両ブランチで root を DEBUG に上げるが、`ncclient`/`paramiko`/`jnpr.junos` は NOTSET なら WARNING に固定（firehose 防止）
@@ -151,6 +155,7 @@ junos-ops version [hostname ...]           # バージョン表示
 junos-ops reboot --at YYMMDDHHMM [hostname ...]  # リブート
 junos-ops reboot --member N (--now | --at YYMMDDHHMM) [--allow-mixed-version] hostname ...  # VC member 個別リブート（ホスト名必須）
 junos-ops snapshot [--force] [hostname ...] # 代替ブートメディアを同期（request system snapshot、MX中心）
+junos-ops vc-switch [--wait SEC] hostname ...  # VC mastership を Backup へ（事前確認 fail-closed・1 回発行・再接続で検証。ホスト名必須）
 junos-ops ls [-l] [hostname ...]           # リモートファイル一覧
 junos-ops show COMMAND [-F text|json|xml] [hostname ...]   # 任意の CLI コマンドを実行（-F で構造化出力）
 junos-ops config -f FILE [--confirm N] [--health-check CMD ...] [--no-health-check] [--no-confirm] [--no-commit] [hostname ...]  # set/.j2 設定ファイル適用（commit confirmed＋ヘルスチェック＋自動ロールバック）
