@@ -585,3 +585,45 @@ class TestGetPendingVersionStrict:
         assert junos_upgrade.get_pending_version("h", dev) is None
         with pytest.raises(RpcError):
             junos_upgrade.get_pending_version("h", dev, strict=True)
+
+
+class TestPendingEqualsRunning:
+    """Install-log derived 'pending' that matches the running version is not pending."""
+
+    def _dev(self, running):
+        dev = TestRebootMember()._dev()
+        dev.facts = {"version": running, "personality": "SWITCH", "model": "qfx5110-48s-4c"}
+        return dev
+
+    def test_same_version_is_not_pending(self, junos_upgrade, mock_args, mock_config):
+        dev = self._dev("23.4R2-S8.7")
+        with (
+            patch("junos_ops.upgrade.vc.get_vc_status", return_value=TestRebootMember._status()),
+            patch.object(junos_upgrade, "get_pending_version", return_value="23.4R2-S8.7"),
+            patch.object(junos_upgrade, "check_and_reinstall", return_value={"ok": True, "steps": []}),
+        ):
+            result = junos_upgrade.reboot("test-host", dev, None, member=1)
+        assert result["code"] == 0
+        assert any(s["action"] == "pending_active" for s in result["steps"])
+        assert not any(s["action"] == "mixed_version" for s in result["steps"])
+        dev.rpc.request_reboot.assert_called_once()
+
+    def test_newer_pending_still_refused(self, junos_upgrade, mock_args, mock_config):
+        dev = self._dev("23.4R2-S8.7")
+        with (
+            patch("junos_ops.upgrade.vc.get_vc_status", return_value=TestRebootMember._status()),
+            patch.object(junos_upgrade, "get_pending_version", return_value="23.4R2-S9.3"),
+            patch.object(junos_upgrade, "check_and_reinstall"),
+        ):
+            result = junos_upgrade.reboot("test-host", dev, None, member=1)
+        assert result["code"] == 9 and result["error"] == "pending_package_mixed_version"
+
+    def test_unknown_running_version_keeps_refusal(self, junos_upgrade, mock_args, mock_config):
+        dev = self._dev(None)
+        with (
+            patch("junos_ops.upgrade.vc.get_vc_status", return_value=TestRebootMember._status()),
+            patch.object(junos_upgrade, "get_pending_version", return_value="23.4R2-S8.7"),
+            patch.object(junos_upgrade, "check_and_reinstall"),
+        ):
+            result = junos_upgrade.reboot("test-host", dev, None, member=1)
+        assert result["code"] == 9

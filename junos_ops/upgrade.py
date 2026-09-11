@@ -1956,6 +1956,19 @@ def reboot(
                     f"({type(e).__name__}); proceeding (--allow-mixed-version)"
                 ),
             })
+        if pending is not None and _pending_is_running(pending, dev):
+            # Host-based QFX (no "Pending:" line) derive pending from the
+            # install log, whose "Staging ... completed" entry survives the
+            # reboot that activated it. Same version as running = nothing
+            # pending. Seen on QFX5110 at 23.4R2-S8.7.
+            steps.append({
+                "action": "pending_active",
+                "message": (
+                    f"\tinstall log reports {pending}, but that is the running "
+                    "version; nothing pending"
+                ),
+            })
+            pending = None
         if pending is not None:
             if not allow_mixed:
                 result["code"] = 9
@@ -2103,6 +2116,19 @@ def reboot(
     result["ok"] = True
     logger.debug("success")
     return result
+
+
+def _pending_is_running(pending: str, dev) -> bool:
+    """True when ``pending`` equals the running version (``dev.facts["version"]``)."""
+    # PyEZ facts is a Mapping-like _FactCache, not a dict; tests use dicts
+    # or MagicMocks. Only trust a real string.
+    try:
+        running = dev.facts.get("version")
+    except Exception:
+        return False
+    if not isinstance(running, str) or not running:
+        return False
+    return compare_version(pending, running) == 0
 
 
 def _member_section(text: str, member: int) -> str:
