@@ -693,6 +693,14 @@ class TestInstallLogStagedBeforeBoot:
         )
         assert junos_upgrade._install_log_staged_before_boot("h", self._dev(uptime=up)) is True
 
+    def test_single_operation_log_first_line_matches(self, junos_upgrade):
+        """The only header is the first line of <output>; must still be found."""
+        log = (
+            "2026-06-16 17:33:26 JST mgd[51697]: /usr/libexec/ui/package -X update /var/tmp/x.tgz\n"
+            "<output>\nupgrade_platform: Staging of /var/tmp/x.tgz completed\n</output>\n"
+        )
+        assert junos_upgrade._install_log_staged_before_boot("h", self._dev(log=log), member=1) is True
+
     def test_no_header_is_unknown(self, junos_upgrade):
         assert junos_upgrade._install_log_staged_before_boot("h", self._dev(log="no headers here")) is None
 

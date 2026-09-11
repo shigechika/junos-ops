@@ -2175,7 +2175,10 @@ def _install_log_staged_before_boot(hostname, dev, *, member: int | None = None)
     """
     try:
         log = dev.rpc.get_log({"format": "text"}, filename="install")
-        log_text = etree.tostring(log, encoding="unicode")
+        # Text content, not the serialised XML: with tostring() the first
+        # log line sits right after the "<output>" tag and a line-anchored
+        # header pattern would miss a single-operation log entirely.
+        log_text = "".join(log.itertext()) if log is not None and not isinstance(log, bool) else ""
         up = dev.rpc.get_system_uptime_information(normalize=True)
     except Exception as e:
         logger.debug(f"{hostname}: _install_log_staged_before_boot: {type(e).__name__}: {e}")
