@@ -74,6 +74,13 @@ def get_vc_status(dev) -> dict:
         logger.debug(f"get_vc_status: {result['error']}: {e}")
         return result
 
+    if rsp is None or isinstance(rsp, bool):
+        # PyEZ returns True for an empty <rpc-reply/> (and None on some
+        # transports); neither is a VC status, so stay fail-closed.
+        result["error"] = "empty_reply"
+        result["error_message"] = "get-virtual-chassis-information returned no XML"
+        return result
+
     result["mode"] = rsp.findtext(".//virtual-chassis-mode")
     member_list = rsp.find(".//member-list")
     if member_list is None:

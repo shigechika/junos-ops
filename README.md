@@ -616,8 +616,11 @@ status`:
   would activate it on that member only and leave the VC mixed-version; this is
   refused unless `--allow-mixed-version`.
 
-The existing-schedule check, `--force` schedule clearing and the
-config-drift/reinstall gate apply as for a whole-chassis reboot. `--member`
+The existing-schedule check and `--force` schedule clearing look at that
+member's own `fpcN:` block of `show system reboot` (and clear with
+`clear system reboot member N`); the config-drift/reinstall gate applies as
+for a whole-chassis reboot. If the pending-package check itself fails the
+reboot is refused rather than assumed clean. `--member`
 also works with `--at` to schedule a member reboot.
 
 ### snapshot (sync the alternate boot media)

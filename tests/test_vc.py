@@ -131,3 +131,11 @@ class TestFindMember:
         assert vc.find_member(st, 1)["id"] == "1"
         assert vc.find_member(st, "1")["id"] == "1"
         assert vc.find_member(st, 5) is None
+
+
+class TestEmptyReply:
+    @pytest.mark.parametrize("rsp", [True, None])
+    def test_non_element_reply_is_not_ok(self, rsp):
+        st = vc.get_vc_status(dev_with(rsp))
+        assert st["ok"] is False
+        assert st["error"] == "empty_reply"

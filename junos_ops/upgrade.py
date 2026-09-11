@@ -385,8 +385,11 @@ def rollback(hostname, dev) -> dict:
     return result
 
 
-def clear_reboot(dev) -> dict:
-    """Clear any scheduled reboot on the device.
+def clear_reboot(dev, member: int | None = None) -> dict:
+    """Clear any scheduled reboot on the device (or on one VC member).
+
+    :param member: when given, ``clear system reboot member N`` — the
+        plain ``<clear-reboot>`` only reaches the RE the session is on.
 
     :return: dict with keys:
 
@@ -403,12 +406,16 @@ def clear_reboot(dev) -> dict:
         "message": "",
         "error": None,
     }
+    suffix = f" member {member}" if member is not None else ""
     if common.args.dry_run:
         result["ok"] = True
-        result["message"] = "\tdry-run: clear system reboot"
+        result["message"] = f"\tdry-run: clear system reboot{suffix}"
         return result
     try:
-        rpc = dev.rpc.clear_reboot({"format": "text"})
+        if member is not None:
+            rpc = dev.rpc.clear_reboot({"format": "text"}, member=str(member))
+        else:
+            rpc = dev.rpc.clear_reboot({"format": "text"})
         xml_str = etree.tostring(rpc, encoding="unicode")
         logger.debug(f"{rpc=} {xml_str=}")
         if (
@@ -1233,7 +1240,9 @@ def compare_version(left: str, right: str) -> int | None:
     return 0
 
 
-def _pending_from_install_log(hostname, dev, *, quiet: bool = False) -> str | None:
+def _pending_from_install_log(
+    hostname, dev, *, quiet: bool = False, strict: bool = False
+) -> str | None:
     """Probe pending (staged) version from ``show log install``.
 
     Used as primary for SRX1500/SRX4600 (SRX_MIDRANGE/HIGHEND) and as
@@ -1251,11 +1260,16 @@ def _pending_from_install_log(hostname, dev, *, quiet: bool = False) -> str | No
         already have a valid result from ``show version``). When False
         (default, for SRX_MIDRANGE/HIGHEND which depend on this as the
         primary source), RPC failures are logged at WARNING.
+    :param strict: re-raise a ``get_log`` failure instead of returning
+        None, for callers that must not mistake "could not check" for
+        "nothing pending".
     :returns: pending version string, or ``None`` if not found / not successful.
     """
     try:
         rpc = dev.rpc.get_log({"format": "text"}, filename="install")
     except Exception as e:
+        if strict:
+            raise
         log = logger.debug if quiet else logger.warning
         log("%s: _pending_from_install_log: get_log failed: %s", hostname, e)
         return None
@@ -1283,9 +1297,14 @@ def _pending_from_install_log(hostname, dev, *, quiet: bool = False) -> str | No
     return pending
 
 
-def get_pending_version(hostname, dev) -> str | None:
+def get_pending_version(hostname, dev, *, strict: bool = False) -> str | None:
     """Get pending (staged) version string.
 
+    :param strict: fail closed — RPC errors and an unknown personality
+        propagate as exceptions instead of collapsing into ``None``. Used
+        where "could not check" must not be read as "nothing pending"
+        (``reboot --member``). Note the install-log fallback still returns
+        None when the log has rotated; that case is not detectable.
     :returns:
        * ``None`` no pending version.
        * ``str`` pending version string.
@@ -1313,7 +1332,9 @@ def get_pending_version(hostname, dev) -> str | None:
                     "get_pending_version: no Pending: line; "
                     "falling back to install log (QFX host-based?)"
                 )
-                pending = _pending_from_install_log(hostname, dev, quiet=True)
+                pending = _pending_from_install_log(
+                    hostname, dev, quiet=True, strict=strict
+                )
         elif dev.facts["personality"] == "MX":
             logger.debug("get_pending_version: MX series")
             # JUNOS Installation Software [18.4R3-S10]
@@ -1344,18 +1365,28 @@ def get_pending_version(hostname, dev) -> str | None:
         ):
             # SRX1500, SRX4600 — pending is reported only via install log.
             logger.debug("get_pending_version: SRX_MIDRANGE or SRX_HIGHEND series")
-            pending = _pending_from_install_log(hostname, dev)
+            pending = _pending_from_install_log(hostname, dev, strict=strict)
         else:
             logger.error(f"get_pending_version: unknown personality: {dev.facts}")
+            if strict:
+                raise LookupError(
+                    f"unknown personality {dev.facts.get('personality')!r}"
+                )
             return None
     except RpcTimeoutError as e:
         logger.error(f"get_pending_version: RpcTimeoutError: {e}")
+        if strict:
+            raise
         return None
     except RpcError as e:
         logger.error(f"get_pending_version: RpcError: {e}")
+        if strict:
+            raise
         return None
     except Exception as e:
         logger.error(f"get_pending_version: {e}")
+        if strict:
+            raise
         return None
     return pending
 
@@ -1812,6 +1843,24 @@ def reboot(
     ``dev.close()`` on success; callers should now close the device.
     """
     logger.debug(f"{reboot_dt=} {member=}")
+    if reboot_dt is None and member is None:
+        # The CLI never gets here (--now requires --member); guard the
+        # library entry point so SW.reboot(at="now") is never sent.
+        return {
+            "hostname": hostname,
+            "ok": False,
+            "code": 1,
+            "dry_run": common.args.dry_run,
+            "reboot_at": None,
+            "member": None,
+            "vc_status": None,
+            "existing_schedule": None,
+            "cleared_existing": False,
+            "reinstall_result": None,
+            "message": "reboot_dt is required unless member is given",
+            "steps": [],
+            "error": "reboot_time_required",
+        }
     at_str = reboot_dt.strftime("%y%m%d%H%M") if reboot_dt is not None else "now"
     steps: list[dict] = []
     result: dict = {
@@ -1884,9 +1933,31 @@ def reboot(
         # A pending (installed, not yet booted) package would be activated
         # on this member only. Checked *before* check_and_reinstall, which
         # may otherwise kick off a whole-VC reinstall.
-        pending = get_pending_version(hostname, dev)
+        allow_mixed = getattr(common.args, "allow_mixed_version", False)
+        try:
+            pending = get_pending_version(hostname, dev, strict=True)
+        except Exception as e:
+            # Fail closed: "could not check" is not "nothing pending".
+            if not allow_mixed:
+                result["code"] = 9
+                result["error"] = "pending_unknown"
+                result["message"] = (
+                    f"cannot determine whether a package is pending "
+                    f"({type(e).__name__}: {e}); refusing member reboot "
+                    "(retry, or --allow-mixed-version to proceed anyway)"
+                )
+                steps.append({"action": "error", "message": f"\t{result['message']}"})
+                return result
+            pending = None
+            steps.append({
+                "action": "mixed_version",
+                "message": (
+                    f"\tWARNING: pending-package check failed "
+                    f"({type(e).__name__}); proceeding (--allow-mixed-version)"
+                ),
+            })
         if pending is not None:
-            if not getattr(common.args, "allow_mixed_version", False):
+            if not allow_mixed:
                 result["code"] = 9
                 result["error"] = "pending_package_mixed_version"
                 result["message"] = (
@@ -1927,6 +1998,10 @@ def reboot(
         parse_error = e
 
     logger.debug(f"{xml_str=}")
+    if member is not None and xml_str:
+        # On a VC the text reply is sectioned per member ("fpc0:" ...);
+        # judge only the target member's section when one is present.
+        xml_str = _member_section(xml_str, member)
     if parse_error is not None:
         # ``logger.warning`` rather than ``logger.error`` because the
         # condition is recoverable via ``--force``; an ``error`` level
@@ -1959,7 +2034,7 @@ def reboot(
             "action": "force_clear",
             "message": "\tforce: clearing reboot schedule blindly (parse failed)",
         })
-        clear_result = clear_reboot(dev)
+        clear_result = clear_reboot(dev, member=member)
         steps.append({"action": "clear_reboot", **clear_result})
         if not clear_result["ok"]:
             result["code"] = 3
@@ -1980,7 +2055,7 @@ def reboot(
             if common.args.force:
                 logger.debug("force clear reboot")
                 steps.append({"action": "force_clear", "message": "\tforce: clear reboot"})
-                clear_result = clear_reboot(dev)
+                clear_result = clear_reboot(dev, member=member)
                 steps.append({"action": "clear_reboot", **clear_result})
                 if not clear_result["ok"]:
                     result["code"] = 3
@@ -2028,6 +2103,22 @@ def reboot(
     result["ok"] = True
     logger.debug("success")
     return result
+
+
+def _member_section(text: str, member: int) -> str:
+    """Return the ``fpcN:`` section of a multi-member CLI text reply.
+
+    ``show system reboot`` on a Virtual Chassis prints one block per
+    member, each introduced by ``fpcN:`` and a dashed rule. Returns the
+    block for ``member`` when such a header exists, else ``text``
+    unchanged (single-RE devices, or an unexpected layout).
+    """
+    m = re.search(rf"^fpc{member}:\s*$", text, re.MULTILINE)
+    if m is None:
+        return text
+    rest = text[m.end():]
+    nxt = re.search(r"^fpc\d+:\s*$", rest, re.MULTILINE)
+    return rest[: nxt.start()] if nxt else rest
 
 
 def _reboot_member(dev, member: int, at_str: str | None) -> str:
