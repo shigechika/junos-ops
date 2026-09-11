@@ -609,7 +609,7 @@ class TestPendingEqualsRunning:
         dev = self._dev("23.4R2-S8.7")
         result, chk = self._run(junos_upgrade, dev, "23.4R2-S8.7", stale=True)
         assert result["code"] == 0
-        chk.assert_called_once_with("test-host", dev, member=1)
+        chk.assert_called_once_with("test-host", dev, member=1, master="0")
         assert any(s["action"] == "pending_active" for s in result["steps"])
         dev.rpc.request_reboot.assert_called_once()
 
@@ -684,7 +684,17 @@ class TestInstallLogStagedBeforeBoot:
         dev = self._dev(uptime=self._uptime(booted1="2026-06-01 00:00:00 JST"))
         assert junos_upgrade._install_log_staged_before_boot("h", dev, member=1) is False
         # member 0 (localre block) still after
-        assert junos_upgrade._install_log_staged_before_boot("h", dev, member=0) is True
+        assert junos_upgrade._install_log_staged_before_boot("h", dev, member=0, master="0") is True
+
+    def test_master_member_uses_localre_block(self, junos_upgrade):
+        dev = self._dev(uptime=self._uptime(booted0="2026-06-01 00:00:00 JST"))
+        # member 0 is the master -> its block is "localre"
+        assert junos_upgrade._install_log_staged_before_boot("h", dev, member=0, master="0") is False
+        # without master info, member 0 has no fpc0 block -> unknown, never another member's time
+        assert junos_upgrade._install_log_staged_before_boot("h", dev, member=0) is None
+
+    def test_missing_member_block_is_unknown(self, junos_upgrade):
+        assert junos_upgrade._install_log_staged_before_boot("h", self._dev(), member=2, master="0") is None
 
     def test_single_re_uptime(self, junos_upgrade):
         up = etree.fromstring(

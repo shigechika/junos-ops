@@ -1965,7 +1965,9 @@ def reboot(
             # config drift is genuinely pending — so also require that the
             # last staging happened *before* the member last booted.
             # Unknown (None) stays fail-closed.
-            stale = _install_log_staged_before_boot(hostname, dev, member=member)
+            stale = _install_log_staged_before_boot(
+                hostname, dev, member=member, master=status.get("master")
+            )
             if stale is True:
                 steps.append({
                     "action": "pending_active",
@@ -2158,7 +2160,9 @@ _INSTALL_LOG_HEADER_RE = re.compile(
 )
 
 
-def _install_log_staged_before_boot(hostname, dev, *, member: int | None = None) -> bool | None:
+def _install_log_staged_before_boot(
+    hostname, dev, *, member: int | None = None, master: str | None = None
+) -> bool | None:
     """Was the last package staging in ``show log install`` before the last boot?
 
     ``show log install`` prefixes each operation with a header such as
@@ -2166,8 +2170,11 @@ def _install_log_staged_before_boot(hostname, dev, *, member: int | None = None)
     ... <file>``; ``show system uptime`` reports ``System booted:
     2026-06-17 04:11:55 JST``. Both are device-local wall-clock strings,
     so they are compared as naive datetimes without any epoch/zone
-    conversion. On a VC the ``fpcN`` uptime block for ``member`` is used
-    when present.
+    conversion. On a VC the uptime is reported per member: ``fpcN`` for
+    every member except the one the session is on, which appears as
+    ``localre`` — so when ``member`` is the current ``master`` that block
+    is used. If the requested member's block cannot be found the answer
+    is None (never another member's boot time).
 
     :returns: True (staged before boot: already activated), False (staged
         after boot: genuinely pending), or None when either side could
@@ -2195,12 +2202,18 @@ def _install_log_staged_before_boot(hostname, dev, *, member: int | None = None)
         return None
     booted_el = None
     items = up.findall(".//multi-routing-engine-item")
-    if items and member is not None:
+    if member is not None:
+        wanted = {f"fpc{member}"}
+        if master is not None and str(member) == str(master):
+            wanted.add("localre")
         for it in items:
-            if (it.findtext("re-name") or "").strip() == f"fpc{member}":
+            if (it.findtext("re-name") or "").strip() in wanted:
                 booted_el = it.find(".//system-booted-time/date-time")
                 break
-    if booted_el is None:
+        if booted_el is None:
+            logger.debug(f"{hostname}: no uptime block for member {member} ({wanted})")
+            return None
+    else:
         booted_el = up.find(".//system-booted-time/date-time")
     booted_text = (booted_el.text or "").strip() if booted_el is not None else ""
     try:
