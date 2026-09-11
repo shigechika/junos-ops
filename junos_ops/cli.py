@@ -368,7 +368,10 @@ def cmd_reboot(hostname) -> int:
     if dev is None:
         return 1
     try:
-        result = upgrade.reboot(hostname, dev, common.args.rebootat)
+        result = upgrade.reboot(
+            hostname, dev, common.args.rebootat,
+            member=getattr(common.args, "member", None),
+        )
         _emit_result(hostname, result, display.format_reboot)
         return result.get("code", 1)
     except Exception as e:
@@ -890,9 +893,29 @@ def _run():
         "reboot", parents=[parent], help="reboot device",
     )
     p_reboot.add_argument(
-        "--at", dest="rebootat", required=True,
+        "--at", dest="rebootat", default=None,
         type=upgrade.yymmddhhmm_type,
-        help="reboot at yymmddhhmm (e.g. 2501020304)",
+        help="reboot at yymmddhhmm (e.g. 2501020304); required unless --member with --now",
+    )
+    p_reboot.add_argument(
+        "--member", dest="member", type=int, default=None, metavar="N",
+        help=(
+            "reboot only Virtual Chassis member N (request system reboot member N). "
+            "Requires explicit hostnames. Refused if N is the current Master "
+            "(switch mastership first, or --force) or a pending package would "
+            "leave the VC mixed-version (see --allow-mixed-version)."
+        ),
+    )
+    p_reboot.add_argument(
+        "--now", action="store_true",
+        help="reboot immediately instead of --at; only together with --member",
+    )
+    p_reboot.add_argument(
+        "--allow-mixed-version", dest="allow_mixed_version", action="store_true",
+        help=(
+            "with --member: proceed even though a pending package would be "
+            "activated on that member only"
+        ),
     )
     p_reboot.add_argument("specialhosts", metavar="hostname", nargs="*")
 
@@ -1152,6 +1175,25 @@ def _run():
             args.specialhosts = show_args[1:]
         else:
             parser.error("show: コマンドまたは -f のいずれかを指定してください")
+
+    # reboot: --at / --now / --member consistency, and the explicit-hostname
+    # guard for member reboots. Done here (not in get_targets) so the host
+    # selector stays a plain selector; "all hosts in config.ini" must never
+    # be the implicit target of an immediate or per-member reboot.
+    if getattr(args, "subcommand", None) == "reboot":
+        member = getattr(args, "member", None)
+        now = getattr(args, "now", False)
+        at = getattr(args, "rebootat", None)
+        if member is not None and member < 0:
+            parser.error("--member must be a non-negative member id")
+        if now and member is None:
+            parser.error("--now requires --member (whole-chassis reboots must use --at)")
+        if now and at is not None:
+            parser.error("--at and --now are mutually exclusive")
+        if at is None and not now:
+            parser.error("--at is required" + (" (or --now with --member)" if member is not None else ""))
+        if member is not None and not getattr(args, "specialhosts", []):
+            parser.error("--member requires explicit hostnames")
 
     common.args = args
     if common.args.config is None:

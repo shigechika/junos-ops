@@ -163,3 +163,44 @@ class TestCheckLocalHostSelectorSkip:
             cli.main()
         mock_targets.assert_called_once()
         mock_inv.assert_called_once()
+
+
+class TestRebootMemberGuards:
+    """reboot --member / --now argument consistency and explicit-host guard."""
+
+    @pytest.mark.parametrize(
+        "argv",
+        [
+            ["junos-ops", "reboot", "--now", "host1"],                       # --now without --member
+            ["junos-ops", "reboot", "--member", "0", "--now", "--at", "2501020304", "host1"],
+            ["junos-ops", "reboot", "--member", "0", "host1"],               # neither --at nor --now
+            ["junos-ops", "reboot", "--member", "0", "--now"],               # no hostnames
+            ["junos-ops", "reboot", "--member", "-1", "--now", "host1"],
+            ["junos-ops", "reboot", "host1"],                                # --at still required
+        ],
+    )
+    def test_rejected(self, argv):
+        with patch.object(sys, "argv", argv):
+            with pytest.raises(SystemExit) as ei:
+                cli._run()
+        assert ei.value.code == 2
+
+    @patch("junos_ops.common.run_parallel", return_value={})
+    @patch("junos_ops.common.get_targets", return_value=["host1"])
+    @patch("junos_ops.common.read_config", return_value={"ok": True, "path": "config.ini", "sections": ["host1"], "error": None})
+    @patch("junos_ops.common.get_default_config", return_value="config.ini")
+    def test_member_now_with_host_accepted(self, *_):
+        with patch.object(sys, "argv", ["junos-ops", "reboot", "--member", "0", "--now", "host1"]):
+            assert cli._run() == 0
+        from junos_ops import common
+        assert common.args.member == 0
+        assert common.args.now is True
+        assert common.args.rebootat is None
+
+    @patch("junos_ops.common.run_parallel", return_value={})
+    @patch("junos_ops.common.get_targets", return_value=["host1"])
+    @patch("junos_ops.common.read_config", return_value={"ok": True, "path": "config.ini", "sections": ["host1"], "error": None})
+    @patch("junos_ops.common.get_default_config", return_value="config.ini")
+    def test_member_with_at_accepted(self, *_):
+        with patch.object(sys, "argv", ["junos-ops", "reboot", "--member", "1", "--at", "2501020304", "host1"]):
+            assert cli._run() == 0
