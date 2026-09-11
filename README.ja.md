@@ -154,7 +154,7 @@ INI形式の設定ファイルで、接続情報とモデル別パッケージ�
 1. カレントディレクトリの `./logging.ini`
 2. `~/.config/junos-ops/logging.ini`（XDG_CONFIG_HOME）
 
-雛形は [`logging.ini.example`](logging.ini.example) を参照してください。`disable_existing_loggers=False` で読み込まれ、`-d` はその上からも効きます。
+雛形は [`logging.ini.example`](logging.ini.example) を参照してください。`disable_existing_loggers=False` で読み込まれます。`-d` はその上から root ロガーを DEBUG に上げますが、ファイル内でハンドラに指定した `level=` はそのまま効きます。`logging.ini` がある間は `--log-file` / `log_file` は無視されます（警告を出します）。
 
 ### DEFAULTセクション
 

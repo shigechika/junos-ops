@@ -103,6 +103,13 @@ def _setup_logging(args) -> None:
     ini = _find_logging_ini()
     if ini:
         logging.config.fileConfig(ini, disable_existing_loggers=False)
+        # logging.ini owns the handler set, so the opt-in file handler is
+        # not added. Say so instead of silently dropping the request.
+        ignored = _resolve_log_file(args)
+        if ignored:
+            logger.warning(
+                f"{ini} found; --log-file / log_file ({ignored}) ignored"
+            )
     else:
         stream = sys.stderr if getattr(args, "json", False) else sys.stdout
         console = logging.StreamHandler(stream)

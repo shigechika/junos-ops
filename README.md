@@ -154,7 +154,7 @@ For full control (extra handlers, per-logger levels, custom formats) place a `lo
 1. `./logging.ini` in the current directory
 2. `~/.config/junos-ops/logging.ini` (XDG_CONFIG_HOME)
 
-See [`logging.ini.example`](logging.ini.example) for a starting point. It is loaded with `disable_existing_loggers=False`; `-d` still applies on top of it.
+See [`logging.ini.example`](logging.ini.example) for a starting point. It is loaded with `disable_existing_loggers=False`. `-d` raises the root logger to DEBUG on top of it, but a `level=` set on a handler in the file still filters; `--log-file` / `log_file` are ignored (with a warning) while a `logging.ini` is in charge.
 
 ### DEFAULT Section
 

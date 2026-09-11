@@ -221,6 +221,17 @@ class TestLoggingIni:
         cli._setup_logging(_args(debug=True))
         assert logging.getLogger().level == logging.DEBUG
 
+    def test_log_file_ignored_with_warning(
+        self, isolated_logging, no_logging_ini, capsys
+    ):
+        """logging.ini wins; an explicit --log-file must not vanish silently."""
+        self._write_ini(no_logging_ini)
+        common.config = None
+        cli._setup_logging(_args(log_file=str(no_logging_ini / "x.log")))
+        assert _handlers(cli._FILE_HANDLER) == []
+        assert not (no_logging_ini / "x.log").exists()
+        assert "ignored" in capsys.readouterr().out
+
     def test_xdg_location_is_found(self, isolated_logging, no_logging_ini):
         xdg_dir = no_logging_ini / "xdg" / "junos-ops"
         xdg_dir.mkdir(parents=True)
