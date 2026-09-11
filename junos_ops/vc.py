@@ -554,8 +554,12 @@ def get_member_boot_time(dev, member, master=None) -> str | None:
     On a VC ``show system uptime`` reports one block per RE: ``fpcN``
     for every member except the one the session is on, which appears as
     ``localre`` (accepted only when ``member`` is the current
-    ``master``). The raw device-local string is returned — callers only
-    ever compare it for equality, so it is never parsed.
+    ``master``). A reply carrying no per-RE blocks at all describes only
+    the RE the session is on, so it is accepted only when that can be
+    the requested member — otherwise this would hand back some *other*
+    member's boot time and the caller would wait for a timestamp that
+    never changes. The raw device-local string is returned;
+    :func:`boot_time_is_newer` is the only thing that interprets it.
     """
     try:
         up = dev.rpc.get_system_uptime_information(normalize=True)
@@ -573,6 +577,9 @@ def get_member_boot_time(dev, member, master=None) -> str | None:
             node = by_name.get("localre")
         if node is None:
             return None
+    elif master is not None and str(member) != str(master):
+        # Flat reply: the local RE only, which is not the member asked for.
+        return None
     else:
         node = up
     el = node.find(".//system-booted-time/date-time")
@@ -685,9 +692,10 @@ def wait_for_member(
     """
     wanted = [n.strip() for n in expect_up if n and n.strip()]
     seen_down = False
+    seen_rebooted = False
 
     def check(dev):
-        nonlocal seen_down
+        nonlocal seen_down, seen_rebooted
         status = get_vc_status(dev)
         snapshot = {"status": status, "fpc_state": None, "interfaces": None, "booted": None}
         if not status["ok"]:
@@ -703,7 +711,12 @@ def wait_for_member(
         fpc_state = get_fpc_state(dev, member)
         snapshot["fpc_state"] = fpc_state
         if fpc_state != "Online":
-            seen_down = True
+            # None means the RPC failed or the slot was not reported: that
+            # says nothing about the member, so it must not count as "the
+            # member went down" for the no-baseline fallback (a transient
+            # RPC error would otherwise let the *pre-reboot* member pass).
+            if fpc_state is not None:
+                seen_down = True
             return False, snapshot, f"FPC {member} is {fpc_state or 'unknown'}, not Online"
 
         # Did the reboot actually happen? The RPC returns before the
@@ -720,6 +733,9 @@ def wait_for_member(
                 return False, snapshot, f"member {member} has not rebooted yet (booted {booted})"
         elif not seen_down:
             return False, snapshot, f"member {member} has not gone down yet"
+        # The reboot itself is now established; anything below (ports) is
+        # about readiness, so record it before those can fail.
+        seen_rebooted = True
 
         if wanted:
             states = get_interface_states(dev, wanted)
@@ -741,7 +757,7 @@ def wait_for_member(
         "fpc_state": last.get("fpc_state"),
         "interfaces": last.get("interfaces"),
         "booted": last.get("booted"),
-        "rebooted": bool(polled["ok"]),
+        "rebooted": seen_rebooted,
         "elapsed": polled["elapsed"],
         "attempts": polled["attempts"],
         "error": None,

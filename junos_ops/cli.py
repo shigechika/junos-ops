@@ -435,7 +435,9 @@ def cmd_reboot(hostname) -> int:
             result["error"] = waited["error"]
             result["message"] = waited["error_message"]
             result["steps"].append({
-                "action": "error",
+                # Not "error": that tag belongs to the pre-reboot step set,
+                # which the formatter prints *above* the reboot line.
+                "action": "verify_error",
                 "message": (
                     f"\tmember {member} not back after {wait}s: "
                     f"{waited['error']}: {waited['error_message']}"

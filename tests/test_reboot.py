@@ -749,7 +749,8 @@ class TestCmdRebootWait:
             "hostname": "test-host", "ok": True, "code": 0, "dry_run": False,
             "reboot_at": "now", "member": 0, "vc_status": None,
             "existing_schedule": None, "cleared_existing": False,
-            "reinstall_result": None, "message": "Rebooting fpc0", "steps": [],
+            "reinstall_result": None, "message": "Rebooting fpc0",
+            "steps": [{"action": "reboot", "message": "\tRebooting fpc0"}],
             "error": None,
         }
         base.update(over)
@@ -812,7 +813,10 @@ class TestCmdRebootWait:
         rc, _ = self._run(mock_args, r, self._waited(ok=False))
         assert rc == 10
         assert r["ok"] is False and r["error"] == "member_not_back"
-        assert "not back after 600s" in capsys.readouterr().out
+        out = capsys.readouterr().out
+        assert "not back after 600s" in out
+        # the failure line belongs after the reboot line, not above it
+        assert out.index("Rebooting fpc0") < out.index("not back after 600s")
 
     def test_wait_zero_skips_verification(self, mock_args, mock_config):
         rc, w = self._run(mock_args, self._result(), self._waited(), argv_wait=0)

@@ -397,7 +397,7 @@ def format_reboot(result: dict) -> str:
         ri = format_reinstall(reinstall)
         if ri:
             parts.append(ri)
-    post = _steps_text(result, {"reboot", "verify"})
+    post = _steps_text(result, {"reboot", "verify", "verify_error"})
     if post:
         parts.append(post)
     after = result.get("after")

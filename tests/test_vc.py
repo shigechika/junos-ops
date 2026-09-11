@@ -1043,3 +1043,70 @@ class TestWaitForMemberEdgeCases:
         ):
             vc.wait_for_member("h", 0, 600, interval=15, booted_before=BOOT_BEFORE)
         assert dev.timeout == 15
+
+
+class TestWaitForMemberReviewFixes:
+    """Regressions for the #164 review fixes."""
+
+    def _conn(self, dev):
+        return {"hostname": "h", "host": "h", "ok": True, "dev": dev,
+                "error": None, "error_message": None}
+
+    def test_unknown_fpc_state_is_not_a_transition(self, mock_args, mock_config):
+        """No baseline: a flaky get-fpc-information must not stand in for a reboot."""
+        dev = member_dev()
+        dev.rpc.get_fpc_information.side_effect = [
+            RpcError(), etree.fromstring(FPC_XML.format(s0="Online", s1="Online")),
+        ]
+        clock = itertools.count(0, 2)
+        with (
+            patch.object(common, "connect", return_value=self._conn(dev)),
+            patch.object(vc.time, "sleep"),
+            patch.object(vc.time, "monotonic", side_effect=lambda: next(clock)),
+        ):
+            r = vc.wait_for_member("h", 0, 10, booted_before=None)
+        assert r["ok"] is False
+        assert "has not gone down yet" in r["error_message"]
+
+    def test_known_offline_state_is_a_transition(self, mock_args, mock_config):
+        dev = member_dev()
+        dev.rpc.get_fpc_information.side_effect = [
+            etree.fromstring(FPC_XML.format(s0="Present", s1="Online")),
+            etree.fromstring(FPC_XML.format(s0="Online", s1="Online")),
+        ]
+        clock = itertools.count(0, 2)
+        with (
+            patch.object(common, "connect", return_value=self._conn(dev)),
+            patch.object(vc.time, "sleep"),
+            patch.object(vc.time, "monotonic", side_effect=lambda: next(clock)),
+        ):
+            r = vc.wait_for_member("h", 0, 10, booted_before=None)
+        assert r["ok"] is True and r["rebooted"] is True
+
+    def test_rebooted_is_reported_even_when_ports_stay_down(self, mock_args, mock_config):
+        """Boot evidence and port readiness are different questions."""
+        dev = member_dev(o47="down", booted=BOOT_AFTER)
+        clock = itertools.count(0, 25)
+        with (
+            patch.object(common, "connect", return_value=self._conn(dev)),
+            patch.object(vc.time, "sleep"),
+            patch.object(vc.time, "monotonic", side_effect=lambda: next(clock)),
+        ):
+            r = vc.wait_for_member("h", 0, 30, booted_before=BOOT_BEFORE,
+                                   expect_up=["xe-0/0/47"])
+        assert r["ok"] is False
+        assert r["rebooted"] is True
+        assert "xe-0/0/47=up/down" in r["error_message"]
+
+
+class TestFlatUptimeReply:
+    def test_flat_reply_is_refused_for_another_member(self):
+        """A reply with no per-RE blocks describes the session's RE only."""
+        dev = MagicMock()
+        dev.rpc.get_system_uptime_information.return_value = etree.fromstring(
+            "<system-uptime-information><system-booted-time>"
+            f"<date-time>{BOOT_BEFORE}</date-time></system-booted-time></system-uptime-information>"
+        )
+        assert vc.get_member_boot_time(dev, 1, master="0") is None
+        assert vc.get_member_boot_time(dev, 0, master="0") == BOOT_BEFORE
+        assert vc.get_member_boot_time(dev, 1) == BOOT_BEFORE  # master unknown: best effort
