@@ -674,9 +674,11 @@ destructive form is never sent.
 
 A rejection is also checked against the device: when the command was issued but
 the reply read as a refusal, `--wait` still looks at `show virtual-chassis
-status`. If mastership moved anyway the result is upgraded to `confirmed` with
-a warning not to re-issue it; if it did not, the rejection stands, now backed by
-the device state rather than by its wording.
+status`. If mastership moved anyway the result is upgraded to `confirmed`, keeping the
+device's wording in `rejected_reply` and warning that this command may not be
+what moved it (a concurrent or manual switch looks identical); if it did not,
+the rejection stands, now backed by the device state rather than by its
+wording.
 
 Exit code 0 only for `confirmed`, `dry_run` and (with `--wait 0`)
 `initiated_unverified`; `refused`, `rejected` and `verification_failed` return 1.

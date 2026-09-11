@@ -649,7 +649,21 @@ class TestRejectedButIssuedIsVerified:
         w.assert_called_once_with("h", "1", 180)
         out = capsys.readouterr().out
         assert "confirmed" in out
-        assert "do not re-issue" in out
+        assert "may not be what moved it" in out
+        assert "device reply (read as a rejection)" in out
+
+    def test_causality_is_not_claimed(self, mock_args, mock_config):
+        """A concurrent/manual switch looks identical: keep the evidence."""
+        r = self._rejected()
+        with (
+            patch.object(cli, "_open_connection", return_value=MagicMock()),
+            patch.object(vc, "master_switch", return_value=r),
+            patch.object(vc, "wait_for_master", return_value=self._waited(True, "1")),
+        ):
+            cli.cmd_vc_switch("h")
+        assert r["status"] == "confirmed" and r["ok"] is True and r["error"] is None
+        assert r["rejected_reply"].startswith("Toggle mastership: done")
+        assert any("may not be what moved it" in w for w in r["warnings"])
 
     def test_mastership_unchanged_keeps_rejection(self, mock_args, mock_config, capsys):
         with (

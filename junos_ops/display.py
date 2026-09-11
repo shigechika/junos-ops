@@ -470,6 +470,9 @@ def format_vc_switch(result: dict) -> str:
         parts.append(
             f"  replication after switch: GRES={repl['gres']} RE={repl['re_mode']} {protos}"
         )
+    rejected_reply = result.get("rejected_reply")
+    if rejected_reply:
+        parts.append(f"  device reply (read as a rejection): {rejected_reply.strip()}")
     for w in result.get("warnings") or []:
         parts.append(f"  WARNING: {w}")
     steps = _steps_text(result)

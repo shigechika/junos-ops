@@ -427,10 +427,17 @@ def cmd_vc_switch(hostname) -> int:
             }
             if waited["ok"]:
                 if rejected_text:
+                    # State, not causality: the desired member is Master.
+                    # Whether *this* command moved it (a concurrent or
+                    # manual switch would look identical) is unknowable,
+                    # so the reply is preserved rather than explained away.
+                    result["rejected_reply"] = result["error_message"]
                     result["warnings"].append(
                         "the device reply read as a rejection "
-                        f"({result['error_message']}) but mastership moved; "
-                        "treating the switch as done — do not re-issue it"
+                        f"({result['error_message']}); member "
+                        f"{result['expected_master']} is Master now, but this "
+                        "command may not be what moved it — verify the change "
+                        "window before re-issuing anything"
                     )
                     result["error"] = None
                     result["error_message"] = None
@@ -455,6 +462,7 @@ def cmd_vc_switch(hostname) -> int:
                     "message": (
                         f"\tconfirmed: member {result['expected_master']} is Master "
                         f"after {waited['attempts']} probe(s)"
+                        + (" (reply had read as a rejection)" if rejected_text else "")
                     ),
                 })
             elif rejected_text:
