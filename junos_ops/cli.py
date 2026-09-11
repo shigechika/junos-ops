@@ -29,6 +29,7 @@ from junos_ops import common
 from junos_ops import display
 from junos_ops import upgrade
 from junos_ops import snapshot
+from junos_ops import vc
 from junos_ops import rsi
 from junos_ops import show
 
@@ -382,6 +383,74 @@ def cmd_reboot(hostname) -> int:
             dev.close()
         except (ConnectClosedError, Exception):
             pass
+
+
+def cmd_vc_switch(hostname) -> int:
+    """Move Virtual Chassis mastership to the Backup (guarded, once, verified)."""
+    dev = _open_connection(hostname)
+    if dev is None:
+        return 1
+    try:
+        result = vc.master_switch(hostname, dev)
+    except Exception as e:
+        _emit_exception(hostname, e)
+        return 1
+    finally:
+        try:
+            dev.close()
+        except (ConnectClosedError, Exception):
+            pass
+
+    wait = getattr(common.args, "wait", 0) or 0
+    if result["status"] == "initiated_unverified" and wait > 0:
+        if result["expected_master"] is None:
+            result["status"] = "verification_failed"
+            result["ok"] = False
+            result["error"] = "no_expected_master"
+            result["error_message"] = "no single Backup before the switch; cannot verify"
+        else:
+            waited = vc.wait_for_master(hostname, result["expected_master"], wait)
+            result["after"] = waited["after"]
+            result["wait"] = {
+                k: waited[k] for k in ("ok", "elapsed", "attempts", "error", "error_message")
+            }
+            if waited["ok"]:
+                result["status"] = "confirmed"
+                result["verified"] = True
+                repl = waited["replication"]
+                result["after_replication"] = repl
+                if repl and repl["ok"] and not repl["complete"]:
+                    result["warnings"].append(
+                        "replication not yet Complete after the switch: "
+                        + ", ".join(f"{n}={s}" for n, s in repl["protocols"].items())
+                    )
+                result["steps"].append({
+                    "action": "verify",
+                    "message": (
+                        f"\tconfirmed: member {result['expected_master']} is Master "
+                        f"after {waited['attempts']} probe(s)"
+                    ),
+                })
+            else:
+                result["status"] = "verification_failed"
+                result["ok"] = False
+                result["error"] = waited["error"]
+                result["error_message"] = waited["error_message"]
+                result["steps"].append({
+                    "action": "error",
+                    "message": (
+                        f"\tverification failed after {wait}s: "
+                        f"{waited['error']}: {waited['error_message']}"
+                    ),
+                })
+    elif result["status"] == "initiated_unverified":
+        result["steps"].append({
+            "action": "verify",
+            "message": "\tnot verified (--wait 0); check 'show virtual-chassis status' yourself",
+        })
+
+    _emit_result(hostname, result, display.format_vc_switch)
+    return 0 if result["ok"] else 1
 
 
 def cmd_snapshot(hostname) -> int:
@@ -919,6 +988,24 @@ def _run():
     )
     p_reboot.add_argument("specialhosts", metavar="hostname", nargs="*")
 
+    # vc-switch
+    p_vc_switch = subparsers.add_parser(
+        "vc-switch", parents=[parent],
+        help=(
+            "move Virtual Chassis mastership to the Backup member (request "
+            "virtual-chassis routing-engine master switch) with pre-checks "
+            "and post-switch verification; explicit hostnames required"
+        ),
+    )
+    p_vc_switch.add_argument(
+        "--wait", dest="wait", type=int, default=180, metavar="SEC",
+        help=(
+            "seconds to keep reconnecting until the Backup has become Master "
+            "(default: 180; 0 = issue and return without verifying)"
+        ),
+    )
+    p_vc_switch.add_argument("specialhosts", metavar="hostname", nargs="*")
+
     # snapshot
     p_snapshot = subparsers.add_parser(
         "snapshot", parents=[parent],
@@ -1194,6 +1281,11 @@ def _run():
             parser.error("--at is required" + (" (or --now with --member)" if member is not None else ""))
         if member is not None and not getattr(args, "specialhosts", []):
             parser.error("--member requires explicit hostnames")
+    if getattr(args, "subcommand", None) == "vc-switch":
+        if getattr(args, "wait", 0) < 0:
+            parser.error("--wait must be >= 0")
+        if not getattr(args, "specialhosts", []):
+            parser.error("vc-switch requires explicit hostnames")
 
     common.args = args
     if common.args.config is None:
@@ -1308,6 +1400,7 @@ def _run():
         "version": cmd_version,
         "reboot": cmd_reboot,
         "snapshot": cmd_snapshot,
+        "vc-switch": cmd_vc_switch,
         "ls": cmd_ls,
         "show": cmd_show,
         "config": cmd_config,

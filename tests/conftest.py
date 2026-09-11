@@ -33,6 +33,7 @@ def mock_args(junos_common):
         member=None,
         now=False,
         allow_mixed_version=False,
+        wait=180,
         configfile=None,
         confirm_timeout=1,
         health_check=None,

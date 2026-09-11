@@ -223,6 +223,7 @@ junos-ops <subcommand> [options] [hostname ...]
 | `version` | running/planning/pendingバージョンとリブート予定を表示 |
 | `reboot --at YYMMDDHHMM` | 指定日時にリブートをスケジュール |
 | `reboot --member N (--now \| --at YYMMDDHHMM)` | Virtual Chassis の member を個別に再起動（ホスト名明示が必須。現 Master とバージョン不一致になるケースは上書き指定が無い限り拒否） |
+| `vc-switch [--wait SEC] hostname …` | Virtual Chassis の mastership を Backup member へ移す（`request virtual-chassis routing-engine master switch`）。fail-closed の事前確認と切替後の検証付き。ホスト名明示が必須。詳細は後述の [vc-switch](#vc-switchvirtual-chassis-の-mastership-を移す) を参照 |
 | `snapshot [--force]` | リカバリスナップショット（`request system snapshot`）を作成し代替ブートメディアを同期。MX 中心。代替メディアで稼働中のデバイスでは `--force` がない限り拒否。詳細は後述の [snapshot](#snapshotブートメディアの代替面を同期) を参照 |
 | `ls [-l]` | リモートパスのファイル一覧 |
 | `show COMMAND [--retry N]` / `show -f FILE` | 任意の CLI コマンド（またはコマンドファイル）を複数ホストで実行 |
@@ -572,10 +573,44 @@ reboot member 0 now
 発行前に `show virtual-chassis status` で member を検証します:
 
 - member が存在し `Prsnt` であること
-- **現在の Master** の再起動は拒否 — 先に mastership を移す（`vc-switch`、#153 で追加予定）か、本当に意図しているなら `--force`
+- **現在の Master** の再起動は拒否 — 先に mastership を移す（[`vc-switch`](#vc-switchvirtual-chassis-の-mastership-を移す) 参照）か、本当に意図しているなら `--force`
 - インストール済み・未起動（pending）のパッケージがある場合、member 単体の再起動はその member だけで新バージョンを有効化し VC がバージョン不一致になるため、`--allow-mixed-version` が無ければ拒否
 
 既存スケジュールの検出と `--force` による消去はその member の `fpcN:` ブロック（`show system reboot`）を見て行い、`clear system reboot member N` で消します。設定ドリフト検出＋再インストールのゲートはシャーシ全体の再起動と同様に働きます。pending パッケージの判定自体に失敗した場合は「無し」とは見なさず拒否します。`--member` は `--at` と組み合わせてスケジュール実行もできます。
+
+### vc-switch（Virtual Chassis の mastership を移す）
+
+```
+% junos-ops vc-switch sw1.example.jp
+# sw1.example.jp
+vc-switch: confirmed
+  expected master after switch: member 1
+before:
+  member 0: Master   Prsnt
+  member 1: Backup   Prsnt
+after:
+  member 0: Backup   Prsnt
+  member 1: Master   Prsnt
+	virtual-chassis: member 0=Master/Prsnt, member 1=Backup/Prsnt
+	task replication: GRES=Enabled RE=Master OSPF=Complete, OSPF3=Complete
+	'request virtual-chassis routing-engine master switch' issued; session dropped (RpcTimeoutError) — expected during a mastership switch
+	confirmed: member 1 is Master after 3 probe(s)
+```
+
+`request virtual-chassis routing-engine master switch` を**ちょうど 1 回**実行します。`junos-ops show "request …"` で素通しするのと違い、次のガードが付きます:
+
+- **事前確認（fail-closed）:** `show virtual-chassis status` で Master と Backup がちょうど 1 つずつ、全 member が `Prsnt` であること。`show task replication` で GRES `Enabled`・RE mode `Master`・列挙された全プロトコルが `Complete` であること（何も列挙されない場合は「安全ではない」扱い — NSR 無しで切り替えるとルーティング隣接が落ちます）。どちらかの RPC が失敗したら拒否 — 「確認できなかった」を「たぶん大丈夫」とは見なしません。`--force` で拒否を警告に変えて続行します。
+- **1 回きり:** コマンドは再送しません。切替と同時に NETCONF セッションは通常切れます（`RpcTimeoutError` / 接続クローズ）が、それは「発行済み・セッション切断」として記録され、失敗ではありません。失敗と見なすのは `RpcError` と応答内の明示的な拒否だけです。
+- **検証（`--wait SEC`、既定 180）:** 元の Backup が Master を名乗るまで再接続を繰り返し、その後 `show task replication` を再確認します（まだ `Complete` でなければ警告 — 数分かかるものでゲートにはしません）。`--wait 0` は発行だけして検証せず戻り、出力にその旨を明示します。
+- `-n` / `--dry-run` は事前確認だけ行い、発行予定のコマンドを表示します。ホスト名の明示が必須で、暗黙の全ホスト対象にはなりません。
+
+終了コード 0 は `confirmed`・`dry_run`・（`--wait 0` のときの）`initiated_unverified` のみ。`refused`・`rejected`・`verification_failed` は 1 です。`--json` で次工程をゲートするなら `ok` ではなく `status == "confirmed"`（または `verified`）を見てください:
+
+```bash
+junos-ops vc-switch --json sw1.example.jp | jq -e '.status == "confirmed"' \
+  && junos-ops config -f drain-member0.set --confirm 5 sw1.example.jp \
+  && junos-ops reboot --member 0 --now sw1.example.jp
+```
 
 ### snapshot（ブートメディアの代替面を同期）
 

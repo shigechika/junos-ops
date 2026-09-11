@@ -223,6 +223,7 @@ junos-ops <subcommand> [options] [hostname ...]
 | `version` | Show running/planning/pending versions and reboot schedule |
 | `reboot --at YYMMDDHHMM` | Schedule a reboot at the specified time |
 | `reboot --member N (--now \| --at YYMMDDHHMM)` | Reboot a single Virtual Chassis member (explicit hostnames required; refuses the current Master and mixed-version outcomes unless overridden) |
+| `vc-switch [--wait SEC] hostname …` | Move Virtual Chassis mastership to the Backup member (`request virtual-chassis routing-engine master switch`) with fail-closed pre-checks and post-switch verification. Explicit hostnames required. See [vc-switch](#vc-switch-move-virtual-chassis-mastership) below |
 | `snapshot [--force]` | Create a recovery snapshot (`request system snapshot`) to sync the alternate boot media; MX-focused. Refuses if the device is running on its alternate media unless `--force`. See [snapshot](#snapshot-sync-the-alternate-boot-media) below |
 | `ls [-l]` | List files on the remote path |
 | `show COMMAND [--retry N]` / `show -f FILE` | Run an arbitrary CLI command (or file of commands) across devices |
@@ -610,7 +611,7 @@ status`:
 
 - the member must exist and be `Prsnt`;
 - rebooting the **current Master** is refused — switch mastership away first
-  (`vc-switch`, tracked in #153) or pass
+  (see [`vc-switch`](#vc-switch-move-virtual-chassis-mastership)) or pass
   `--force` if you really mean it;
 - if a package is installed but not yet booted (pending), a single-member reboot
   would activate it on that member only and leave the VC mixed-version; this is
@@ -622,6 +623,58 @@ member's own `fpcN:` block of `show system reboot` (and clear with
 for a whole-chassis reboot. If the pending-package check itself fails the
 reboot is refused rather than assumed clean. `--member`
 also works with `--at` to schedule a member reboot.
+
+### vc-switch (move Virtual Chassis mastership)
+
+```
+% junos-ops vc-switch sw1.example.jp
+# sw1.example.jp
+vc-switch: confirmed
+  expected master after switch: member 1
+before:
+  member 0: Master   Prsnt
+  member 1: Backup   Prsnt
+after:
+  member 0: Backup   Prsnt
+  member 1: Master   Prsnt
+	virtual-chassis: member 0=Master/Prsnt, member 1=Backup/Prsnt
+	task replication: GRES=Enabled RE=Master OSPF=Complete, OSPF3=Complete
+	'request virtual-chassis routing-engine master switch' issued; session dropped (RpcTimeoutError) — expected during a mastership switch
+	confirmed: member 1 is Master after 3 probe(s)
+```
+
+Runs `request virtual-chassis routing-engine master switch` **exactly once**,
+wrapped in the checks a bare `junos-ops show "request …"` cannot give you:
+
+- **Pre-checks (fail closed):** `show virtual-chassis status` must report
+  exactly one Master and one Backup with every member `Prsnt`; `show task
+  replication` must report GRES `Enabled`, RE mode `Master`, and every listed
+  protocol `Complete` (nothing listed is treated as *not* safe — without NSR the
+  switch drops routing adjacencies). If either RPC fails the switch is refused —
+  "could not check" is never "probably fine". `--force` turns refusals into
+  warnings and proceeds.
+- **One shot:** the command is never retried. The NETCONF session usually dies
+  with the switch (`RpcTimeoutError` / connection closed); that is recorded as
+  "issued, session dropped", not as a failure. Only an `RpcError` or an explicit
+  rejection in the reply counts as failure.
+- **Verification (`--wait SEC`, default 180):** reconnects until the former
+  Backup reports itself as Master, then re-reads `show task replication`
+  (reported as a warning if not yet `Complete` — it takes minutes and is not a
+  gate). `--wait 0` issues and returns without verifying; the output then says
+  so explicitly.
+- `-n` / `--dry-run` runs the pre-checks and prints what would be issued.
+  Explicit hostnames are required; the implicit all-hosts target never applies.
+
+Exit code 0 only for `confirmed`, `dry_run` and (with `--wait 0`)
+`initiated_unverified`; `refused`, `rejected` and `verification_failed` return 1.
+With `--json` gate the next step on `status == "confirmed"` (or `verified`),
+never on `ok` alone:
+
+```bash
+junos-ops vc-switch --json sw1.example.jp | jq -e '.status == "confirmed"' \
+  && junos-ops config -f drain-member0.set --confirm 5 sw1.example.jp \
+  && junos-ops reboot --member 0 --now sw1.example.jp
+```
 
 ### snapshot (sync the alternate boot media)
 
