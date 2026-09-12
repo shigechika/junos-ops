@@ -51,7 +51,7 @@ tests/
 ├── test_list_remote.py # ls サブコマンドのテスト
 ├── test_package_checks.py # ローカル/リモート firmware checksum 検証のテスト
 ├── test_cli_parse.py   # CLI引数パース・サブコマンドなし実行・reboot --member/--now ガードのテスト
-├── test_vc.py          # vc（status/replication パーサ・master_switch の拒否/1回発行/セッション切断・wait_for_master・cmd_vc_switch）のテスト
+├── test_vc.py          # vc（status/replication パーサ・master_switch の拒否/1回発行/QFX フォールバック・wait_for_master・wait_for_member・cmd_vc_switch）のテスト
 └── test_logging.py     # _setup_logging（console / --log-file / -d / logging.ini / 冪等性）と python -m junos_ops のテスト
 pyproject.toml      # パッケージメタデータ、エントリポイント
 config.ini          # 設定ファイル（設定例）
