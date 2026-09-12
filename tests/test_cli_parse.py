@@ -204,3 +204,32 @@ class TestRebootMemberGuards:
     def test_member_with_at_accepted(self, *_):
         with patch.object(sys, "argv", ["junos-ops", "reboot", "--member", "1", "--at", "2501020304", "host1"]):
             assert cli._run() == 0
+
+
+class TestRebootWaitGuards:
+    @pytest.mark.parametrize(
+        "argv",
+        [
+            ["junos-ops", "reboot", "--member", "0", "--at", "2501020304", "--wait", "600", "h"],
+            ["junos-ops", "reboot", "--member", "0", "--now", "--wait", "-1", "h"],
+            ["junos-ops", "reboot", "--member", "0", "--now", "--expect-up", "ge-0/0/40", "h"],
+        ],
+    )
+    def test_rejected(self, argv):
+        with patch.object(sys, "argv", argv):
+            with pytest.raises(SystemExit) as ei:
+                cli._run()
+        assert ei.value.code == 2
+
+    @patch("junos_ops.common.run_parallel", return_value={})
+    @patch("junos_ops.common.get_targets", return_value=["h"])
+    @patch("junos_ops.common.read_config", return_value={"ok": True, "path": "config.ini", "sections": ["h"], "error": None})
+    @patch("junos_ops.common.get_default_config", return_value="config.ini")
+    def test_accepted(self, *_):
+        argv = ["junos-ops", "reboot", "--member", "0", "--now", "--wait", "600",
+                "--expect-up", "ge-0/0/40,xe-0/0/47", "h"]
+        with patch.object(sys, "argv", argv):
+            assert cli._run() == 0
+        from junos_ops import common
+        assert common.args.wait == 600
+        assert common.args.expect_up == "ge-0/0/40,xe-0/0/47"

@@ -29,6 +29,7 @@ against plain ``Master`` / ``Backup`` / ``Linecard``.
 """
 
 from logging import getLogger
+import datetime
 import re
 import time
 
@@ -475,6 +476,296 @@ def master_switch(hostname: str, dev) -> dict:
             return result
 
     return result  # pragma: no cover - loop always returns
+
+
+def get_fpc_state(dev, slot) -> str | None:
+    """Return the ``state`` of one FPC slot from ``get-fpc-information``.
+
+    ``show chassis fpc`` reports every slot (``Online`` / ``Empty`` / …);
+    on a VC the member id is the FPC slot. Returns None when the RPC
+    fails or the slot is absent — callers treat that as "unknown".
+    """
+    try:
+        rsp = dev.rpc.get_fpc_information(normalize=True)
+    except Exception as e:
+        logger.debug(f"get_fpc_state: {type(e).__name__}: {e}")
+        return None
+    if rsp is None or isinstance(rsp, bool):
+        return None
+    for fpc in rsp.findall(".//fpc"):
+        if (fpc.findtext("slot") or "").strip() == str(slot):
+            return (fpc.findtext("state") or "").strip() or None
+    return None
+
+
+def get_interface_states(dev, names) -> dict:
+    """Return ``{name: "up/up" | "down/up" | … | None}`` for the given interfaces.
+
+    One ``get-interface-information(terse=True)`` call, matched against
+    both ``physical-interface/name`` and ``logical-interface/name`` so
+    ``ge-0/0/40`` and ``ae0.0`` are equally usable. Values are
+    ``"<admin>/<oper>"``; a name the device did not report maps to None
+    ("unknown", never "up"). Text nodes are whitespace-wrapped in the
+    terse reply, hence the ``strip()`` on every field.
+    """
+    wanted = [n.strip() for n in names if n and n.strip()]
+    states: dict = {n: None for n in wanted}
+    if not wanted:
+        return states
+    try:
+        rsp = dev.rpc.get_interface_information(terse=True, normalize=True)
+    except Exception as e:
+        logger.debug(f"get_interface_states: {type(e).__name__}: {e}")
+        return states
+    if rsp is None or isinstance(rsp, bool):
+        return states
+    for node in rsp.iter("physical-interface", "logical-interface"):
+        name = (node.findtext("name") or "").strip()
+        if name in states:
+            admin = (node.findtext("admin-status") or "").strip()
+            oper = (node.findtext("oper-status") or "").strip()
+            states[name] = f"{admin}/{oper}"
+    return states
+
+
+def boot_time_is_newer(booted: str | None, baseline: str | None) -> bool:
+    """True when ``booted`` is evidence of a reboot since ``baseline``.
+
+    Both values come from ``show system uptime``. When both parse as
+    ``YYYY-MM-DD HH:MM:SS`` the comparison is on the instant, so a
+    reformatted or re-zoned rendering of the *same* boot is not mistaken
+    for a reboot; otherwise it falls back to string inequality. A reboot
+    always yields a later timestamp.
+    """
+    if not booted or not baseline:
+        return False
+    fmt = "%Y-%m-%d %H:%M:%S"
+    try:
+        return datetime.datetime.strptime(booted[:19], fmt) > datetime.datetime.strptime(
+            baseline[:19], fmt
+        )
+    except ValueError:
+        return booted.strip() != baseline.strip()
+
+
+def get_member_boot_time(dev, member, master=None) -> str | None:
+    """Return the member's ``System booted`` timestamp text, or None.
+
+    On a VC ``show system uptime`` reports one block per RE: ``fpcN``
+    for every member except the one the session is on, which appears as
+    ``localre`` (accepted only when ``member`` is the current
+    ``master``). A reply carrying no per-RE blocks at all describes only
+    the RE the session is on, so it is accepted only when that can be
+    the requested member — otherwise this would hand back some *other*
+    member's boot time and the caller would wait for a timestamp that
+    never changes. The raw device-local string is returned;
+    :func:`boot_time_is_newer` is the only thing that interprets it.
+    """
+    try:
+        up = dev.rpc.get_system_uptime_information(normalize=True)
+    except Exception as e:
+        logger.debug(f"get_member_boot_time: {type(e).__name__}: {e}")
+        return None
+    if up is None or isinstance(up, bool):
+        return None
+    items = up.findall(".//multi-routing-engine-item")
+    node = None
+    if items:
+        by_name = {(it.findtext("re-name") or "").strip(): it for it in items}
+        node = by_name.get(f"fpc{member}")
+        if node is None and master is not None and str(member) == str(master):
+            node = by_name.get("localre")
+        if node is None:
+            return None
+    elif master is not None and str(member) != str(master):
+        # Flat reply: the local RE only, which is not the member asked for.
+        return None
+    else:
+        node = up
+    el = node.find(".//system-booted-time/date-time")
+    text = (el.text or "").strip() if el is not None else ""
+    return text or None
+
+
+def _poll_device(hostname: str, timeout: int, interval: int, check, on_unreachable=None) -> dict:
+    """Reconnect to ``hostname`` until ``check(dev)`` reports done.
+
+    ``check(dev)`` returns ``(done: bool, snapshot: dict, problem: str |
+    None)``. Connection failures and RPC errors mean "not yet" and are
+    retried until the deadline, which is checked between probes — a
+    probe already in flight is bounded by the interval, so ``timeout``
+    is a budget rather than a hard kill; ``on_unreachable()`` (optional) is
+    called for each failed connect, which is how a caller learns the
+    device went away between probes; each probe is bounded by what is left of
+    the window so an unreachable device cannot overshoot ``timeout``.
+    ``time.sleep`` / ``time.monotonic`` go through the module so tests
+    can patch them.
+
+    :return: dict with ``ok``, ``last`` (last snapshot, or None if the
+        device was never reachable), ``elapsed``, ``attempts``,
+        ``error_message`` (the last problem seen).
+    """
+    result: dict = {
+        "ok": False, "last": None, "elapsed": 0, "attempts": 0, "error_message": None,
+    }
+    start = time.monotonic()
+    deadline = start + timeout
+    last_problem = None
+    while True:
+        result["attempts"] += 1
+        remaining = max(1, int(deadline - time.monotonic()))
+        conn = common.connect(
+            hostname, gather_facts=False, auto_probe=min(interval, remaining)
+        )
+        if conn["ok"]:
+            dev = conn["dev"]
+            try:
+                # --wait is a budget, not just a connect timeout: cap
+                # each RPC too, or a half-responsive device runs past it.
+                # Bounded by the probe interval rather than the whole
+                # window so one slow RPC cannot eat the entire budget.
+                try:
+                    dev.timeout = max(
+                        5, min(interval, int(deadline - time.monotonic()))
+                    )
+                except Exception:  # pragma: no cover - Device always allows it
+                    pass
+                done, snapshot, problem = check(dev)
+                if snapshot is not None:
+                    result["last"] = snapshot
+                if done:
+                    result["ok"] = True
+                    result["elapsed"] = int(time.monotonic() - start)
+                    return result
+                last_problem = problem
+            finally:
+                try:
+                    dev.close()
+                except Exception:
+                    pass
+        else:
+            if on_unreachable is not None:
+                on_unreachable()
+            last_problem = f"{conn['error']}: {conn['error_message']}"
+        now = time.monotonic()
+        if now >= deadline:
+            break
+        time.sleep(min(interval, max(0, deadline - now)))
+    result["elapsed"] = int(time.monotonic() - start)
+    result["error_message"] = last_problem
+    return result
+
+
+def wait_for_member(
+    hostname: str, member, timeout: int, interval: int = 15, expect_up=(),
+    booted_before: str | None = None, master=None,
+) -> dict:
+    """Reconnect until VC ``member`` is back, or ``timeout`` seconds pass.
+
+    "Back" means: the member appears in ``show virtual-chassis status``
+    as ``Prsnt`` with a role, its FPC slot is ``Online``, and every
+    interface in ``expect_up`` is ``up/up``. A member that is ``Prsnt``
+    but whose PFE is not ready yet would otherwise look recovered while
+    traffic hashed to it is black-holed, which is why the FPC state and
+    the caller's ports are part of the condition.
+
+    Crucially the member also has to be *observed rebooting* first: a
+    reboot RPC returns before the member goes down, so the very first
+    probe would otherwise find the pre-reboot member healthy and report
+    success. ``booted_before`` (read by the caller before issuing the
+    reboot) settles it — the boot timestamp must have changed. Without
+    it the fallback is a transition: some probe must have found the
+    device unreachable, or the member absent / not ``Prsnt`` / its FPC
+    not ``Online``. (A VC-status RPC failure does not count — it says
+    nothing about the member.)
+
+    Note the whole VC can be unreachable while one member reboots (the
+    management path may transit its uplink); connection failures are
+    "not yet", never a verdict.
+
+    :return: dict with ``ok``, ``after`` (last :func:`get_vc_status`),
+        ``fpc_state`` (str | None), ``interfaces`` (dict | None),
+        ``booted`` (str | None, the member's boot timestamp when read),
+        ``rebooted`` (bool, whether the reboot itself was observed),
+        ``elapsed``, ``attempts``, ``error`` (``member_not_back`` /
+        ``unreachable`` / None), ``error_message``. Does not print.
+    """
+    wanted = [n.strip() for n in expect_up if n and n.strip()]
+    seen_down = False
+    seen_rebooted = False
+
+    def check(dev):
+        nonlocal seen_down, seen_rebooted
+        status = get_vc_status(dev)
+        snapshot = {"status": status, "fpc_state": None, "interfaces": None, "booted": None}
+        if not status["ok"]:
+            # An RPC/parse failure says nothing about the member, so it
+            # must not count as "the member went down" for the
+            # no-baseline fallback.
+            return False, snapshot, f"{status['error']}: {status['error_message']}"
+        entry = find_member(status, member)
+        if entry is None or entry["status"] != "Prsnt" or not entry["role"]:
+            seen_down = True
+            seen = entry["status"] if entry else "absent"
+            return False, snapshot, f"member {member} is {seen}"
+        fpc_state = get_fpc_state(dev, member)
+        snapshot["fpc_state"] = fpc_state
+        if fpc_state != "Online":
+            # None means the RPC failed or the slot was not reported: that
+            # says nothing about the member, so it must not count as "the
+            # member went down" for the no-baseline fallback (a transient
+            # RPC error would otherwise let the *pre-reboot* member pass).
+            if fpc_state is not None:
+                seen_down = True
+            return False, snapshot, f"FPC {member} is {fpc_state or 'unknown'}, not Online"
+
+        # Did the reboot actually happen? The RPC returns before the
+        # member goes down, so "healthy right now" is not evidence.
+        # Use this probe's master, not the pre-reboot one: mastership can
+        # move during the window and it decides which uptime block
+        # (fpcN vs localre) belongs to the member.
+        booted = get_member_boot_time(dev, member, master=status.get("master") or master)
+        snapshot["booted"] = booted
+        if booted_before is not None:
+            if booted is None:
+                return False, snapshot, "cannot read the member's boot time"
+            if not boot_time_is_newer(booted, booted_before):
+                return False, snapshot, f"member {member} has not rebooted yet (booted {booted})"
+        elif not seen_down:
+            return False, snapshot, f"member {member} has not gone down yet"
+        # The reboot itself is now established; anything below (ports) is
+        # about readiness, so record it before those can fail.
+        seen_rebooted = True
+
+        if wanted:
+            states = get_interface_states(dev, wanted)
+            snapshot["interfaces"] = states
+            down = [f"{n}={v or 'unknown'}" for n, v in states.items() if v != "up/up"]
+            if down:
+                return False, snapshot, "interfaces not up: " + ", ".join(sorted(down))
+        return True, snapshot, None
+
+    def on_unreachable():
+        nonlocal seen_down
+        seen_down = True
+
+    polled = _poll_device(hostname, timeout, interval, check, on_unreachable)
+    last = polled["last"] or {}
+    result = {
+        "ok": polled["ok"],
+        "after": last.get("status"),
+        "fpc_state": last.get("fpc_state"),
+        "interfaces": last.get("interfaces"),
+        "booted": last.get("booted"),
+        "rebooted": seen_rebooted,
+        "elapsed": polled["elapsed"],
+        "attempts": polled["attempts"],
+        "error": None,
+        "error_message": polled["error_message"],
+    }
+    if not polled["ok"]:
+        result["error"] = "member_not_back" if result["after"] is not None else "unreachable"
+    return result
 
 
 def wait_for_master(hostname: str, expected: str, timeout: int, interval: int = 10) -> dict:

@@ -397,9 +397,17 @@ def format_reboot(result: dict) -> str:
         ri = format_reinstall(reinstall)
         if ri:
             parts.append(ri)
-    post = _steps_text(result, {"reboot"})
+    post = _steps_text(result, {"reboot", "verify", "verify_error"})
     if post:
         parts.append(post)
+    after = result.get("after")
+    if after and after.get("ok"):
+        parts.extend(_vc_members_text(after, "virtual-chassis after reboot"))
+    ifaces = result.get("interfaces")
+    if ifaces:
+        parts.append("  " + ", ".join(f"{n}={v or '?'}" for n, v in sorted(ifaces.items())))
+    for w in result.get("warnings") or []:
+        parts.append(f"  WARNING: {w}")
     return "\n".join(parts)
 
 

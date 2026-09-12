@@ -222,7 +222,7 @@ junos-ops <subcommand> [options] [hostname ...]
 | `rollback` | Rollback to the previous version |
 | `version` | Show running/planning/pending versions and reboot schedule |
 | `reboot --at YYMMDDHHMM` | Schedule a reboot at the specified time |
-| `reboot --member N (--now \| --at YYMMDDHHMM)` | Reboot a single Virtual Chassis member (explicit hostnames required; refuses the current Master and mixed-version outcomes unless overridden) |
+| `reboot --member N (--now \| --at YYMMDDHHMM) [--wait SEC] [--expect-up IFACE,...]` | Reboot a single Virtual Chassis member (explicit hostnames required; refuses the current Master and mixed-version outcomes unless overridden). `--wait` verifies the member came back (FPC Online, listed ports up/up) |
 | `vc-switch [--wait SEC] hostname …` | Move Virtual Chassis mastership to the Backup member (`request virtual-chassis routing-engine master switch`) with fail-closed pre-checks and post-switch verification. Explicit hostnames required. See [vc-switch](#vc-switch-move-virtual-chassis-mastership) below |
 | `snapshot [--force]` | Create a recovery snapshot (`request system snapshot`) to sync the alternate boot media; MX-focused. Refuses if the device is running on its alternate media unless `--force`. See [snapshot](#snapshot-sync-the-alternate-boot-media) below |
 | `ls [-l]` | List files on the remote path |
@@ -616,6 +616,30 @@ status`:
 - if a package is installed but not yet booted (pending), a single-member reboot
   would activate it on that member only and leave the VC mixed-version; this is
   refused unless `--allow-mixed-version`.
+
+`--wait SEC` (only with `--member --now`) verifies the recovery instead of
+leaving it to you: junos-ops reads the member's boot timestamp *before*
+issuing the reboot, then reconnects until that timestamp has changed and the
+member is `Prsnt` with a role **and** its FPC slot is `Online`. (The reboot RPC
+returns while the member is still up, so "healthy" on its own is not evidence
+that anything happened; if the boot time cannot be read, junos-ops instead
+requires having seen the member go away, and says so.) Add
+`--expect-up ge-0/0/40,xe-0/0/47` (physical or logical names) to also require
+those interfaces to be `up/up` — a member can be `Prsnt` while its PFE is still not forwarding, which
+is exactly when traffic hashed to it is black-holed. Connection failures during
+the window are "not yet": the whole VC can be unreachable while one member
+reboots if the management path transits its uplink. Exit code is 10 when the
+member is not back in time, and the JSON output carries `wait`, `after`,
+`fpc_state` and `interfaces`.
+
+```
+% junos-ops reboot --member 0 --now --wait 600 --expect-up xe-0/0/47 sw1.example.jp
+# sw1.example.jp
+reboot member 0 now
+	member 0: role=Backup status=Prsnt (master=1, backup=0)
+	Rebooting fpc0
+	confirmed: member 0 is back (FPC Online, 1 port(s) up) after 372s / 14 probe(s)
+```
 
 The existing-schedule check and `--force` schedule clearing look at that
 member's own `fpcN:` block of `show system reboot` (and clear with

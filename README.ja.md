@@ -222,7 +222,7 @@ junos-ops <subcommand> [options] [hostname ...]
 | `rollback` | 前バージョンにロールバック |
 | `version` | running/planning/pendingバージョンとリブート予定を表示 |
 | `reboot --at YYMMDDHHMM` | 指定日時にリブートをスケジュール |
-| `reboot --member N (--now \| --at YYMMDDHHMM)` | Virtual Chassis の member を個別に再起動（ホスト名明示が必須。現 Master とバージョン不一致になるケースは上書き指定が無い限り拒否） |
+| `reboot --member N (--now \| --at YYMMDDHHMM) [--wait SEC] [--expect-up IFACE,...]` | Virtual Chassis の member を個別に再起動（ホスト名明示が必須。現 Master とバージョン不一致になるケースは上書き指定が無い限り拒否）。`--wait` で復帰（FPC Online・指定ポート up/up）を検証 |
 | `vc-switch [--wait SEC] hostname …` | Virtual Chassis の mastership を Backup member へ移す（`request virtual-chassis routing-engine master switch`）。fail-closed の事前確認と切替後の検証付き。ホスト名明示が必須。詳細は後述の [vc-switch](#vc-switchvirtual-chassis-の-mastership-を移す) を参照 |
 | `snapshot [--force]` | リカバリスナップショット（`request system snapshot`）を作成し代替ブートメディアを同期。MX 中心。代替メディアで稼働中のデバイスでは `--force` がない限り拒否。詳細は後述の [snapshot](#snapshotブートメディアの代替面を同期) を参照 |
 | `ls [-l]` | リモートパスのファイル一覧 |
@@ -575,6 +575,17 @@ reboot member 0 now
 - member が存在し `Prsnt` であること
 - **現在の Master** の再起動は拒否 — 先に mastership を移す（[`vc-switch`](#vc-switchvirtual-chassis-の-mastership-を移す) 参照）か、本当に意図しているなら `--force`
 - インストール済み・未起動（pending）のパッケージがある場合、member 単体の再起動はその member だけで新バージョンを有効化し VC がバージョン不一致になるため、`--allow-mixed-version` が無ければ拒否
+
+`--wait SEC`（`--member --now` 併用時のみ）を付けると復帰確認まで junos-ops が行います。発行**前**に member の boot 時刻を読んでおき、その時刻が変わり、かつ member が `Prsnt` で role を持ち、**FPC スロットが `Online`** になるまで再接続を繰り返します（reboot RPC は member が落ちる前に戻るため、「今は健全」だけでは再起動した証拠になりません。boot 時刻が読めなかった場合は「一度は居なくなったのを観測した」ことを条件にし、その旨を警告します）。`--expect-up ge-0/0/40,xe-0/0/47`（物理名・論理名どちらも可）を足すと、それらのインターフェースが `up/up` になることも条件に加えられます — member が `Prsnt` でも PFE がまだ転送準備できていないことがあり、そこへハッシュされた通信がブラックホールになるためです。待機中の接続失敗は「まだ」の扱いです（member の uplink を管理経路が通っていると、再起動中は VC 全体に到達できなくなることがあります）。時間内に戻らなければ終了コード 10、JSON には `wait`・`after`・`fpc_state`・`interfaces` が載ります。
+
+```
+% junos-ops reboot --member 0 --now --wait 600 --expect-up xe-0/0/47 sw1.example.jp
+# sw1.example.jp
+reboot member 0 now
+	member 0: role=Backup status=Prsnt (master=1, backup=0)
+	Rebooting fpc0
+	confirmed: member 0 is back (FPC Online, 1 port(s) up) after 372s / 14 probe(s)
+```
 
 既存スケジュールの検出と `--force` による消去はその member の `fpcN:` ブロック（`show system reboot`）を見て行い、`clear system reboot member N` で消します。設定ドリフト検出＋再インストールのゲートはシャーシ全体の再起動と同様に働きます。pending パッケージの判定自体に失敗した場合は「無し」とは見なさず拒否します。`--member` は `--at` と組み合わせてスケジュール実行もできます。
 
