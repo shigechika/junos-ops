@@ -633,16 +633,10 @@ def cmd_config(hostname) -> int:
     if dev is None:
         return 1
     try:
-        # RPC タイムアウトの設定（CLI > config.ini > デフォルト 120秒）
-        timeout = getattr(common.args, "rpc_timeout", None)
-        if timeout is None:
-            try:
-                timeout = int(common.config.get(hostname, "timeout"))
-            except Exception:
-                pass
-        if timeout is None:
-            timeout = 120
-        dev.timeout = timeout
+        # RPC timeout: --timeout > config.ini timeout > model default
+        dev.timeout = common.resolve_config_timeout(
+            hostname, dev, getattr(common.args, "rpc_timeout", None)
+        )
         result = upgrade.load_config(hostname, dev, common.args.configfile)
         _emit_result(hostname, result, display.format_load_config)
         return 0 if result.get("ok") else 1
@@ -1202,7 +1196,7 @@ def _run():
     )
     p_config.add_argument(
         "--timeout", dest="rpc_timeout", type=int, default=None,
-        help="RPC timeout in seconds (default: 120, or 'timeout' in config.ini)",
+        help="RPC timeout in seconds (default: 'timeout' in config.ini, else 180 on SRX branch models and 120 otherwise)",
     )
     p_config.add_argument(
         "--no-confirm", dest="no_confirm", action="store_true",
