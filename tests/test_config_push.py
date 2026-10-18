@@ -1,6 +1,8 @@
 """load_config() のテスト"""
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, PropertyMock, patch
+
+import pytest
 
 from junos_ops import cli
 from junos_ops import common
@@ -875,8 +877,8 @@ class TestRpcTimeout:
         assert result == 0
         assert mock_dev.timeout == 120
 
-    def test_no_timeout_uses_default_120(self, junos_common, mock_args, mock_config):
-        """--timeout 未指定 + config.ini にもなし → dev.timeout = 120（config デフォルト）"""
+    def test_no_timeout_uses_model_default(self, junos_common, mock_args, mock_config):
+        """No --timeout and no config.ini timeout -> model default (60 s without facts)"""
         mock_args.rpc_timeout = None
         mock_args.configfile = "commands.set"
         mock_dev = MagicMock(spec=["cli", "close", "timeout", "rpc"])
@@ -890,7 +892,83 @@ class TestRpcTimeout:
         ):
             result = cli.cmd_config("test-host")
         assert result == 0
-        assert mock_dev.timeout == 120
+        assert mock_dev.timeout == 60
+
+    def test_no_timeout_srx_branch_uses_180(self, junos_common, mock_args, mock_config):
+        """No --timeout and no config.ini timeout on SRX_BRANCH -> 180 s"""
+        mock_args.rpc_timeout = None
+        mock_args.configfile = "commands.set"
+        mock_dev = MagicMock()
+        mock_dev.facts = {"personality": "SRX_BRANCH", "model": "SRX345"}
+        mock_dev.cli.return_value = "3 packets transmitted, 3 packets received"
+        mock_cu = MagicMock()
+        mock_cu.diff.return_value = "[edit]\n+  set system ..."
+        with (
+            patch.object(cli.common, "connect", return_value={"hostname": "test-host", "host": "test-host", "ok": True, "dev": mock_dev, "error": None, "error_message": None}),
+            patch("junos_ops.upgrade.Config", return_value=mock_cu),
+            patch.object(common, "load_commands", return_value=["set system ntp"]),
+        ):
+            result = cli.cmd_config("test-host")
+        assert result == 0
+        assert mock_dev.timeout == 180
+
+
+class TestResolveConfigTimeout:
+    """common.resolve_config_timeout: explicit > config.ini > model default."""
+
+    @staticmethod
+    def _dev(personality):
+        dev = MagicMock()
+        dev.facts = {"personality": personality}
+        return dev
+
+    def test_explicit_wins(self, junos_common, mock_config):
+        mock_config.set("DEFAULT", "timeout", "90")
+        dev = self._dev("SRX_BRANCH")
+        assert common.resolve_config_timeout("test-host", dev, 45) == 45
+
+    def test_config_ini_over_model(self, junos_common, mock_config):
+        mock_config.set("DEFAULT", "timeout", "90")
+        dev = self._dev("SRX_BRANCH")
+        assert common.resolve_config_timeout("test-host", dev) == 90
+
+    def test_srx_branch_default(self, junos_common, mock_config):
+        dev = self._dev("SRX_BRANCH")
+        assert common.resolve_config_timeout("test-host", dev) == common.CONFIG_TIMEOUT_SRX_BRANCH == 180
+
+    @pytest.mark.parametrize("personality", ["MX", "SWITCH", "SRX_MIDRANGE", None])
+    def test_other_personality_default(self, junos_common, mock_config, personality):
+        dev = self._dev(personality)
+        assert common.resolve_config_timeout("test-host", dev) == common.CONFIG_TIMEOUT_DEFAULT == 60
+
+    def test_missing_facts_falls_back_to_default(self, junos_common, mock_config):
+        dev = MagicMock(spec=["cli", "close", "timeout", "rpc"])
+        assert common.resolve_config_timeout("test-host", dev) == 60
+
+    def test_facts_raising_falls_back_to_default(self, junos_common, mock_config):
+        dev = MagicMock()
+        type(dev).facts = PropertyMock(side_effect=RuntimeError("no facts"))
+        assert common.resolve_config_timeout("test-host", dev) == 60
+
+    @pytest.mark.parametrize("raw", ["abc", "0", "-5", ""])
+    def test_invalid_config_value_uses_model_default(self, junos_common, mock_config, raw):
+        mock_config.set("DEFAULT", "timeout", raw)
+        dev = self._dev("SRX_BRANCH")
+        assert common.resolve_config_timeout("test-host", dev) == 180
+
+    @pytest.mark.parametrize("explicit", [None, 0, -1, "x"])
+    def test_invalid_explicit_is_ignored(self, junos_common, mock_config, explicit):
+        dev = self._dev("MX")
+        assert common.resolve_config_timeout("test-host", dev, explicit) == 60
+
+    def test_unknown_host_section(self, junos_common, mock_config):
+        dev = self._dev("SRX_BRANCH")
+        assert common.resolve_config_timeout("no-such-host", dev) == 180
+
+    def test_no_config_loaded(self, junos_common, monkeypatch):
+        monkeypatch.setattr(common, "config", None)
+        dev = self._dev("MX")
+        assert common.resolve_config_timeout("test-host", dev) == 60
 
 
 class TestNoConfirm:

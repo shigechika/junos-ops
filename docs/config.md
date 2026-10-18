@@ -85,7 +85,7 @@ This means even if a configuration change breaks NETCONF connectivity, the devic
 | `--confirm N` | Commit confirmed timeout in minutes (default: 1) |
 | `--health-check CMD` | Health check command (repeatable, see below) |
 | `--no-health-check` | Skip health check after commit confirmed |
-| `--timeout N` | RPC timeout in seconds (default: 120, also configurable via `timeout` in config.ini) |
+| `--timeout N` | RPC timeout in seconds for load/commit. Default: `timeout` in config.ini, else a model default — 180 on SRX branch models (`personality` `SRX_BRANCH`: SRX300/320/340/345 and the like, whose commits can exceed 30 s) and 60 on everything else |
 | `--no-confirm` | Skip commit confirmed and health check, commit directly |
 | `--no-commit` | Apply with commit confirmed but skip final commit (JUNOS auto-rolls back after `--confirm` minutes) |
 | `--workers N` | Parallel execution (default: 1) |

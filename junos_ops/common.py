@@ -174,6 +174,73 @@ def connect(
         }
 
 
+#: RPC timeout (seconds) for config load/commit when nothing more specific is set.
+#: PyEZ's own default of 30 s is too short for a commit on a loaded box.
+CONFIG_TIMEOUT_DEFAULT = 60
+#: RPC timeout (seconds) for config load/commit on SRX branch platforms
+#: (``personality == "SRX_BRANCH"``: SRX300/320/340/345 and the like), whose
+#: commits regularly run past 30 s.
+CONFIG_TIMEOUT_SRX_BRANCH = 180
+
+
+def _positive_int(value) -> int | None:
+    """Return ``value`` as a positive int, or None when it is unset or invalid."""
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        return None
+    return number if number > 0 else None
+
+
+def model_config_timeout(dev) -> int:
+    """Return the model default RPC timeout for config load/commit on ``dev``.
+
+    ``CONFIG_TIMEOUT_SRX_BRANCH`` when ``dev.facts["personality"]`` is
+    ``"SRX_BRANCH"``, ``CONFIG_TIMEOUT_DEFAULT`` otherwise — including when
+    the facts are missing or cannot be read.
+    """
+    try:
+        personality = dev.facts.get("personality")
+    except Exception as e:
+        logger.debug(f"model_config_timeout: facts unavailable: {e}")
+        personality = None
+    if personality == "SRX_BRANCH":
+        return CONFIG_TIMEOUT_SRX_BRANCH
+    return CONFIG_TIMEOUT_DEFAULT
+
+
+def resolve_config_timeout(hostname: str, dev, explicit=None) -> int:
+    """Resolve the RPC timeout (seconds) for config load/commit on one host.
+
+    Precedence: ``explicit`` (e.g. ``--timeout``) > ``timeout`` in the host's
+    ``config.ini`` section (DEFAULT applies) > the model default from
+    :func:`model_config_timeout`. A value that is not a positive integer is
+    ignored and the next source is used. Does not print and does not set
+    ``dev.timeout``; the caller does.
+
+    :param hostname: config.ini section name of the host.
+    :param dev: connected ``jnpr.junos.Device`` (only ``dev.facts`` is read).
+    :param explicit: caller-supplied timeout, or None.
+    :return: timeout in seconds.
+    """
+    timeout = _positive_int(explicit)
+    if timeout is not None:
+        return timeout
+    if config is not None:
+        try:
+            raw = config.get(hostname, "timeout", fallback=None)
+        except configparser.Error:
+            raw = None
+        timeout = _positive_int(raw)
+        if timeout is not None:
+            return timeout
+        if raw is not None:
+            logger.warning(f"{hostname}: ignoring invalid timeout in config: {raw!r}")
+    return model_config_timeout(dev)
+
+
 def _get_host_tags(section: str) -> set[str]:
     """Return the set of tags for a config section."""
     raw = config.get(section, "tags", fallback="")
