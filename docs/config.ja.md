@@ -85,7 +85,7 @@ flowchart TD
 | `--confirm N` | commit confirmed のタイムアウト（分、デフォルト: 1） |
 | `--health-check CMD` | ヘルスチェックコマンド（複数指定可、後述） |
 | `--no-health-check` | ヘルスチェックをスキップ |
-| `--timeout N` | load/commit の RPC タイムアウト（秒）。未指定時は config.ini の `timeout`、それも無ければ機種別の既定値 — SRX ブランチ機（`personality` が `SRX_BRANCH`: SRX300/320/340/345 など。commit が 30 秒を超えることがある）は 180、それ以外は 60 |
+| `--timeout N` | load/commit の RPC タイムアウト（秒）。未指定時は config.ini の `timeout`、それも無ければ機種別の既定値 — SRX ブランチ機（`personality` が `SRX_BRANCH`: SRX300/320/340/345 など。commit が 30 秒を超えることがある）は 180、それ以外は従来どおり 120 |
 | `--no-confirm` | commit confirmed とヘルスチェックをスキップし直接 commit |
 | `--no-commit` | commit confirmed を送信するが最終 commit をスキップ（`--confirm` 分後に JUNOS が自動ロールバック） |
 | `--workers N` | 並列実行数（デフォルト: 1） |

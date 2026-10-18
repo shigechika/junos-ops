@@ -76,7 +76,7 @@ LICENSE
 - `get_targets()` — ターゲットホストリスト決定（`--tags` は `action="append"`。ホスト名併記時はタグフィルタ ∩ 名前リスト。`--exclude-tags` は `--tags` 同文法・`action="append"` で最終段の除外フィルタとして適用、単独利用可、全除外時は `_fatal` で sys.exit）
 - `run_parallel()` — ThreadPoolExecutorラッパー（max_workers=1でシリアル実行）
 - `resolve_config_timeout(hostname, dev, explicit=None)` — config load/commit の RPC タイムアウトを解決（`explicit` > config.ini の `timeout` > `model_config_timeout(dev)`。正の整数でない値は無視して次へ）。`config` サブコマンドと junos-mcp の `push_config` が共用する公開 API
-- `model_config_timeout(dev)` — 機種別の既定値（`personality == "SRX_BRANCH"` なら `CONFIG_TIMEOUT_SRX_BRANCH`=180、それ以外・facts 取得不可は `CONFIG_TIMEOUT_DEFAULT`=60）
+- `model_config_timeout(dev)` — 機種別の既定値（`personality == "SRX_BRANCH"` なら `CONFIG_TIMEOUT_SRX_BRANCH`=180、それ以外・facts 取得不可は `CONFIG_TIMEOUT_DEFAULT`=120。従来の既定値を維持）
 
 ### upgrade.py — パッケージ操作（すべて dict を返す）
 - `delete_snapshots()` — EX/QFXシリーズのスナップショット全削除（dict: applied/ok/dry_run/message/error）

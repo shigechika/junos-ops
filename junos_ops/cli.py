@@ -1196,7 +1196,7 @@ def _run():
     )
     p_config.add_argument(
         "--timeout", dest="rpc_timeout", type=int, default=None,
-        help="RPC timeout in seconds (default: 'timeout' in config.ini, else 180 on SRX branch models and 60 otherwise)",
+        help="RPC timeout in seconds (default: 'timeout' in config.ini, else 180 on SRX branch models and 120 otherwise)",
     )
     p_config.add_argument(
         "--no-confirm", dest="no_confirm", action="store_true",

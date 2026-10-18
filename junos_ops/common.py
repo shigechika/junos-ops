@@ -176,7 +176,7 @@ def connect(
 
 #: RPC timeout (seconds) for config load/commit when nothing more specific is set.
 #: PyEZ's own default of 30 s is too short for a commit on a loaded box.
-CONFIG_TIMEOUT_DEFAULT = 60
+CONFIG_TIMEOUT_DEFAULT = 120
 #: RPC timeout (seconds) for config load/commit on SRX branch platforms
 #: (``personality == "SRX_BRANCH"``: SRX300/320/340/345 and the like), whose
 #: commits regularly run past 30 s.
